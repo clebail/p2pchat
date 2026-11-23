@@ -85,6 +85,10 @@ QByteArray messageSigningBytes(const QJsonObject &m)
 constexpr int MaxSeenIds = 5000;
 constexpr int MaxMembers = 32; // maillage complet : au-delà, ce n'est plus raisonnable
 constexpr int MaxPending = 16; // connexions entrantes pas encore authentifiées
+constexpr qint64 SyncWindowMs = 30LL * 24 * 3600 * 1000; // historique synchronisé : 30 jours
+constexpr qint64 NewMemberMarginMs = 3600LL * 1000;      // marge d'horloge pour un nouveau membre
+constexpr int MaxInventory = 4000;                       // identifiants annoncés au plus
+constexpr int MaxSyncBatchBytes = 150 * 1024;            // taille d'un lot (trame max : 256 Ko)
 
 } // namespace
 
@@ -467,10 +471,11 @@ void MainWindow::updateStatus()
     m_subtitle->setToolTip(tips.isEmpty() ? QString() : "<p>" + tips.join("<br>") + "</p>");
 
     const bool online = !m_active.isEmpty();
-    m_input->setEnabled(online);
-    m_sendButton->setEnabled(online);
-    m_input->setPlaceholderText(online ? tr("Message") : tr("Personne n'est en ligne"));
-    if (online && !m_input->hasFocus())
+    const bool canWrite = inGroup && !list.isEmpty() && !m_myOnion.isEmpty();
+    m_input->setEnabled(canWrite);
+    m_sendButton->setEnabled(canWrite);
+    m_input->setPlaceholderText(online ? tr("Message") : tr("Message (transmis à la prochaine connexion)"));
+    if (canWrite && !m_input->hasFocus())
         m_input->setFocus();
 }
 
@@ -479,6 +484,14 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
     const qint64 ms = qint64(msg.value("ts").toDouble());
     const QDateTime ts = ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms) : QDateTime::currentDateTime();
     m_chat->addMessage(msg.value("n").toString().left(40), msg.value("x").toString(), ts, mine, trust);
+    const QString id = msg.value("id").toString();
+    if (!id.isEmpty() && trust == ChatEntry::Verified) { // seuls les messages authentiques sont resynchronisés
+        QJsonObject stored = msg;
+        stored.remove("t");
+        stored["mine"] = mine;
+        m_store.insert(id, stored);
+        m_seenIds.insert(id);
+    }
     if (!save)
         return;
     // On enregistre le message tel qu'il a été signé : l'historique reste vérifiable
@@ -504,21 +517,47 @@ void MainWindow::loadHistory()
     QFile file(m_historyPath);
     if (!file.open(QIODevice::ReadOnly))
         return;
-    const QList<QByteArray> lines = file.readAll().split('\n');
-    for (qsizetype i = qMax<qsizetype>(0, lines.size() - 500); i < lines.size(); ++i) {
-        const QJsonObject o = QJsonDocument::fromJson(lines.at(i)).object();
+    struct Row
+    {
+        QJsonObject msg;
+        bool mine;
+        ChatEntry::Trust trust;
+        qint64 ts;
+    };
+    QList<Row> rows;
+    QSet<QString> ids;
+    const qint64 cleared = m_settings.value("history/clearedBefore").toLongLong();
+    for (const QByteArray &line : file.readAll().split('\n')) {
+        const QJsonObject o = QJsonDocument::fromJson(line).object();
         if (o.isEmpty())
             continue;
         if (o.contains("from")) { // ancien format, antérieur aux signatures
-            const QJsonObject legacy{
-                {"n", o["from"]},
-                {"x", o["text"]},
-                {"ts", double(QDateTime::fromString(o["ts"].toString(), Qt::ISODate).toMSecsSinceEpoch())}};
-            appendMessage(legacy, o["mine"].toBool(), ChatEntry::Unsigned, false);
+            const qint64 ts = QDateTime::fromString(o["ts"].toString(), Qt::ISODate).toMSecsSinceEpoch();
+            const QJsonObject legacy{{"n", o["from"]}, {"x", o["text"]}, {"ts", double(ts)}};
+            rows.append({legacy, o["mine"].toBool(), ChatEntry::Unsigned, ts});
             continue;
         }
+        const QString id = o["id"].toString();
+        if (!id.isEmpty() && ids.contains(id))
+            continue;
+        ids.insert(id);
+        const qint64 ts = qint64(o["ts"].toDouble());
+        if (ts < cleared)
+            continue;
         const bool mine = o["mine"].toBool();
-        appendMessage(o, mine, verifyMessage(o, mine), false);
+        rows.append({o, mine, verifyMessage(o, mine), ts});
+    }
+    std::stable_sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.ts < b.ts; });
+    for (qsizetype i = qMax<qsizetype>(0, rows.size() - 500); i < rows.size(); ++i)
+        appendMessage(rows[i].msg, rows[i].mine, rows[i].trust, false);
+    // Les plus anciens (non affichés) restent disponibles pour la synchronisation
+    for (qsizetype i = 0; i < rows.size() - 500; ++i) {
+        const QString id = rows[i].msg.value("id").toString();
+        if (!id.isEmpty() && rows[i].trust == ChatEntry::Verified) {
+            QJsonObject stored = rows[i].msg;
+            stored["mine"] = rows[i].mine;
+            m_store.insert(id, stored);
+        }
     }
     m_chat->scrollToBottom();
 }
@@ -527,11 +566,14 @@ void MainWindow::clearConversation()
 {
     if (QMessageBox::question(this, tr("Vider la conversation"),
                               tr("Effacer tous les messages de cette fenêtre ?\n"
-                                 "Ils sont supprimés uniquement sur cet ordinateur."))
+                                 "Ils sont supprimés uniquement sur cet ordinateur, et ne seront pas "
+                                 "récupérés auprès des autres membres."))
         != QMessageBox::Yes)
         return;
     m_chat->clearAll();
     QFile::remove(m_historyPath);
+    m_store.clear();
+    m_settings.setValue("history/clearedBefore", QDateTime::currentMSecsSinceEpoch());
     updateStatus();
 }
 
@@ -785,6 +827,9 @@ bool MainWindow::pinKey(const QString &onion, const QByteArray &key)
     QJsonObject ring = QJsonDocument::fromJson(m_settings.value("keyring").toByteArray()).object();
     ring.insert(onion, toB64(key));
     m_settings.setValue("keyring", QJsonDocument(ring).toJson(QJsonDocument::Compact));
+    QJsonObject seen = QJsonDocument::fromJson(m_settings.value("firstSeen").toByteArray()).object();
+    seen.insert(onion, double(QDateTime::currentMSecsSinceEpoch()));
+    m_settings.setValue("firstSeen", QJsonDocument(seen).toJson(QJsonDocument::Compact));
     return true;
 }
 
@@ -923,7 +968,108 @@ void MainWindow::setActive(PeerConnection *c)
     c->send(membersMessage());
     if (isNew)
         broadcast(membersMessage(), c);
+    c->send(inventoryMessage()); // après la liste des membres : les clés des auteurs sont connues
     updateStatus();
+}
+
+// ---------------------------------------------------------------- Synchronisation
+
+qint64 MainWindow::firstSeen(const QString &onion) const
+{
+    const QJsonObject seen = QJsonDocument::fromJson(m_settings.value("firstSeen").toByteArray()).object();
+    return qint64(seen.value(onion).toDouble()); // 0 : membre connu avant cette fonctionnalité
+}
+
+qint64 MainWindow::syncCutoff() const
+{
+    return qMax(QDateTime::currentMSecsSinceEpoch() - SyncWindowMs,
+                m_settings.value("history/clearedBefore").toLongLong());
+}
+
+QJsonObject MainWindow::inventoryMessage() const
+{
+    const qint64 cutoff = syncCutoff();
+    QList<QPair<qint64, QString>> recent;
+    for (auto it = m_store.cbegin(); it != m_store.cend(); ++it) {
+        const qint64 ts = qint64(it.value().value("ts").toDouble());
+        if (ts >= cutoff)
+            recent.append({ts, it.key()});
+    }
+    std::sort(recent.begin(), recent.end(), std::greater<>());
+    QJsonArray ids;
+    for (int i = 0; i < qMin(int(recent.size()), MaxInventory); ++i)
+        ids.append(recent[i].second);
+    return {{"t", "inv"}, {"ids", ids}};
+}
+
+void MainWindow::sendMissing(PeerConnection *c, const QJsonArray &theirIds)
+{
+    QSet<QString> theirs;
+    for (const QJsonValue &v : theirIds)
+        theirs.insert(v.toString());
+    // Un nouveau membre ne reçoit pas ce qui s'est dit avant son arrivée
+    const qint64 cutoff = qMax(syncCutoff(), firstSeen(c->peerOnion()) - NewMemberMarginMs);
+
+    QList<QJsonObject> missing;
+    for (auto it = m_store.cbegin(); it != m_store.cend(); ++it)
+        if (!theirs.contains(it.key()) && qint64(it.value().value("ts").toDouble()) >= cutoff)
+            missing.append(it.value());
+    std::sort(missing.begin(), missing.end(), [](const QJsonObject &a, const QJsonObject &b) {
+        return a.value("ts").toDouble() < b.value("ts").toDouble();
+    });
+
+    QJsonArray batch;
+    qsizetype bytes = 0;
+    auto flush = [&] {
+        if (!batch.isEmpty())
+            c->send({{"t", "sync"}, {"m", batch}});
+        batch = QJsonArray();
+        bytes = 0;
+    };
+    for (QJsonObject m : missing) {
+        m.remove("mine");
+        const qsizetype size = QJsonDocument(m).toJson(QJsonDocument::Compact).size();
+        if (bytes + size > MaxSyncBatchBytes)
+            flush();
+        batch.append(m);
+        bytes += size;
+    }
+    flush();
+}
+
+void MainWindow::receiveSync(const QJsonArray &messages)
+{
+    const qint64 cutoff = syncCutoff();
+    int received = 0;
+    QString lastAuthor, lastText;
+    for (const QJsonValue &v : messages) {
+        QJsonObject m = v.toObject();
+        const QString id = m.value("id").toString();
+        if (id.isEmpty() || m_store.contains(id) || qint64(m.value("ts").toDouble()) < cutoff)
+            continue;
+        const bool mine = !m_myOnion.isEmpty() && m.value("a").toString() == m_myOnion;
+        // Chaque message est vérifié avec la clé de son auteur : un membre ne peut rien inventer
+        if (verifyMessage(m, mine) != ChatEntry::Verified) {
+            qWarning().noquote() << "[synchro] message rejeté, signature invalide :" << id;
+            continue;
+        }
+        appendMessage(m, mine, ChatEntry::Verified);
+        if (!mine) {
+            ++received;
+            lastAuthor = m.value("n").toString();
+            lastText = m.value("x").toString();
+        }
+    }
+    if (received == 0)
+        return;
+    if (!isVisible() || !isActiveWindow()) {
+        m_unread += received;
+        updateUnread();
+        if (received == 1)
+            m_notifier->notify(lastAuthor, lastText);
+        else
+            m_notifier->notify(tr("P2P Chat"), tr("%n message(s) reçu(s) pendant votre absence", nullptr, received));
+    }
 }
 
 void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
@@ -951,9 +1097,13 @@ void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
             connectToMembers();
         }
         updateStatus(); // un pseudo a pu changer
+    } else if (type == "inv") {
+        sendMissing(c, o.value("ids").toArray());
+    } else if (type == "sync") {
+        receiveSync(o.value("m").toArray());
     } else if (type == "msg") {
         const QString id = o.value("id").toString();
-        if (id.isEmpty() || m_seenIds.contains(id))
+        if (id.isEmpty() || m_seenIds.contains(id) || m_store.contains(id))
             return;
         if (m_seenIds.size() > MaxSeenIds)
             m_seenIds.clear();
@@ -999,8 +1149,8 @@ void MainWindow::closeAll()
 void MainWindow::sendCurrent()
 {
     const QString text = m_input->text().trimmed();
-    if (text.isEmpty() || m_active.isEmpty())
-        return;
+    if (text.isEmpty() || secret().isEmpty() || members().isEmpty() || m_myOnion.isEmpty())
+        return; // sans personne en ligne, le message partira à la prochaine synchronisation
     const QJsonObject msg = signedMessage(text);
     m_seenIds.insert(msg.value("id").toString());
     broadcast(msg);

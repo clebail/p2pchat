@@ -3,6 +3,7 @@
 
 #include <QDateTime>
 #include <QHash>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QMainWindow>
 #include <QSet>
@@ -73,6 +74,14 @@ private:
     bool pinKey(const QString &onion, const QByteArray &key); // false si une autre clé est déjà connue
     QJsonObject signedMessage(const QString &text) const;
     ChatEntry::Trust verifyMessage(const QJsonObject &msg, bool mine) const;
+
+    // Synchronisation de l'historique : à chaque connexion, chacun envoie l'inventaire de ses
+    // messages récents et reçoit en retour ceux qui lui manquent (signés par leur auteur).
+    QJsonObject inventoryMessage() const;
+    void sendMissing(PeerConnection *c, const QJsonArray &theirIds);
+    void receiveSync(const QJsonArray &messages);
+    qint64 syncCutoff() const;                    // rien d'antérieur n'est échangé
+    qint64 firstSeen(const QString &onion) const; // date de première rencontre d'un membre
     QString memberNick(const QString &onion) const;
 
     // Connexions
@@ -103,6 +112,7 @@ private:
     QHash<QString, QString> m_lastError;         // onion -> dernière erreur
     QSet<QString> m_seenIds;                     // anti-doublon des messages relayés
     QSet<QString> m_identityWarned;              // avertissements d'identité déjà affichés
+    QHash<QString, QJsonObject> m_store;         // historique signé : id -> message
     QTimer m_retryTimer;
     int m_unread = 0;
 

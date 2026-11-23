@@ -121,6 +121,20 @@ void ChatModel::append(const ChatEntry &e)
         emit dataChanged(index(row - 1), index(row - 1));
 }
 
+int ChatModel::insertSorted(const ChatEntry &e)
+{
+    int row = int(m_entries.size());
+    while (row > 0 && m_entries.at(row - 1).ts > e.ts)
+        --row;
+    beginInsertRows({}, row, row);
+    m_entries.insert(row, e);
+    endInsertRows();
+    // Les voisins peuvent changer d'aspect (regroupement : nom, heure, avatar, coins)
+    const int first = qMax(0, row - 1), last = qMin(int(m_entries.size()) - 1, row + 1);
+    emit dataChanged(index(first), index(last));
+    return row;
+}
+
 void ChatModel::clear()
 {
     beginResetModel();
@@ -304,9 +318,11 @@ void ChatView::appendEntry(const ChatEntry &e)
 {
     QScrollBar *sb = verticalScrollBar();
     const bool atBottom = sb->value() >= sb->maximum() - 40;
-    m_model->append(e);
-    if (atBottom || e.mine)
-        scrollToBottom();
+    const int row = m_model->insertSorted(e);
+    // Les hauteurs des voisins ont pu changer : on refait la mise en page
+    scheduleDelayedItemsLayout();
+    if ((atBottom && row == m_model->rowCount() - 1) || e.mine)
+        QMetaObject::invokeMethod(this, [this] { scrollToBottom(); }, Qt::QueuedConnection);
 }
 
 void ChatView::addMessage(const QString &author, const QString &text, const QDateTime &ts, bool mine,

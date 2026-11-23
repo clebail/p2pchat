@@ -28,6 +28,7 @@ public:
     QVariant data(const QModelIndex &index, int role) const override;
     const ChatEntry &entry(int row) const { return m_entries.at(row); }
     void append(const ChatEntry &e);
+    int insertSorted(const ChatEntry &e); // à sa place chronologique ; renvoie la ligne
     void clear();
 
 private:
