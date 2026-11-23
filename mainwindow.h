@@ -1,4 +1,6 @@
 #pragma once
+#include "chatview.h"
+
 #include <QDateTime>
 #include <QHash>
 #include <QJsonObject>
@@ -16,7 +18,6 @@ class QStackedWidget;
 class QSystemTrayIcon;
 class Notifier;
 class QToolButton;
-class ChatView;
 class TorService;
 
 // Conversation de groupe en maillage complet : chaque membre est connecté
@@ -40,8 +41,8 @@ private:
     // Interface
     void buildUi();
     void updateStatus();
-    void appendMessage(const QString &who, const QString &text, const QDateTime &ts, bool mine,
-                       bool save = true);
+    // msg : message signé tel qu'échangé sur le réseau (id, a, n, x, ts, s)
+    void appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Trust trust, bool save = true);
     void appendSystem(const QString &text);
     void loadHistory();
     void clearConversation();
@@ -63,6 +64,15 @@ private:
     void saveMembers(const QList<Member> &list);
     bool mergeMember(const QString &onion, const QString &nick); // true si nouveau membre
     QJsonObject membersMessage() const;
+
+    // Identité : clé Ed25519 de ce poste, et trousseau des clés des membres (mémorisées à la
+    // première rencontre, conservées même après avoir quitté le groupe pour vérifier l'historique)
+    QByteArray identitySeed() const;
+    QByteArray myIdentityKey() const;
+    QByteArray pinnedKey(const QString &onion) const;
+    bool pinKey(const QString &onion, const QByteArray &key); // false si une autre clé est déjà connue
+    QJsonObject signedMessage(const QString &text) const;
+    ChatEntry::Trust verifyMessage(const QJsonObject &msg, bool mine) const;
     QString memberNick(const QString &onion) const;
 
     // Connexions
@@ -92,6 +102,7 @@ private:
     QSet<PeerConnection *> m_pending;            // entrantes avant le hello
     QHash<QString, QString> m_lastError;         // onion -> dernière erreur
     QSet<QString> m_seenIds;                     // anti-doublon des messages relayés
+    QSet<QString> m_identityWarned;              // avertissements d'identité déjà affichés
     QTimer m_retryTimer;
     int m_unread = 0;
 

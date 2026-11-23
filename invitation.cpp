@@ -9,10 +9,11 @@ static constexpr auto B64 = QByteArray::Base64UrlEncoding | QByteArray::OmitTrai
 
 QString Invitation::toCode() const
 {
-    const QJsonObject o{{"v", 2},
+    const QJsonObject o{{"v", 3},
                         {"k", QString::fromLatin1(secret.toBase64(B64))},
                         {"o", onion},
-                        {"n", nickname}};
+                        {"n", nickname},
+                        {"i", QString::fromLatin1(identityKey.toBase64(B64))}};
     return Prefix + QString::fromLatin1(QJsonDocument(o).toJson(QJsonDocument::Compact).toBase64(B64));
 }
 
@@ -31,15 +32,16 @@ std::optional<Invitation> Invitation::fromCode(const QString &code)
     if (!decoded)
         return std::nullopt;
     const QJsonObject o = QJsonDocument::fromJson(*decoded).object();
-    if (o.value("v").toInt() != 2)
+    if (o.value("v").toInt() != 3)
         return std::nullopt;
 
     Invitation inv;
     inv.secret = QByteArray::fromBase64(o.value("k").toString().toLatin1(), B64);
     inv.onion = o.value("o").toString();
     inv.nickname = o.value("n").toString().left(40);
+    inv.identityKey = QByteArray::fromBase64(o.value("i").toString().toLatin1(), B64);
     static const QRegularExpression onionRe(QStringLiteral("^[a-z2-7]{56}\\.onion$"));
-    if (inv.secret.size() < 16 || !onionRe.match(inv.onion).hasMatch())
+    if (inv.secret.size() < 16 || inv.identityKey.size() != 32 || !onionRe.match(inv.onion).hasMatch())
         return std::nullopt;
     return inv;
 }

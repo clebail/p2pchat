@@ -62,7 +62,29 @@ QString torInstallHelp()
 #endif
 }
 
+const QByteArray MessageContext("p2pchat-msg-v1");
+
+QString toB64(const QByteArray &b)
+{
+    return QString::fromLatin1(b.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+}
+
+QByteArray fromB64(const QJsonValue &v)
+{
+    return QByteArray::fromBase64(v.toString().toLatin1(), QByteArray::Base64UrlEncoding);
+}
+
+// Ce que l'auteur signe : identifiant, adresse, pseudo, texte et heure
+QByteArray messageSigningBytes(const QJsonObject &m)
+{
+    return Crypto::pack({MessageContext, m.value("id").toString().toUtf8(), m.value("a").toString().toUtf8(),
+                         m.value("n").toString().toUtf8(), m.value("x").toString().toUtf8(),
+                         QByteArray::number(qint64(m.value("ts").toDouble()))});
+}
+
 constexpr int MaxSeenIds = 5000;
+constexpr int MaxMembers = 32; // maillage complet : au-delà, ce n'est plus raisonnable
+constexpr int MaxPending = 16; // connexions entrantes pas encore authentifiées
 
 } // namespace
 
@@ -71,6 +93,17 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(dataDir);
     m_historyPath = dataDir + "/history.jsonl";
+
+    if (identitySeed().size() != 32)
+        m_settings.setValue("identity/seed", Ed25519::generateSeed());
+
+    // Le secret du groupe, la clé d'identité, les clés Tor et l'historique : lisibles par nous seuls
+    constexpr auto OwnerRW = QFile::ReadOwner | QFile::WriteOwner;
+    m_settings.sync();
+    QFile::setPermissions(m_settings.fileName(), OwnerRW);
+    QFile::setPermissions(dataDir, OwnerRW | QFile::ExeOwner);
+    if (QFile::exists(m_historyPath))
+        QFile::setPermissions(m_historyPath, OwnerRW);
 
     // Reprise de la configuration de la version à deux participants
     if (m_settings.contains("contact/secret")) {
@@ -281,6 +314,7 @@ void MainWindow::buildUi()
     titles->setSpacing(1);
     m_title = new QLabel(tr("P2P Chat"), topBar);
     m_title->setObjectName("title");
+    m_title->setTextFormat(Qt::PlainText); // contient des pseudos choisis par les autres
     m_subtitle = new QLabel(topBar);
     m_subtitle->setObjectName("subtitle");
     m_subtitle->setTextFormat(Qt::RichText);
@@ -428,9 +462,9 @@ void MainWindow::updateStatus()
                                                        : tr("hors ligne");
         if (!m_active.contains(m.onion) && m_lastError.contains(m.onion))
             state += " — " + m_lastError.value(m.onion);
-        tips << QStringLiteral("%1 : %2").arg(m.nick, state);
+        tips << QStringLiteral("%1 : %2").arg(m.nick, state).toHtmlEscaped();
     }
-    m_subtitle->setToolTip(tips.join('\n'));
+    m_subtitle->setToolTip(tips.isEmpty() ? QString() : "<p>" + tips.join("<br>") + "</p>");
 
     const bool online = !m_active.isEmpty();
     m_input->setEnabled(online);
@@ -440,15 +474,23 @@ void MainWindow::updateStatus()
         m_input->setFocus();
 }
 
-void MainWindow::appendMessage(const QString &who, const QString &text, const QDateTime &ts, bool mine, bool save)
+void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Trust trust, bool save)
 {
-    m_chat->addMessage(who, text, ts, mine);
+    const qint64 ms = qint64(msg.value("ts").toDouble());
+    const QDateTime ts = ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms) : QDateTime::currentDateTime();
+    m_chat->addMessage(msg.value("n").toString().left(40), msg.value("x").toString(), ts, mine, trust);
     if (!save)
         return;
+    // On enregistre le message tel qu'il a été signé : l'historique reste vérifiable
     QFile file(m_historyPath);
+    const bool created = !file.exists();
     if (file.open(QIODevice::Append)) {
-        const QJsonObject o{{"ts", ts.toString(Qt::ISODate)}, {"from", who}, {"text", text}, {"mine", mine}};
-        file.write(QJsonDocument(o).toJson(QJsonDocument::Compact) + '\n');
+        if (created)
+            file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
+        QJsonObject line = msg;
+        line.remove("t");
+        line["mine"] = mine;
+        file.write(QJsonDocument(line).toJson(QJsonDocument::Compact) + '\n');
     }
 }
 
@@ -465,9 +507,18 @@ void MainWindow::loadHistory()
     const QList<QByteArray> lines = file.readAll().split('\n');
     for (qsizetype i = qMax<qsizetype>(0, lines.size() - 500); i < lines.size(); ++i) {
         const QJsonObject o = QJsonDocument::fromJson(lines.at(i)).object();
-        if (!o.isEmpty())
-            appendMessage(o["from"].toString(), o["text"].toString(),
-                          QDateTime::fromString(o["ts"].toString(), Qt::ISODate), o["mine"].toBool(), false);
+        if (o.isEmpty())
+            continue;
+        if (o.contains("from")) { // ancien format, antérieur aux signatures
+            const QJsonObject legacy{
+                {"n", o["from"]},
+                {"x", o["text"]},
+                {"ts", double(QDateTime::fromString(o["ts"].toString(), Qt::ISODate).toMSecsSinceEpoch())}};
+            appendMessage(legacy, o["mine"].toBool(), ChatEntry::Unsigned, false);
+            continue;
+        }
+        const bool mine = o["mine"].toBool();
+        appendMessage(o, mine, verifyMessage(o, mine), false);
     }
     m_chat->scrollToBottom();
 }
@@ -568,7 +619,7 @@ void MainWindow::invite()
 
 void MainWindow::showInvitation()
 {
-    const QString code = Invitation{secret(), m_myOnion, nickname()}.toCode();
+    const QString code = Invitation{secret(), m_myOnion, nickname(), myIdentityKey()}.toCode();
 
     QDialog dlg(this);
     dlg.setWindowTitle(tr("Code d'invitation"));
@@ -625,12 +676,18 @@ void MainWindow::join()
     }
     if (!secret().isEmpty() && secret() != inv->secret) {
         if (QMessageBox::question(this, tr("Rejoindre"),
-                                  tr("Vous faites déjà partie d'une autre conversation. "
-                                     "La quitter pour rejoindre celle de %1 ?").arg(inv->nickname))
+                                  tr("<p>Vous faites déjà partie d'une autre conversation. "
+                                     "La quitter pour rejoindre celle de %1 ?</p>").arg(inv->nickname.toHtmlEscaped()))
             != QMessageBox::Yes)
             return;
         closeAll();
         saveMembers({});
+    }
+    if (!pinKey(inv->onion, inv->identityKey)) {
+        QMessageBox::warning(this, tr("Rejoindre"),
+                             tr("<p>Ce code présente une clé d'identité différente de celle déjà connue pour %1.<br>"
+                                "Par sécurité, il est refusé.</p>").arg(inv->nickname.toHtmlEscaped()));
+        return;
     }
     m_settings.setValue("group/secret", inv->secret);
     mergeMember(inv->onion, inv->nickname);
@@ -675,6 +732,8 @@ bool MainWindow::mergeMember(const QString &onion, const QString &nick)
             return false;
         }
     }
+    if (list.size() >= MaxMembers)
+        return false; // protège contre une liste de membres gonflée artificiellement
     list.append({onion, nick.left(40)});
     saveMembers(list);
     return true;
@@ -691,10 +750,63 @@ QString MainWindow::memberNick(const QString &onion) const
 QJsonObject MainWindow::membersMessage() const
 {
     QJsonArray arr;
-    arr.append(QJsonObject{{"o", m_myOnion}, {"n", nickname()}});
+    arr.append(QJsonObject{{"o", m_myOnion}, {"n", nickname()}, {"k", toB64(myIdentityKey())}});
     for (const Member &m : members())
-        arr.append(QJsonObject{{"o", m.onion}, {"n", m.nick}});
+        arr.append(QJsonObject{{"o", m.onion}, {"n", m.nick}, {"k", toB64(pinnedKey(m.onion))}});
     return {{"t", "members"}, {"m", arr}};
+}
+
+// ---------------------------------------------------------------- Identité et signatures
+
+
+QByteArray MainWindow::identitySeed() const
+{
+    return m_settings.value("identity/seed").toByteArray();
+}
+
+QByteArray MainWindow::myIdentityKey() const
+{
+    return Ed25519::publicKey(identitySeed());
+}
+
+QByteArray MainWindow::pinnedKey(const QString &onion) const
+{
+    const QJsonObject ring = QJsonDocument::fromJson(m_settings.value("keyring").toByteArray()).object();
+    return fromB64(ring.value(onion));
+}
+
+bool MainWindow::pinKey(const QString &onion, const QByteArray &key)
+{
+    if (key.size() != 32 || !isValidOnion(onion))
+        return false;
+    const QByteArray known = pinnedKey(onion);
+    if (!known.isEmpty())
+        return known == key;
+    QJsonObject ring = QJsonDocument::fromJson(m_settings.value("keyring").toByteArray()).object();
+    ring.insert(onion, toB64(key));
+    m_settings.setValue("keyring", QJsonDocument(ring).toJson(QJsonDocument::Compact));
+    return true;
+}
+
+QJsonObject MainWindow::signedMessage(const QString &text) const
+{
+    QJsonObject m{{"t", "msg"},
+                  {"id", QString::fromLatin1(Crypto::randomBytes(12).toHex())},
+                  {"a", m_myOnion},
+                  {"n", nickname()},
+                  {"x", text},
+                  {"ts", double(QDateTime::currentMSecsSinceEpoch())}};
+    m.insert("s", toB64(Ed25519::sign(identitySeed(), messageSigningBytes(m))));
+    return m;
+}
+
+ChatEntry::Trust MainWindow::verifyMessage(const QJsonObject &msg, bool mine) const
+{
+    if (!msg.contains("s"))
+        return ChatEntry::Unsigned;
+    const QByteArray key = mine ? myIdentityKey() : pinnedKey(msg.value("a").toString());
+    return Ed25519::verify(key, messageSigningBytes(msg), fromB64(msg.value("s"))) ? ChatEntry::Verified
+                                                                                   : ChatEntry::Invalid;
 }
 
 // ---------------------------------------------------------------- Connexions
@@ -702,12 +814,12 @@ QJsonObject MainWindow::membersMessage() const
 void MainWindow::onNewConnection()
 {
     while (QTcpSocket *s = m_server->nextPendingConnection()) {
-        if (secret().isEmpty() || m_myOnion.isEmpty()) {
+        if (secret().isEmpty() || m_myOnion.isEmpty() || m_pending.size() >= MaxPending) {
             s->abort();
             s->deleteLater();
             continue;
         }
-        auto *c = new PeerConnection(s, false, secret(), nickname(), m_myOnion, this);
+        auto *c = new PeerConnection(s, false, secret(), nickname(), m_myOnion, identitySeed(), this);
         m_pending.insert(c);
         watch(c);
     }
@@ -727,7 +839,7 @@ void MainWindow::dial(const QString &onion)
 {
     auto *s = new QTcpSocket;
     s->setProxy(QNetworkProxy(QNetworkProxy::Socks5Proxy, "127.0.0.1", m_tor->socksPort()));
-    auto *c = new PeerConnection(s, true, secret(), nickname(), m_myOnion, this);
+    auto *c = new PeerConnection(s, true, secret(), nickname(), m_myOnion, identitySeed(), this);
     m_attempts.insert(onion, c);
     watch(c);
     s->connectToHost(onion, TorService::OnionPort); // résolu par Tor, pas localement
@@ -769,6 +881,21 @@ void MainWindow::setActive(PeerConnection *c)
         c->close();
         return;
     }
+    // En sortie, Tor garantit qu'on a joint l'adresse appelée : le pair doit annoncer celle-là
+    if (!dialed.isEmpty() && dialed != onion) {
+        c->close();
+        return;
+    }
+    // La signature du hello prouve la possession de la clé ; elle doit être celle connue pour ce membre
+    if (!pinKey(onion, c->peerIdentityKey())) {
+        if (!m_identityWarned.contains(onion)) {
+            m_identityWarned.insert(onion);
+            appendSystem(tr("⚠ Connexion refusée : « %1 » ne présente pas la clé d'identité connue pour ce membre.")
+                             .arg(c->peerNickname()));
+        }
+        c->close();
+        return;
+    }
 
     // Deux membres peuvent s'appeler en même temps. Règle identique des deux côtés :
     // on garde la connexion ouverte par l'adresse onion la plus petite.
@@ -806,7 +933,15 @@ void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
         bool changed = false;
         for (const QJsonValue &v : o.value("m").toArray()) {
             const QJsonObject m = v.toObject();
-            if (mergeMember(m["o"].toString(), m["n"].toString())) {
+            const QString onion = m["o"].toString();
+            if (onion == m_myOnion)
+                continue;
+            // Un membre présenté sans clé, ou avec une clé différente de celle connue, est ignoré
+            if (!pinKey(onion, fromB64(m["k"]))) {
+                qWarning().noquote() << "[identité] clé refusée pour" << onion.left(8);
+                continue;
+            }
+            if (mergeMember(onion, m["n"].toString())) {
                 changed = true;
                 appendSystem(tr("%1 fait partie de la conversation.").arg(m["n"].toString()));
             }
@@ -824,10 +959,12 @@ void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
             m_seenIds.clear();
         m_seenIds.insert(id);
 
-        const qint64 ms = qint64(o.value("ts").toDouble());
-        const QDateTime ts = ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms) : QDateTime::currentDateTime();
         const QString author = o.value("n").toString().left(40);
-        appendMessage(author.isEmpty() ? c->peerNickname() : author, o.value("x").toString(), ts, false);
+        if (verifyMessage(o, false) != ChatEntry::Verified) {
+            appendSystem(tr("⚠ Message attribué à « %1 » rejeté : signature invalide.").arg(author));
+            return;
+        }
+        appendMessage(o, false, ChatEntry::Verified);
 
         // Relais : au cas où un membre ne serait pas encore relié directement à l'auteur
         broadcast(o, c);
@@ -835,7 +972,7 @@ void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
         if (!isVisible() || !isActiveWindow()) {
             ++m_unread;
             updateUnread();
-            m_notifier->notify(author.isEmpty() ? c->peerNickname() : author, o.value("x").toString());
+            m_notifier->notify(author, o.value("x").toString());
             if (isVisible())
                 QApplication::alert(this);
         }
@@ -864,15 +1001,10 @@ void MainWindow::sendCurrent()
     const QString text = m_input->text().trimmed();
     if (text.isEmpty() || m_active.isEmpty())
         return;
-    const QString id = QString::fromLatin1(Crypto::randomBytes(12).toHex());
-    m_seenIds.insert(id);
-    broadcast({{"t", "msg"},
-               {"id", id},
-               {"a", m_myOnion},
-               {"n", nickname()},
-               {"x", text},
-               {"ts", double(QDateTime::currentMSecsSinceEpoch())}});
-    appendMessage(nickname(), text, QDateTime::currentDateTime(), true);
+    const QJsonObject msg = signedMessage(text);
+    m_seenIds.insert(msg.value("id").toString());
+    broadcast(msg);
+    appendMessage(msg, true, ChatEntry::Verified);
     m_input->clear();
 }
 

@@ -10,11 +10,13 @@
 struct ChatEntry
 {
     enum Kind { Message, System };
+    enum Trust { Verified, Unsigned, Invalid }; // signature de l'auteur (historique)
     Kind kind = Message;
     QString author;
     QString text;
     QDateTime ts;
     bool mine = false;
+    Trust trust = Verified;
 };
 
 class ChatModel : public QAbstractListModel
@@ -51,7 +53,8 @@ class ChatView : public QListView
     Q_OBJECT
 public:
     explicit ChatView(QWidget *parent = nullptr);
-    void addMessage(const QString &author, const QString &text, const QDateTime &ts, bool mine);
+    void addMessage(const QString &author, const QString &text, const QDateTime &ts, bool mine,
+                    ChatEntry::Trust trust = ChatEntry::Verified);
     void addSystem(const QString &text);
     void clearAll();
     ChatModel *chatModel() const { return m_model; }

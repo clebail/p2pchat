@@ -4,6 +4,8 @@
 #include <openssl/kdf.h>
 #include <openssl/rand.h>
 
+#include <QtEndian>
+
 namespace {
 
 const unsigned char *u(const QByteArray &b) { return reinterpret_cast<const unsigned char *>(b.constData()); }
@@ -151,4 +153,62 @@ bool SecureChannel::decrypt(const QByteArray &cipher, QByteArray &plain)
         return false;
     ++m_recvCounter; // ordre strict : rejeu et réordonnancement refusés
     return true;
+}
+
+QByteArray Crypto::pack(const QList<QByteArray> &parts)
+{
+    QByteArray out;
+    for (const QByteArray &p : parts) {
+        char len[4];
+        qToBigEndian<quint32>(quint32(p.size()), len);
+        out.append(len, 4).append(p);
+    }
+    return out;
+}
+
+QByteArray Ed25519::generateSeed()
+{
+    return Crypto::randomBytes(32);
+}
+
+QByteArray Ed25519::publicKey(const QByteArray &seed)
+{
+    if (seed.size() != 32)
+        return {};
+    EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, nullptr, u(seed), 32);
+    if (!key)
+        return {};
+    QByteArray pub(32, Qt::Uninitialized);
+    size_t len = 32;
+    const bool ok = EVP_PKEY_get_raw_public_key(key, u(pub), &len) == 1 && len == 32;
+    EVP_PKEY_free(key);
+    return ok ? pub : QByteArray();
+}
+
+QByteArray Ed25519::sign(const QByteArray &seed, const QByteArray &message)
+{
+    if (seed.size() != 32)
+        return {};
+    EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, nullptr, u(seed), 32);
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    QByteArray sig(64, Qt::Uninitialized);
+    size_t len = 64;
+    const bool ok = key && ctx && EVP_DigestSignInit(ctx, nullptr, nullptr, nullptr, key) == 1
+                    && EVP_DigestSign(ctx, u(sig), &len, u(message), size_t(message.size())) == 1 && len == 64;
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(key);
+    return ok ? sig : QByteArray();
+}
+
+bool Ed25519::verify(const QByteArray &publicKey, const QByteArray &message, const QByteArray &signature)
+{
+    if (publicKey.size() != 32 || signature.size() != 64)
+        return false;
+    EVP_PKEY *key = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr, u(publicKey), 32);
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    const bool ok = key && ctx && EVP_DigestVerifyInit(ctx, nullptr, nullptr, nullptr, key) == 1
+                    && EVP_DigestVerify(ctx, u(signature), 64, u(message), size_t(message.size())) == 1;
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(key);
+    return ok;
 }

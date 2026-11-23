@@ -175,7 +175,7 @@ ChatDelegate::Geometry ChatDelegate::compute(const QModelIndex &index, int width
     g.bubbleW = g.textW + 2 * PadH;
     g.bubbleH = int(std::ceil(h)) + 2 * PadV;
     g.nameH = (!e.mine && g.first) ? small.height() + 4 : 0;
-    g.timeH = g.last ? small.height() + 4 : 0;
+    g.timeH = (g.last || e.trust != ChatEntry::Verified) ? small.height() + 4 : 0;
     g.height = g.top + g.nameH + g.bubbleH + g.timeH;
     return g;
 }
@@ -253,13 +253,22 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
         p->drawText(av, Qt::AlignCenter, e.author.left(1).toUpper());
     }
 
-    // Heure sous le dernier message du groupe
+    // Heure sous le dernier message du groupe, et avertissement si la signature n'est pas vérifiée
     if (g.timeH) {
-        p->setFont(smallFont());
-        p->setPen(Muted);
+        p->setFont(smallFont(e.trust != ChatEntry::Verified));
+        QString label = e.ts.toString("HH:mm");
+        if (e.trust == ChatEntry::Unsigned) {
+            p->setPen(QColor("#b06000"));
+            label += QObject::tr(" · ⚠ non signé");
+        } else if (e.trust == ChatEntry::Invalid) {
+            p->setPen(QColor("#d93025"));
+            label += QObject::tr(" · ⚠ signature invalide");
+        } else {
+            p->setPen(Muted);
+        }
         const QRect tr(int(bubble.left()) + 6, int(bubble.bottom()) + 3, g.bubbleW - 12, g.timeH);
-        p->drawText(e.mine ? tr.adjusted(-200, 0, 0, 0) : tr, (e.mine ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignTop,
-                    e.ts.toString("HH:mm"));
+        p->drawText(e.mine ? tr.adjusted(-300, 0, 0, 0) : tr.adjusted(0, 0, 300, 0),
+                    (e.mine ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignTop, label);
     }
     p->restore();
 }
@@ -300,14 +309,15 @@ void ChatView::appendEntry(const ChatEntry &e)
         scrollToBottom();
 }
 
-void ChatView::addMessage(const QString &author, const QString &text, const QDateTime &ts, bool mine)
+void ChatView::addMessage(const QString &author, const QString &text, const QDateTime &ts, bool mine,
+                          ChatEntry::Trust trust)
 {
-    appendEntry({ChatEntry::Message, author, text, ts, mine});
+    appendEntry({ChatEntry::Message, author, text, ts, mine, trust});
 }
 
 void ChatView::addSystem(const QString &text)
 {
-    appendEntry({ChatEntry::System, {}, text, QDateTime::currentDateTime(), false});
+    appendEntry({ChatEntry::System, {}, text, QDateTime::currentDateTime(), false, ChatEntry::Verified});
 }
 
 void ChatView::clearAll()

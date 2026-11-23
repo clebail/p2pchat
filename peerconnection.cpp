@@ -8,9 +8,22 @@
 static const QByteArray Magic("P2PCHAT1");
 static constexpr quint32 MaxFrame = 256 * 1024;
 
-PeerConnection::PeerConnection(QTcpSocket *socket, bool outgoing, const QByteArray &psk,
-                               const QString &nickname, const QString &ownOnion, QObject *parent)
-    : QObject(parent), m_socket(socket), m_outgoing(outgoing), m_psk(psk), m_nick(nickname), m_ownOnion(ownOnion)
+static const QByteArray HelloContext("p2pchat-hello-v4");
+
+static QByteArray b64(const QByteArray &b)
+{
+    return b.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+}
+
+static QByteArray unb64(const QJsonValue &v)
+{
+    return QByteArray::fromBase64(v.toString().toLatin1(), QByteArray::Base64UrlEncoding);
+}
+
+PeerConnection::PeerConnection(QTcpSocket *socket, bool outgoing, const QByteArray &psk, const QString &nickname,
+                               const QString &ownOnion, const QByteArray &identitySeed, QObject *parent)
+    : QObject(parent), m_socket(socket), m_outgoing(outgoing), m_psk(psk), m_nick(nickname), m_ownOnion(ownOnion),
+      m_identitySeed(identitySeed)
 {
     socket->setParent(this);
     connect(socket, &QTcpSocket::connected, this, &PeerConnection::onConnected);
@@ -82,8 +95,18 @@ void PeerConnection::handleFrame(const QByteArray &frame)
             return;
         }
         qInfo().noquote() << "[peer] clé reçue, envoi du hello";
+        m_ourEphemeral = ourPub;
+        m_peerEphemeral = peerPub;
         m_state = WaitHello;
-        sendEncrypted({{"t", "hello"}, {"n", m_nick}, {"o", m_ownOnion}, {"v", 3}});
+        // Preuve d'identité liée à cette session (les clés éphémères ne servent qu'une fois)
+        const QByteArray proof = Ed25519::sign(
+            m_identitySeed, Crypto::pack({HelloContext, ourPub, peerPub, m_ownOnion.toUtf8()}));
+        sendEncrypted({{"t", "hello"},
+                       {"n", m_nick},
+                       {"o", m_ownOnion},
+                       {"v", 4},
+                       {"k", QString::fromLatin1(b64(Ed25519::publicKey(m_identitySeed)))},
+                       {"s", QString::fromLatin1(b64(proof))}});
         return;
     }
 
@@ -105,6 +128,17 @@ void PeerConnection::handleFrame(const QByteArray &frame)
         if (m_peerNick.isEmpty())
             m_peerNick = tr("Correspondant");
         m_peerOnion = o.value("o").toString().left(70);
+        const QByteArray key = unb64(o.value("k")), proof = unb64(o.value("s"));
+        if (o.value("v").toInt() < 4) {
+            fail(tr("le correspondant utilise une ancienne version de P2P Chat"));
+            return;
+        }
+        if (!Ed25519::verify(key, Crypto::pack({HelloContext, m_peerEphemeral, m_ourEphemeral, m_peerOnion.toUtf8()}),
+                             proof)) {
+            fail(tr("signature d'identité invalide"));
+            return;
+        }
+        m_peerKey = key;
         qInfo().noquote() << "[peer] prêt avec" << m_peerNick << m_peerOnion.left(8);
         m_state = Ready;
         m_handshakeTimer.stop();
