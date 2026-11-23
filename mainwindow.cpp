@@ -8,6 +8,7 @@
 #include "torservice.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QSystemTrayIcon>
@@ -127,6 +128,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     // Tentative périodique vers les membres hors ligne
     m_retryTimer.setInterval(30000);
     connect(&m_retryTimer, &QTimer::timeout, this, &MainWindow::connectToMembers);
+    m_syncTimer.setInterval(5 * 60 * 1000);
+    connect(&m_syncTimer, &QTimer::timeout, this, [this] {
+        if (!m_active.isEmpty())
+            broadcast(inventoryMessage());
+    });
+    m_syncTimer.start();
 
     buildUi();
     setupTray();
@@ -679,6 +686,20 @@ void MainWindow::showInvitation()
     edit->setMinimumSize(480, 100);
     lay->addWidget(edit);
 
+    // Partage de l'historique récent avec les personnes qui rejoignent dans les 7 jours
+    auto *share = new QCheckBox(tr("Partager l'historique des 30 derniers jours avec la personne invitée"), &dlg);
+    share->setToolTip(tr("Utile pour ajouter un de vos propres appareils.\n"
+                         "Valable pour les personnes qui rejoignent dans les 7 jours."));
+    share->setChecked(m_settings.value("group/shareHistoryUntil").toLongLong() > QDateTime::currentMSecsSinceEpoch());
+    connect(share, &QCheckBox::toggled, this, [this](bool on) {
+        if (on)
+            m_settings.setValue("group/shareHistoryUntil",
+                                QDateTime::currentDateTime().addDays(7).toMSecsSinceEpoch());
+        else
+            m_settings.remove("group/shareHistoryUntil");
+    });
+    lay->addWidget(share);
+
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
     QPushButton *copy = buttons->addButton(tr("Copier le code"), QDialogButtonBox::ActionRole);
     QPushButton *mail = buttons->addButton(tr("Envoyer par mail…"), QDialogButtonBox::ActionRole);
@@ -828,7 +849,10 @@ bool MainWindow::pinKey(const QString &onion, const QByteArray &key)
     ring.insert(onion, toB64(key));
     m_settings.setValue("keyring", QJsonDocument(ring).toJson(QJsonDocument::Compact));
     QJsonObject seen = QJsonDocument::fromJson(m_settings.value("firstSeen").toByteArray()).object();
-    seen.insert(onion, double(QDateTime::currentMSecsSinceEpoch()));
+    // Invitation avec partage d'historique en cours : le nouveau venu reçoit les 30 derniers jours
+    const bool shareHistory =
+        m_settings.value("group/shareHistoryUntil").toLongLong() > QDateTime::currentMSecsSinceEpoch();
+    seen.insert(onion, shareHistory ? 0.0 : double(QDateTime::currentMSecsSinceEpoch()));
     m_settings.setValue("firstSeen", QJsonDocument(seen).toJson(QJsonDocument::Compact));
     return true;
 }
@@ -1007,14 +1031,19 @@ void MainWindow::sendMissing(PeerConnection *c, const QJsonArray &theirIds)
     QSet<QString> theirs;
     for (const QJsonValue &v : theirIds)
         theirs.insert(v.toString());
-    // Un nouveau membre ne reçoit pas ce qui s'est dit avant son arrivée
-    const qint64 cutoff = qMax(syncCutoff(), firstSeen(c->peerOnion()) - NewMemberMarginMs);
-
     QList<QJsonObject> missing;
     for (auto it = m_store.cbegin(); it != m_store.cend(); ++it)
-        if (!theirs.contains(it.key()) && qint64(it.value().value("ts").toDouble()) >= cutoff)
+        if (!theirs.contains(it.key()))
             missing.append(it.value());
-    std::sort(missing.begin(), missing.end(), [](const QJsonObject &a, const QJsonObject &b) {
+    sendBatches(c, missing);
+}
+
+void MainWindow::sendBatches(PeerConnection *c, QList<QJsonObject> messages)
+{
+    // Un nouveau membre ne reçoit pas ce qui s'est dit avant son arrivée
+    const qint64 cutoff = qMax(syncCutoff(), firstSeen(c->peerOnion()) - NewMemberMarginMs);
+    messages.removeIf([cutoff](const QJsonObject &m) { return qint64(m.value("ts").toDouble()) < cutoff; });
+    std::sort(messages.begin(), messages.end(), [](const QJsonObject &a, const QJsonObject &b) {
         return a.value("ts").toDouble() < b.value("ts").toDouble();
     });
 
@@ -1026,7 +1055,7 @@ void MainWindow::sendMissing(PeerConnection *c, const QJsonArray &theirIds)
         batch = QJsonArray();
         bytes = 0;
     };
-    for (QJsonObject m : missing) {
+    for (QJsonObject m : std::as_const(messages)) {
         m.remove("mine");
         const qsizetype size = QJsonDocument(m).toJson(QJsonDocument::Compact).size();
         if (bytes + size > MaxSyncBatchBytes)
@@ -1037,8 +1066,9 @@ void MainWindow::sendMissing(PeerConnection *c, const QJsonArray &theirIds)
     flush();
 }
 
-void MainWindow::receiveSync(const QJsonArray &messages)
+void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
 {
+    QList<QJsonObject> accepted;
     const qint64 cutoff = syncCutoff();
     int received = 0;
     QString lastAuthor, lastText;
@@ -1054,12 +1084,18 @@ void MainWindow::receiveSync(const QJsonArray &messages)
             continue;
         }
         appendMessage(m, mine, ChatEntry::Verified);
+        accepted.append(m);
         if (!mine) {
             ++received;
             lastAuthor = m.value("n").toString();
             lastText = m.value("x").toString();
         }
     }
+    // Relais aux autres membres connectés, qui ont pu manquer ces messages eux aussi
+    if (!accepted.isEmpty())
+        for (PeerConnection *p : std::as_const(m_active))
+            if (p != from)
+                sendBatches(p, accepted);
     if (received == 0)
         return;
     if (!isVisible() || !isActiveWindow()) {
@@ -1100,7 +1136,7 @@ void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
     } else if (type == "inv") {
         sendMissing(c, o.value("ids").toArray());
     } else if (type == "sync") {
-        receiveSync(o.value("m").toArray());
+        receiveSync(c, o.value("m").toArray());
     } else if (type == "msg") {
         const QString id = o.value("id").toString();
         if (id.isEmpty() || m_seenIds.contains(id) || m_store.contains(id))

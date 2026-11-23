@@ -79,7 +79,8 @@ private:
     // messages récents et reçoit en retour ceux qui lui manquent (signés par leur auteur).
     QJsonObject inventoryMessage() const;
     void sendMissing(PeerConnection *c, const QJsonArray &theirIds);
-    void receiveSync(const QJsonArray &messages);
+    void sendBatches(PeerConnection *c, QList<QJsonObject> messages); // filtrés pour ce membre
+    void receiveSync(PeerConnection *from, const QJsonArray &messages);
     qint64 syncCutoff() const;                    // rien d'antérieur n'est échangé
     qint64 firstSeen(const QString &onion) const; // date de première rencontre d'un membre
     QString memberNick(const QString &onion) const;
@@ -114,6 +115,7 @@ private:
     QSet<QString> m_identityWarned;              // avertissements d'identité déjà affichés
     QHash<QString, QJsonObject> m_store;         // historique signé : id -> message
     QTimer m_retryTimer;
+    QTimer m_syncTimer; // inventaire de contrôle périodique
     int m_unread = 0;
 
     ChatView *m_chat = nullptr;

@@ -25,8 +25,23 @@ l'a créé : B et C peuvent discuter même si A est hors ligne.
 Les messages sont aussi relayés par les membres (avec anti-doublon), ce qui couvre le cas d'un lien direct
 pas encore établi.
 
-Il n'y a pas de messages hors ligne : seuls les membres en ligne au moment de l'envoi reçoivent le message.
-Chacun réessaie de joindre les membres absents toutes les 30 s.
+### Synchronisation de l'historique
+
+À chaque connexion entre deux membres, chacun envoie la liste des identifiants de ses messages des
+30 derniers jours, et reçoit en retour ceux qui lui manquent, avec la signature de leur auteur. Chaque
+message rattrapé est vérifié, puis inséré à sa place chronologique.
+
+- Un poste éteint récupère ce qui s'est dit pendant son absence dès qu'il croise n'importe quel membre.
+- On peut écrire même si personne n'est en ligne : le message est transmis à la prochaine connexion,
+  directement ou par un autre membre qui l'a déjà reçu.
+- Un membre ne peut pas inventer ni modifier de messages, puisque les signatures sont vérifiées. Il peut
+  seulement ne pas transmettre ce qu'il a.
+- Un nouveau membre ne reçoit pas les messages antérieurs à son arrivée, sauf si l'invitant coche
+  « Partager l'historique des 30 derniers jours » dans la fenêtre d'invitation (pratique pour ajouter un de
+  ses propres appareils). L'autorisation vaut pour les personnes qui rejoignent dans les 7 jours.
+- *Vider la conversation* est purement local : l'historique de ce poste est effacé et ne sera pas
+  ré-téléchargé. Les autres gardent le leur, et on ne peut pas effacer un message chez eux.
+- Les messages rattrapés donnent lieu à une seule notification (« n messages reçus pendant votre absence »).
 
 ### Interface
 
