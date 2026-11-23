@@ -13,6 +13,8 @@ class QLineEdit;
 class QPushButton;
 class QTcpServer;
 class QStackedWidget;
+class QSystemTrayIcon;
+class Notifier;
 class QToolButton;
 class ChatView;
 class TorService;
@@ -27,6 +29,7 @@ public:
 
 protected:
     void changeEvent(QEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
 
 private:
     struct Member
@@ -42,6 +45,9 @@ private:
     void appendSystem(const QString &text);
     void loadHistory();
     void clearConversation();
+    void setupTray();
+    void showAndRaise();
+    void updateUnread();
 
     // Tor
     void startTor();
@@ -95,4 +101,8 @@ private:
     QToolButton *m_sendButton = nullptr;
     QLabel *m_title = nullptr, *m_subtitle = nullptr;
     QString m_historyPath;
+
+    QSystemTrayIcon *m_tray = nullptr; // Linux / Windows
+    Notifier *m_notifier = nullptr;
+    bool m_hideOnClose = false;        // la croix masque la fenêtre au lieu de quitter
 };

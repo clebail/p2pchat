@@ -34,6 +34,16 @@ Chacun réessaie de joindre les membres absents toutes les 30 s.
 - Clic droit sur un message → copier
 - Menu ⋮ : inviter, rejoindre, changer de pseudo, **vider la conversation** (efface l'historique local), quitter le groupe
 - Survoler la ligne d'état sous le titre affiche l'état de chaque membre
+- **Notifications natives** avec l'icône de l'application quand un message arrive et que la fenêtre n'est pas
+  au premier plan. Un clic sur la notification rouvre la fenêtre.
+- **Linux / Windows** : icône dans la zone de notification, avec une pastille rouge s'il y a des messages non lus.
+  La croix masque la fenêtre dans la zone de notification. Pour quitter : clic droit sur l'icône → *Quitter*,
+  ou ⋮ → *Quitter P2P Chat*. Si le bureau n'a pas de zone de notification (GNOME sans l'extension
+  AppIndicator), la croix quitte normalement.
+- **macOS** : la croix masque la fenêtre sans quitter le programme. Un clic sur l'icône du Dock la rouvre,
+  et Cmd+Q quitte. Le nombre de messages non lus s'affiche en pastille sur l'icône du Dock. Au premier lancement,
+  macOS demande l'autorisation d'afficher des notifications. Les notifications ne fonctionnent que depuis le
+  bundle `P2PChat.app`, pas en lançant le binaire directement.
 
 ## Installer tor
 
@@ -58,11 +68,12 @@ Dépendances : Qt 6 (Widgets, Network) et OpenSSL 3 (libcrypto).
 sudo apt install qt6-base-dev libssl-dev tor
 mkdir build && cd build && qmake6 ../p2pchat.pro && make -j
 ./p2pchat
+make install   # facultatif : installe dans ~/.local (menu des applications + icône des notifications)
 ```
 
 **macOS**
 ```bash
-brew install qt openssl@3 tor
+brew install qt openssl@3 tor     # macOS 11 minimum
 mkdir build && cd build && qmake ../p2pchat.pro && make -j
 macdeployqt P2PChat.app           # rend l'application autonome
 open P2PChat.app
@@ -96,6 +107,7 @@ windeployqt release/p2pchat.exe   # + copier libcrypto-3-x64.dll et le dossier t
 | `crypto.*` | X25519, HKDF, ChaCha20-Poly1305 (OpenSSL) |
 | `invitation.*` | Encodage / décodage du code d'invitation |
 | `mainwindow.*` | Fenêtre, groupe (membres, maillage, relais), reconnexion automatique, historique |
+| `notifier.*`, `notifier_mac.mm` | Notifications natives (D-Bus sous Linux, UserNotifications sous macOS) |
 | `chatview.*` | Liste de messages en bulles (modèle + délégué de dessin) |
 | `icons/` | Icône : `p2pchat.svg` (source), `.icns` (macOS), `.ico` (Windows), `.png` |
 

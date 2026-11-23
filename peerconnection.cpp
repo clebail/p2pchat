@@ -25,10 +25,11 @@ PeerConnection::PeerConnection(QTcpSocket *socket, bool outgoing, const QByteArr
             fail(tr("le correspondant s'est déconnecté"));
     });
 
-    // Via Tor, établir le circuit vers un service onion peut prendre du temps
+    // Via Tor, le premier circuit vers un service onion prend souvent 5 à 20 s, mais une requête
+    // peut aussi rester bloquée dans Tor : mieux vaut abandonner et réessayer qu'attendre.
     m_handshakeTimer.setSingleShot(true);
     connect(&m_handshakeTimer, &QTimer::timeout, this, [this] { fail(tr("délai de connexion dépassé")); });
-    m_handshakeTimer.start(120000);
+    m_handshakeTimer.start(45000);
 
     m_pingTimer.setInterval(30000);
     connect(&m_pingTimer, &QTimer::timeout, this, [this] { sendEncrypted({{"t", "ping"}}); });
@@ -47,7 +48,7 @@ void PeerConnection::onConnected()
         return;
     qInfo().noquote() << "[peer]" << (m_outgoing ? "sortante" : "entrante") << "connectée, envoi de la clé";
     m_state = WaitPeerKey;
-    m_handshakeTimer.start(60000);
+    m_handshakeTimer.start(30000);
     sendFrame(Magic + m_kx.publicKey());
 }
 

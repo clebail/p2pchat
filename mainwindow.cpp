@@ -3,11 +3,14 @@
 #include "chatview.h"
 #include "crypto.h"
 #include "invitation.h"
+#include "notifier.h"
 #include "peerconnection.h"
 #include "torservice.h"
 
 #include <QApplication>
 #include <QClipboard>
+#include <QCloseEvent>
+#include <QSystemTrayIcon>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -89,8 +92,98 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     connect(&m_retryTimer, &QTimer::timeout, this, &MainWindow::connectToMembers);
 
     buildUi();
+    setupTray();
+    m_notifier = new Notifier(this);
+    m_notifier->setTray(m_tray);
+    connect(m_notifier, &Notifier::activated, this, &MainWindow::showAndRaise);
+#ifdef Q_OS_MACOS
+    // macOS : la croix masque la fenêtre, un clic sur l'icône du Dock la rouvre
+    m_hideOnClose = true;
+    connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
+        if (state == Qt::ApplicationActive && !isVisible())
+            showAndRaise();
+    });
+#endif
+    if (m_hideOnClose)
+        QApplication::setQuitOnLastWindowClosed(false);
+
     loadHistory();
     startTor();
+}
+
+// ---------------------------------------------------------------- Système (zone de notification, fermeture)
+
+void MainWindow::setupTray()
+{
+#ifndef Q_OS_MACOS
+    if (!QSystemTrayIcon::isSystemTrayAvailable())
+        return; // ex. GNOME sans l'extension AppIndicator : la croix quitte normalement
+    m_tray = new QSystemTrayIcon(QApplication::windowIcon(), this);
+    m_tray->setToolTip(tr("P2P Chat"));
+    auto *menu = new QMenu(this);
+    menu->addAction(tr("Ouvrir P2P Chat"), this, &MainWindow::showAndRaise);
+    menu->addSeparator();
+    menu->addAction(tr("Quitter"), qApp, &QCoreApplication::quit);
+    m_tray->setContextMenu(menu);
+    connect(m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
+        if (reason != QSystemTrayIcon::Trigger && reason != QSystemTrayIcon::DoubleClick)
+            return;
+        if (isVisible() && isActiveWindow())
+            hide();
+        else
+            showAndRaise();
+    });
+    m_tray->show();
+    m_hideOnClose = true;
+#endif
+}
+
+void MainWindow::showAndRaise()
+{
+    show();
+    setWindowState((windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
+    raise();
+    activateWindow();
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    // Clic sur la croix (événement « spontané ») : on masque seulement.
+    // Quitter (menu, Cmd+Q, zone de notification) envoie un événement non spontané.
+    if (m_hideOnClose && event->spontaneous()) {
+        event->ignore();
+        hide();
+        if (m_tray && !m_settings.value("trayHintShown").toBool()) {
+            m_settings.setValue("trayHintShown", true);
+            m_notifier->notify(tr("P2P Chat"), tr("P2P Chat reste ouvert dans la zone de notification "
+                                                  "pour recevoir les messages."));
+        }
+        return;
+    }
+    event->accept();
+}
+
+void MainWindow::updateUnread()
+{
+    setWindowTitle(m_unread ? tr("(%1) P2P Chat").arg(m_unread) : tr("P2P Chat"));
+    m_notifier->setBadge(m_unread);
+    if (!m_tray)
+        return;
+    if (m_unread == 0) {
+        m_tray->setIcon(QApplication::windowIcon());
+        m_tray->setToolTip(tr("P2P Chat"));
+        return;
+    }
+    // Icône avec une pastille rouge
+    QPixmap pm = QApplication::windowIcon().pixmap(64, 64);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(Qt::white, 4));
+    p.setBrush(QColor("#d93025"));
+    p.drawEllipse(QPointF(48, 16), 14, 14);
+    p.end();
+    m_tray->setIcon(QIcon(pm));
+    m_tray->setToolTip(tr("P2P Chat — %n message(s) non lu(s)", nullptr, m_unread));
 }
 
 // ---------------------------------------------------------------- Interface
@@ -210,6 +303,9 @@ void MainWindow::buildUi()
     menu->addAction(tr("Vider la conversation"), this, &MainWindow::clearConversation);
     menu->addSeparator();
     menu->addAction(tr("Quitter le groupe…"), this, &MainWindow::resetAll);
+#ifndef Q_OS_MACOS // sous macOS : menu de l'application / Cmd+Q
+    menu->addAction(tr("Quitter P2P Chat"), qApp, &QCoreApplication::quit);
+#endif
     menuButton->setMenu(menu);
     top->addWidget(menuButton, 0, Qt::AlignTop);
     layout->addWidget(topBar);
@@ -390,9 +486,9 @@ void MainWindow::clearConversation()
 
 void MainWindow::changeEvent(QEvent *event)
 {
-    if (event->type() == QEvent::ActivationChange && isActiveWindow()) {
+    if (event->type() == QEvent::ActivationChange && isActiveWindow() && m_unread) {
         m_unread = 0;
-        setWindowTitle(tr("P2P Chat"));
+        updateUnread();
     }
     QMainWindow::changeEvent(event);
 }
@@ -418,7 +514,8 @@ void MainWindow::startTor()
             m_inviteWanted = false;
             showInvitation();
         }
-        connectToMembers();
+        // Juste après le démarrage, Tor peut encore compléter ses informations d'annuaire
+        QTimer::singleShot(5000, this, &MainWindow::connectToMembers);
         m_retryTimer.start();
         updateStatus();
     });
@@ -647,6 +744,7 @@ void MainWindow::watch(PeerConnection *c)
         if (!attemptKey.isEmpty()) {
             m_attempts.remove(attemptKey);
             m_lastError.insert(attemptKey, reason);
+            QTimer::singleShot(10000, this, &MainWindow::connectToMembers);
         }
         const QString activeKey = m_active.key(c);
         if (!activeKey.isEmpty()) {
@@ -734,10 +832,12 @@ void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
         // Relais : au cas où un membre ne serait pas encore relié directement à l'auteur
         broadcast(o, c);
 
-        if (!isActiveWindow()) {
+        if (!isVisible() || !isActiveWindow()) {
             ++m_unread;
-            setWindowTitle(tr("(%1) P2P Chat").arg(m_unread));
-            QApplication::alert(this);
+            updateUnread();
+            m_notifier->notify(author.isEmpty() ? c->peerNickname() : author, o.value("x").toString());
+            if (isVisible())
+                QApplication::alert(this);
         }
     }
 }

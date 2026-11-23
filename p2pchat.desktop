@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=P2P Chat
+Comment=Messagerie pair-à-pair chiffrée
+Exec=p2pchat
+Icon=p2pchat
+Terminal=false
+Categories=Network;Chat;InstantMessaging;
+StartupWMClass=p2pchat

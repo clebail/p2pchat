@@ -4,9 +4,32 @@ TARGET = p2pchat
 macx: TARGET = P2PChat
 
 SOURCES += main.cpp mainwindow.cpp chatview.cpp peerconnection.cpp crypto.cpp invitation.cpp torservice.cpp
-HEADERS += mainwindow.h chatview.h peerconnection.h crypto.h invitation.h torservice.h
+HEADERS += mainwindow.h chatview.h notifier.h peerconnection.h crypto.h invitation.h torservice.h
 
 RESOURCES += resources.qrc
+
+# Notifications natives
+macx {
+    OBJECTIVE_SOURCES += notifier_mac.mm
+    QMAKE_OBJECTIVE_CFLAGS += -fobjc-arc
+    LIBS += -framework AppKit -framework UserNotifications
+    QMAKE_MACOSX_DEPLOYMENT_TARGET = 11.0
+    QMAKE_TARGET_BUNDLE_PREFIX = org.p2pchat   # identifiant : org.p2pchat.P2PChat
+} else {
+    SOURCES += notifier.cpp
+    unix: QT += dbus
+}
+
+# Linux : « make install » => menu des applications + icône (notifications, barre des tâches)
+unix:!macx {
+    isEmpty(PREFIX): PREFIX = $$(HOME)/.local
+    target.path = $$PREFIX/bin
+    desktop.path = $$PREFIX/share/applications
+    desktop.files = p2pchat.desktop
+    appicon.path = $$PREFIX/share/icons/hicolor/256x256/apps
+    appicon.files = icons/p2pchat.png
+    INSTALLS += target desktop appicon
+}
 
 # Icône de l'application
 macx: ICON = icons/p2pchat.icns

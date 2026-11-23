@@ -11,6 +11,7 @@ int main(int argc, char *argv[])
     QApplication::setOrganizationName("p2pchat");
     QApplication::setApplicationName("p2pchat");
     QApplication::setApplicationDisplayName("P2P Chat");
+    QGuiApplication::setDesktopFileName("p2pchat"); // Linux : associe la fenêtre au .desktop (icône)
     QApplication::setWindowIcon(QIcon(":/icons/p2pchat.png"));
     QSettings::setDefaultFormat(QSettings::IniFormat); // même format sur Linux, macOS et Windows
 
