@@ -1,6 +1,9 @@
 #pragma once
 #include <QDateTime>
+#include <QHash>
+#include <QJsonObject>
 #include <QMainWindow>
+#include <QSet>
 #include <QSettings>
 #include <QTimer>
 
@@ -9,9 +12,13 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QTcpServer;
-class QTextBrowser;
+class QStackedWidget;
+class QToolButton;
+class ChatView;
 class TorService;
 
+// Conversation de groupe en maillage complet : chaque membre est connecté
+// directement à chacun des autres, via son adresse onion.
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -22,6 +29,11 @@ protected:
     void changeEvent(QEvent *event) override;
 
 private:
+    struct Member
+    {
+        QString onion, nick;
+    };
+
     // Interface
     void buildUi();
     void updateStatus();
@@ -29,6 +41,7 @@ private:
                        bool save = true);
     void appendSystem(const QString &text);
     void loadHistory();
+    void clearConversation();
 
     // Tor
     void startTor();
@@ -39,11 +52,21 @@ private:
     void showInvitation();
     void join();
 
+    // Membres du groupe
+    QList<Member> members() const;
+    void saveMembers(const QList<Member> &list);
+    bool mergeMember(const QString &onion, const QString &nick); // true si nouveau membre
+    QJsonObject membersMessage() const;
+    QString memberNick(const QString &onion) const;
+
     // Connexions
     void onNewConnection();
-    void connectToPeer();
+    void connectToMembers();
+    void dial(const QString &onion);
     void watch(PeerConnection *c);
     void setActive(PeerConnection *c);
+    void onReceived(PeerConnection *c, const QJsonObject &obj);
+    void broadcast(const QJsonObject &obj, PeerConnection *except = nullptr);
     void closeAll();
     void sendCurrent();
 
@@ -51,8 +74,6 @@ private:
     void resetAll();
     QString nickname() const;
     QByteArray secret() const;
-    QString peerOnion() const;
-    QString peerNick() const;
 
     QSettings m_settings;
     QTcpServer *m_server = nullptr; // 127.0.0.1 uniquement, joint via le service onion
@@ -60,15 +81,18 @@ private:
     QString m_myOnion, m_torStatus, m_torError;
     bool m_inviteWanted = false;
 
-    PeerConnection *m_active = nullptr;
-    PeerConnection *m_attempt = nullptr;
-    QString m_lastError;
+    QHash<QString, PeerConnection *> m_active;   // onion -> connexion établie
+    QHash<QString, PeerConnection *> m_attempts; // onion -> connexion sortante en cours
+    QSet<PeerConnection *> m_pending;            // entrantes avant le hello
+    QHash<QString, QString> m_lastError;         // onion -> dernière erreur
+    QSet<QString> m_seenIds;                     // anti-doublon des messages relayés
     QTimer m_retryTimer;
     int m_unread = 0;
 
-    QTextBrowser *m_history = nullptr;
+    ChatView *m_chat = nullptr;
+    QStackedWidget *m_pages = nullptr; // accueil (pas de groupe) / conversation
     QLineEdit *m_input = nullptr;
-    QPushButton *m_sendButton = nullptr;
-    QLabel *m_status = nullptr;
+    QToolButton *m_sendButton = nullptr;
+    QLabel *m_title = nullptr, *m_subtitle = nullptr;
     QString m_historyPath;
 };

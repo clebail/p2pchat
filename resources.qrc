@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/">
+        <file>icons/p2pchat.png</file>
+    </qresource>
+</RCC>

@@ -1,5 +1,6 @@
 #include "peerconnection.h"
 
+#include <QDebug>
 #include <QJsonDocument>
 #include <QTcpSocket>
 #include <QtEndian>
@@ -44,6 +45,7 @@ void PeerConnection::onConnected()
 {
     if (m_state != Connecting)
         return;
+    qInfo().noquote() << "[peer]" << (m_outgoing ? "sortante" : "entrante") << "connectée, envoi de la clé";
     m_state = WaitPeerKey;
     m_handshakeTimer.start(60000);
     sendFrame(Magic + m_kx.publicKey());
@@ -78,8 +80,9 @@ void PeerConnection::handleFrame(const QByteArray &frame)
             fail(tr("échange de clés impossible"));
             return;
         }
+        qInfo().noquote() << "[peer] clé reçue, envoi du hello";
         m_state = WaitHello;
-        sendEncrypted({{"t", "hello"}, {"n", m_nick}, {"o", m_ownOnion}, {"v", 2}});
+        sendEncrypted({{"t", "hello"}, {"n", m_nick}, {"o", m_ownOnion}, {"v", 3}});
         return;
     }
 
@@ -101,16 +104,14 @@ void PeerConnection::handleFrame(const QByteArray &frame)
         if (m_peerNick.isEmpty())
             m_peerNick = tr("Correspondant");
         m_peerOnion = o.value("o").toString().left(70);
+        qInfo().noquote() << "[peer] prêt avec" << m_peerNick << m_peerOnion.left(8);
         m_state = Ready;
         m_handshakeTimer.stop();
         m_pingTimer.start();
         emit ready();
-    } else if (type == "msg") {
-        const qint64 ms = qint64(o.value("ts").toDouble());
-        const QDateTime ts = ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms) : QDateTime::currentDateTime();
-        emit messageReceived(o.value("x").toString(), ts);
+    } else if (type != "ping") {
+        emit received(o);
     }
-    // "ping" : rien à faire, le minuteur d'inactivité est déjà relancé
 }
 
 void PeerConnection::sendFrame(const QByteArray &payload)
@@ -127,11 +128,10 @@ void PeerConnection::sendEncrypted(const QJsonObject &obj)
     sendFrame(m_channel.encrypt(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
 }
 
-void PeerConnection::sendChat(const QString &text)
+void PeerConnection::send(const QJsonObject &obj)
 {
-    if (m_state != Ready)
-        return;
-    sendEncrypted({{"t", "msg"}, {"x", text}, {"ts", double(QDateTime::currentMSecsSinceEpoch())}});
+    if (m_state == Ready)
+        sendEncrypted(obj);
 }
 
 void PeerConnection::close()
@@ -143,6 +143,7 @@ void PeerConnection::fail(const QString &reason)
 {
     if (m_state == Closed)
         return;
+    qInfo().noquote() << "[peer] fermeture :" << reason << "(état" << m_state << ")";
     m_state = Closed;
     m_handshakeTimer.stop();
     m_pingTimer.stop();
