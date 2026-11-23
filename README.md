@@ -91,12 +91,28 @@ windeployqt release/p2pchat.exe   # + copier libcrypto-3-x64.dll et le dossier t
 
 ## Sécurité
 
-- Transport : service onion Tor, qui est déjà chiffré et authentifié par l'adresse onion.
-- Par-dessus, à chaque connexion : échange de clés **X25519** éphémère, puis **HKDF-SHA256** salé avec le
-  secret de l'invitation, puis **ChaCha20-Poly1305**, avec des compteurs qui empêchent rejeu et réordonnancement.
-  Sans le secret, une connexion est rejetée dès le premier message.
-- Le serveur local n'écoute que sur `127.0.0.1` : il n'est joignable que via le service onion.
-- Gardez le code d'invitation pour vous, et utilisez **Réinitialiser** pour oublier le correspondant.
+- **Transport** : service onion Tor. Le trafic est chiffré de bout en bout, aucun relais ne connaît à la
+  fois l'expéditeur et le destinataire, et les membres ne voient pas l'adresse IP des autres.
+- **Canal** : à chaque connexion, échange de clés **X25519** éphémère, puis **HKDF-SHA256** salé avec le
+  secret du groupe, puis **ChaCha20-Poly1305**, avec des compteurs qui empêchent rejeu et réordonnancement.
+  Sans le secret, la connexion est refusée dès le premier message. Le trafic enregistré reste illisible même
+  si le secret fuit plus tard.
+- **Identité** : chaque poste a une clé **Ed25519**. Le code d'invitation contient celle de l'invitant, et
+  les clés des autres membres sont mémorisées à la première rencontre (trousseau conservé même après avoir
+  quitté le groupe). Chaque poste signe sa poignée de main (ses deux clés éphémères et son adresse onion) :
+  quelqu'un qui possède le code ne peut pas se faire passer pour un autre membre.
+- **Messages** : l'auteur signe chaque message (identifiant, adresse, pseudo, texte, heure). Un message
+  modifié en route ou attribué à quelqu'un d'autre est rejeté.
+- **Historique** : chaque ligne est enregistrée avec la signature de son auteur et revérifiée au chargement.
+  « ⚠ signature invalide » signale une ligne modifiée ou inventée, et « ⚠ non signé » une ligne de l'ancien
+  format. La suppression d'une ligne n'est pas détectée. L'historique n'est **pas chiffré** : il est protégé
+  par les droits du fichier (600) et par le chiffrement du disque (FileVault / LUKS) s'il est activé.
+- **Fichiers sensibles** : la configuration (secret du groupe, clé d'identité, trousseau) et l'historique
+  sont lisibles par le seul utilisateur. Le serveur local n'écoute que sur `127.0.0.1`.
+- **Limites** :
+  - le code d'invitation permet d'entrer dans le groupe : envoyez-le par un canal de confiance ;
+  - on ne peut pas exclure un seul membre : il faut que chacun quitte le groupe et en recrée un ;
+  - les notifications affichent le texte des messages.
 
 ## Fichiers
 
