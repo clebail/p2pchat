@@ -41,6 +41,8 @@
 #include <QUrlQuery>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace {
 
 bool isValidOnion(const QString &s)
@@ -343,6 +345,7 @@ void MainWindow::buildUi()
     auto *menu = new QMenu(menuButton);
     menu->addAction(tr("Inviter quelqu'un…"), this, &MainWindow::invite);
     menu->addAction(tr("Rejoindre avec un code…"), this, &MainWindow::join);
+    menu->addAction(tr("Se reconnecter maintenant"), this, &MainWindow::reconnectNow);
     menu->addSeparator();
     menu->addAction(tr("Changer de pseudo…"), this, &MainWindow::changeNickname);
     menu->addAction(tr("Vider la conversation"), this, &MainWindow::clearConversation);
@@ -904,6 +907,20 @@ void MainWindow::connectToMembers()
     updateStatus();
 }
 
+void MainWindow::reconnectNow()
+{
+    if (!m_torError.isEmpty()) { // Tor en panne : on le relance, il reconnectera une fois prêt
+        startTor();
+        return;
+    }
+    // Les tentatives en cours peuvent rester bloquées jusqu'au délai de poignée de main (45 s)
+    const QList<PeerConnection *> stuck = m_attempts.values();
+    for (PeerConnection *c : stuck)
+        c->close(); // retire la tentative de m_attempts (signal closed synchrone)
+    m_retryTimer.start(); // repart pour un cycle complet
+    connectToMembers();
+}
+
 void MainWindow::dial(const QString &onion)
 {
     auto *s = new QTcpSocket;
@@ -1042,7 +1059,9 @@ void MainWindow::sendBatches(PeerConnection *c, QList<QJsonObject> messages)
 {
     // Un nouveau membre ne reçoit pas ce qui s'est dit avant son arrivée
     const qint64 cutoff = qMax(syncCutoff(), firstSeen(c->peerOnion()) - NewMemberMarginMs);
-    messages.removeIf([cutoff](const QJsonObject &m) { return qint64(m.value("ts").toDouble()) < cutoff; });
+    messages.erase(std::remove_if(messages.begin(), messages.end(), [cutoff](const QJsonObject &m) {
+        return qint64(m.value("ts").toDouble()) < cutoff;
+    }), messages.end());
     std::sort(messages.begin(), messages.end(), [](const QJsonObject &a, const QJsonObject &b) {
         return a.value("ts").toDouble() < b.value("ts").toDouble();
     });

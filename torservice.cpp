@@ -43,7 +43,7 @@ TorService::TorService(const QString &dataDir, quint16 localPort, QObject *paren
         if (e == QProcess::FailedToStart)
             fail(tr("impossible de lancer tor (%1)").arg(m_process.program()));
     });
-    connect(&m_process, &QProcess::finished, this, [this] {
+    connect(&m_process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, [this] {
         fail(m_lastProblem.isEmpty() ? tr("tor s'est arrêté") : tr("tor s'est arrêté : %1").arg(m_lastProblem));
     });
 }

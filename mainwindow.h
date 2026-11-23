@@ -88,6 +88,7 @@ private:
     // Connexions
     void onNewConnection();
     void connectToMembers();
+    void reconnectNow(); // abandonne les tentatives en cours et relance tout de suite
     void dial(const QString &onion);
     void watch(PeerConnection *c);
     void setActive(PeerConnection *c);
