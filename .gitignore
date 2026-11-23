@@ -1,0 +1,41 @@
+# Dossiers de compilation
+build/
+build-*/
+release/
+debug/
+
+# qmake / make
+Makefile*
+.qmake.stash
+*.o
+*.obj
+moc_*.cpp
+moc_*.h
+moc_predefs.h
+qrc_*.cpp
+ui_*.h
+object_script.*
+
+# Exécutables et livrables
+p2pchat
+p2pchat.exe
+P2PChat.app/
+*.dmg
+*.zip
+
+# Binaires tor éventuellement copiés pour la distribution
+tor/
+
+# Qt Creator / IDE
+*.pro.user
+*.pro.user.*
+*.qbs.user
+CMakeLists.txt.user
+.qtc_clangd/
+.vscode/
+.idea/
+
+# Système
+.DS_Store
+Thumbs.db
+*~
