@@ -20,12 +20,12 @@ macx {
     unix: QT += dbus
 }
 
-# Console partagée (Linux uniquement pour l'instant) : pseudo-terminal + fenêtre de terminal
-linux {
+# Console partagée (Linux et macOS) : pseudo-terminal + fenêtre de terminal
+unix {
     DEFINES += P2P_TERMINAL
     SOURCES += terminalsession.cpp terminalclient.cpp
     HEADERS += terminalsession.h terminalclient.h
-    LIBS += -lutil   # forkpty (glibc < 2.34)
+    linux: LIBS += -lutil   # forkpty (glibc < 2.34) ; macOS : dans la libc
 }
 
 # Linux : « make install » => menu des applications + icône (notifications, barre des tâches)

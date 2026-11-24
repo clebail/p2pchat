@@ -8,7 +8,7 @@ class QLocalServer;
 class QLocalSocket;
 class QSocketNotifier;
 
-// Console partagée entre deux membres (Linux uniquement pour l'instant).
+// Console partagée entre deux membres (Linux et macOS).
 //
 // Hôte (A) : un shell tourne dans un pseudo-terminal chez A. Sa sortie s'affiche dans une
 // fenêtre de terminal locale et part vers l'invité ; les frappes des deux côtés arrivent dans

@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <poll.h>
+#include <sys/select.h>
 #include <string>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -122,18 +122,22 @@ int runTerminalClient(const char *socketPath, const char *title)
                     break;
             }
         }
-        pollfd fds[2] = {{STDIN_FILENO, POLLIN, 0}, {fd, POLLIN, 0}};
-        if (::poll(fds, 2, -1) < 0) {
+        // select() plutôt que poll() : sous macOS, poll() gère mal les terminaux
+        fd_set readable;
+        FD_ZERO(&readable);
+        FD_SET(STDIN_FILENO, &readable);
+        FD_SET(fd, &readable);
+        if (::select(fd + 1, &readable, nullptr, nullptr, nullptr) < 0) {
             if (errno == EINTR)
                 continue;
             break;
         }
-        if (fds[0].revents & (POLLIN | POLLHUP | POLLERR)) {
+        if (FD_ISSET(STDIN_FILENO, &readable)) {
             const ssize_t n = ::read(STDIN_FILENO, buf, sizeof(buf));
             if (n <= 0 || !sendFrame(fd, 'D', std::string(buf, size_t(n))))
                 break;
         }
-        if (fds[1].revents & (POLLIN | POLLHUP | POLLERR)) {
+        if (FD_ISSET(fd, &readable)) {
             const ssize_t n = ::read(fd, buf, sizeof(buf));
             if (n <= 0)
                 break;

@@ -101,7 +101,7 @@ private:
     void closeAll();
     void sendCurrent();
 
-    // Console partagée (Linux) : un membre ouvre sa console à un autre, cf. terminalsession.h
+    // Console partagée (Linux, macOS) : un membre ouvre sa console à un autre, cf. terminalsession.h
     void shareTerminal();
     void stopTerminal();
     void onTerminalMessage(PeerConnection *c, const QJsonObject &obj);

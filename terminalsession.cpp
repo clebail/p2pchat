@@ -3,7 +3,9 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QLocale>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QProcess>
@@ -16,11 +18,19 @@
 #include <csignal>
 #include <fcntl.h>
 #include <memory>
-#include <pty.h>
+#include <pwd.h>
 #include <sys/ioctl.h>
-#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
+#ifdef Q_OS_MACOS
+#  include <util.h> // forkpty
+#else
+#  include <pty.h>
+#  include <sys/syscall.h>
+#endif
+
+extern char **environ;
 
 namespace {
 
@@ -28,6 +38,54 @@ constexpr int ChunkBytes = 32 * 1024;         // affichage envoyé par message (
 constexpr qint64 BacklogHigh = 256 * 1024;    // au-delà, on cesse de lire le shell…
 constexpr qint64 BacklogLow = 64 * 1024;      // …jusqu'à ce que Tor ait écoulé le retard
 constexpr int MaxLocalPending = 1024 * 1024;  // affichage gardé en attendant la fenêtre locale
+
+#ifdef Q_OS_MACOS
+
+QString shellQuote(const QString &s)
+{
+    QString q = s;
+    q.replace('\'', QLatin1String("'\\''"));
+    return '\'' + q + '\'';
+}
+
+// Fenêtre de terminal qui exécute `P2PChat --terminal <socket> <titre>`.
+// Terminal.app n'accepte pas de commande en argument : on lui fait ouvrir un petit script
+// .command (pas d'AppleScript, qui demanderait l'autorisation de piloter Terminal).
+bool launchTerminal(const QStringList &clientArgs, QString *error)
+{
+    QString command = shellQuote(QCoreApplication::applicationFilePath());
+    for (const QString &a : clientArgs)
+        command += ' ' + shellQuote(a);
+    const QString path = QDir::tempPath() + QStringLiteral("/p2pchat-%1.command")
+                                                .arg(QString::fromLatin1(QUuid::createUuid().toRfc4122().toHex().left(16)));
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) {
+        if (error)
+            *error = QObject::tr("script de lancement impossible : %1").arg(f.errorString());
+        return false;
+    }
+    f.write("#!/bin/sh\nrm -f \"$0\"\nclear\nexec " + command.toUtf8() + "\n");
+    f.close();
+    f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+
+    // P2PCHAT_TERMINAL : nom d'application (« iTerm », « Ghostty »…) ; sinon iTerm2 s'il est installé
+    QStringList apps;
+    const QString forced = qEnvironmentVariable("P2PCHAT_TERMINAL");
+    if (!forced.isEmpty())
+        apps << forced;
+    if (QFileInfo::exists("/Applications/iTerm.app"))
+        apps << "iTerm";
+    apps << "Terminal";
+    for (const QString &app : std::as_const(apps))
+        if (QProcess::execute("/usr/bin/open", {"-a", app, path}) == 0)
+            return true;
+    QFile::remove(path);
+    if (error)
+        *error = QObject::tr("impossible d'ouvrir le Terminal");
+    return false;
+}
+
+#else
 
 // Fenêtre de terminal qui exécute `p2pchat --terminal <socket> <titre>`
 bool launchTerminal(const QStringList &clientArgs, QString *error)
@@ -64,6 +122,8 @@ bool launchTerminal(const QStringList &clientArgs, QString *error)
                              "la variable P2PCHAT_TERMINAL permet d'en indiquer un");
     return false;
 }
+
+#endif
 
 QByteArray frame(char type, const QByteArray &payload)
 {
@@ -111,12 +171,20 @@ TerminalSession::~TerminalSession()
 
 bool TerminalSession::start(QString *error)
 {
+#ifdef Q_OS_MACOS
+    QString dir = QDir::tempPath(); // $TMPDIR : propre à l'utilisateur
+#else
     QString dir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
     if (dir.isEmpty())
         dir = QDir::tempPath();
-    // Nom aléatoire propre à cette session (pas le sid, connu de l'autre membre)
-    const QString path = dir + QStringLiteral("/p2pchat-term-%1.sock")
-                                   .arg(QString::fromLatin1(QUuid::createUuid().toRfc4122().toHex()));
+#endif
+    // Nom aléatoire propre à cette session (pas le sid, connu de l'autre membre). Court :
+    // le chemin d'un socket Unix est limité (104 octets sous macOS, 108 sous Linux).
+    const QString name = QStringLiteral("p2pchat-%1.sock")
+                             .arg(QString::fromLatin1(QUuid::createUuid().toRfc4122().toHex().left(16)));
+    QString path = dir + '/' + name;
+    if (QFile::encodeName(path).size() >= 100)
+        path = QStringLiteral("/tmp/") + name;
     QLocalServer::removeServer(path);
     m_server = new QLocalServer(this);
     m_server->setSocketOptions(QLocalServer::UserAccessOption); // lisible par cet utilisateur seulement
@@ -225,8 +293,9 @@ void TerminalSession::updateTitle()
 {
     QString title;
     if (m_role == Host)
-        title = tr("Console partagée avec %1 — %2")
-                    .arg(m_peerNick, m_control ? tr("contrôle partagé") : tr("lecture seule pour lui/elle"));
+        title = (m_control ? tr("Console partagée avec %1 — %1 peut taper")
+                           : tr("Console partagée avec %1 — lecture seule pour %1"))
+                    .arg(m_peerNick);
     else
         title = tr("Console de %1 — %2").arg(m_peerNick, m_control ? tr("contrôle") : tr("lecture seule"));
     sendLocal('T', title.toUtf8());
@@ -318,12 +387,35 @@ void TerminalSession::end(const QString &reason, bool notifyPeer)
 
 bool TerminalSession::spawnShell(QString *error)
 {
+    // Shell de l'utilisateur ($SHELL, absent si l'application est lancée depuis le Finder)
     QByteArray shell = qgetenv("SHELL");
-    if (shell.isEmpty() || !QFileInfo(QString::fromLocal8Bit(shell)).isExecutable())
-        shell = "/bin/bash";
-    const QByteArray argv0 = QFileInfo(QString::fromLocal8Bit(shell)).fileName().toLocal8Bit();
-    const QByteArray home = QDir::homePath().toLocal8Bit();
-    const QByteArray peer = m_peerNick.toUtf8();
+    if (shell.isEmpty())
+        if (const passwd *pw = ::getpwuid(::getuid()); pw && pw->pw_shell)
+            shell = pw->pw_shell;
+    if (shell.isEmpty() || !QFileInfo(QFile::decodeName(shell)).isExecutable())
+        shell = QFileInfo::exists("/bin/bash") ? "/bin/bash" : "/bin/sh";
+    QByteArray argv0 = QFileInfo(QFile::decodeName(shell)).fileName().toLocal8Bit();
+#ifdef Q_OS_MACOS
+    // Comme Terminal.app : shell de connexion, sinon ~/.zprofile (PATH de Homebrew…) n'est pas lu
+    argv0.prepend('-');
+#endif
+    const QByteArray home = QFile::encodeName(QDir::homePath());
+
+    // Environnement préparé avant fork() : l'enfant d'un programme multithread ne doit plus allouer
+    QList<QByteArray> env;
+    for (char **e = environ; *e; ++e) {
+        const QByteArray kv(*e);
+        if (!kv.startsWith("TERM=") && !kv.startsWith("P2PCHAT_SHARED_WITH="))
+            env << kv;
+    }
+    env << "TERM=xterm-256color" << "P2PCHAT_SHARED_WITH=" + m_peerNick.toUtf8();
+    if (qEnvironmentVariableIsEmpty("LANG")) // application graphique macOS : souvent absent
+        env << "LANG=" + QLocale::system().name().toLatin1() + ".UTF-8";
+    std::vector<char *> envp;
+    for (QByteArray &kv : env)
+        envp.push_back(kv.data());
+    envp.push_back(nullptr);
+    char *argv[] = {argv0.data(), nullptr};
 
     winsize ws{};
     ws.ws_col = 80;
@@ -342,11 +434,9 @@ bool TerminalSession::spawnShell(QString *error)
 #endif
             for (int fd = 3; fd < 4096; ++fd)
                 ::close(fd);
-        ::setenv("TERM", "xterm-256color", 1);
-        ::setenv("P2PCHAT_SHARED_WITH", peer.constData(), 1);
         if (::chdir(home.constData()) != 0) {
         }
-        ::execl(shell.constData(), argv0.constData(), static_cast<char *>(nullptr));
+        ::execve(shell.constData(), argv, envp.data());
         ::_exit(127);
     }
 
