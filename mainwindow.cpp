@@ -6,11 +6,15 @@
 #include "notifier.h"
 #include "peerconnection.h"
 #include "torservice.h"
+#ifdef P2P_TERMINAL
+#  include "terminalsession.h"
+#endif
 
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QSystemTrayIcon>
 #include <QDesktopServices>
 #include <QDialog>
@@ -92,6 +96,8 @@ constexpr qint64 SyncWindowMs = 30LL * 24 * 3600 * 1000; // historique synchroni
 constexpr qint64 NewMemberMarginMs = 3600LL * 1000;      // marge d'horloge pour un nouveau membre
 constexpr int MaxInventory = 4000;                       // identifiants annoncés au plus
 constexpr int MaxSyncBatchBytes = 150 * 1024;            // taille d'un lot (trame max : 256 Ko)
+constexpr int PresenceGraceMs = 60 * 1000;               // délai avant d'annoncer une déconnexion
+constexpr int BackoffMinSec = 10, BackoffMaxSec = 5 * 60; // espacement des appels sans réponse
 
 } // namespace
 
@@ -127,8 +133,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     if (!m_server->listen(QHostAddress::LocalHost, 0))
         QMessageBox::critical(this, tr("P2P Chat"), tr("Écoute locale impossible : %1").arg(m_server->errorString()));
 
-    // Tentative périodique vers les membres hors ligne
-    m_retryTimer.setInterval(30000);
+    // Tentative périodique vers les membres hors ligne (chacun selon son délai, cf. m_backoff)
+    m_retryTimer.setInterval(10000);
     connect(&m_retryTimer, &QTimer::timeout, this, &MainWindow::connectToMembers);
     m_syncTimer.setInterval(5 * 60 * 1000);
     connect(&m_syncTimer, &QTimer::timeout, this, [this] {
@@ -346,6 +352,27 @@ void MainWindow::buildUi()
     menu->addAction(tr("Inviter quelqu'un…"), this, &MainWindow::invite);
     menu->addAction(tr("Rejoindre avec un code…"), this, &MainWindow::join);
     menu->addAction(tr("Se reconnecter maintenant"), this, &MainWindow::reconnectNow);
+#ifdef P2P_TERMINAL
+    menu->addSeparator();
+    m_termShareAct = menu->addAction(tr("Partager ma console…"), this, &MainWindow::shareTerminal);
+    m_termCtlAct = menu->addAction(QString(), this, [this] {
+        if (m_term && m_term->role() == TerminalSession::Host)
+            m_term->setControl(!m_term->control());
+    });
+    m_termStopAct = menu->addAction(QString(), this, &MainWindow::stopTerminal);
+    connect(menu, &QMenu::aboutToShow, this, [this] {
+        const bool host = m_term && m_term->role() == TerminalSession::Host;
+        m_termShareAct->setEnabled(!m_term && m_termOffer.sid.isEmpty() && !m_active.isEmpty());
+        m_termCtlAct->setVisible(host);
+        if (host)
+            m_termCtlAct->setText(m_term->control() ? tr("Retirer le contrôle à %1").arg(m_term->peerNick())
+                                                    : tr("Donner le contrôle à %1").arg(m_term->peerNick()));
+        m_termStopAct->setVisible(m_term || !m_termOffer.sid.isEmpty());
+        m_termStopAct->setText(!m_term ? tr("Annuler la proposition de console")
+                               : host  ? tr("Arrêter le partage de console")
+                                       : tr("Quitter la console de %1").arg(m_term->peerNick()));
+    });
+#endif
     menu->addSeparator();
     menu->addAction(tr("Changer de pseudo…"), this, &MainWindow::changeNickname);
     menu->addAction(tr("Vider la conversation"), this, &MainWindow::clearConversation);
@@ -476,6 +503,10 @@ void MainWindow::updateStatus()
                                                        : tr("hors ligne");
         if (!m_active.contains(m.onion) && m_lastError.contains(m.onion))
             state += " — " + m_lastError.value(m.onion);
+        if (!m_active.contains(m.onion) && !m_attempts.contains(m.onion)
+            && m_backoff.value(m.onion).nextTry > QDateTime::currentMSecsSinceEpoch())
+            state += tr(" (nouvel essai à %1)")
+                         .arg(QDateTime::fromMSecsSinceEpoch(m_backoff.value(m.onion).nextTry).toString("HH:mm:ss"));
         tips << QStringLiteral("%1 : %2").arg(m.nick, state).toHtmlEscaped();
     }
     m_subtitle->setToolTip(tips.isEmpty() ? QString() : "<p>" + tips.join("<br>") + "</p>");
@@ -618,6 +649,7 @@ void MainWindow::startTor()
             showInvitation();
         }
         // Juste après le démarrage, Tor peut encore compléter ses informations d'annuaire
+        m_backoff.clear();
         QTimer::singleShot(5000, this, &MainWindow::connectToMembers);
         m_retryTimer.start();
         updateStatus();
@@ -901,8 +933,9 @@ void MainWindow::connectToMembers()
 {
     if (m_myOnion.isEmpty() || secret().isEmpty())
         return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
     for (const Member &m : members())
-        if (!m_active.contains(m.onion) && !m_attempts.contains(m.onion))
+        if (!m_active.contains(m.onion) && !m_attempts.contains(m.onion) && m_backoff.value(m.onion).nextTry <= now)
             dial(m.onion);
     updateStatus();
 }
@@ -917,6 +950,7 @@ void MainWindow::reconnectNow()
     const QList<PeerConnection *> stuck = m_attempts.values();
     for (PeerConnection *c : stuck)
         c->close(); // retire la tentative de m_attempts (signal closed synchrone)
+    m_backoff.clear();
     m_retryTimer.start(); // repart pour un cycle complet
     connectToMembers();
 }
@@ -942,13 +976,29 @@ void MainWindow::watch(PeerConnection *c)
         if (!attemptKey.isEmpty()) {
             m_attempts.remove(attemptKey);
             m_lastError.insert(attemptKey, reason);
-            QTimer::singleShot(10000, this, &MainWindow::connectToMembers);
+            // Échec : prochain essai de plus en plus espacé (10 s, 20 s, 40 s… jusqu'à 5 min)
+            Backoff &b = m_backoff[attemptKey];
+            b.delay = b.delay == 0 ? BackoffMinSec : qMin(b.delay * 2, BackoffMaxSec);
+            b.nextTry = QDateTime::currentMSecsSinceEpoch() + qint64(b.delay) * 1000;
         }
         const QString activeKey = m_active.key(c);
         if (!activeKey.isEmpty()) {
             m_active.remove(activeKey);
             m_lastError.insert(activeKey, reason);
-            m_chat->addPresence(memberNick(activeKey), false, reason);
+            m_backoff.remove(activeKey); // il était là il y a un instant : on le rappelle tout de suite
+            terminalPeerLost(activeKey);
+            // La déconnexion n'est annoncée que si le membre ne revient pas dans le délai de grâce
+            const quint64 token = ++m_dropToken;
+            m_dropped.insert(activeKey, {reason, token});
+            QTimer::singleShot(PresenceGraceMs, this, [this, activeKey, token] {
+                const auto it = m_dropped.constFind(activeKey);
+                if (it == m_dropped.cend() || it->token != token)
+                    return;
+                const QString why = it->reason;
+                m_dropped.erase(it);
+                if (!m_active.contains(activeKey))
+                    m_chat->addPresence(memberNick(activeKey), false, why);
+            });
             QTimer::singleShot(5000, this, &MainWindow::connectToMembers);
         }
         updateStatus();
@@ -985,7 +1035,8 @@ void MainWindow::setActive(PeerConnection *c)
 
     // Deux membres peuvent s'appeler en même temps. Règle identique des deux côtés :
     // on garde la connexion ouverte par l'adresse onion la plus petite.
-    const bool wasOnline = m_active.contains(onion);
+    // Revenu pendant le délai de grâce : la coupure passe inaperçue
+    const bool wasOnline = m_active.contains(onion) || m_dropped.remove(onion) > 0;
     if (PeerConnection *old = m_active.value(onion); old && old != c) {
         auto initiator = [this](PeerConnection *p) { return p->isOutgoing() ? m_myOnion : p->peerOnion(); };
         const QString keep = initiator(old), other = initiator(c);
@@ -998,6 +1049,7 @@ void MainWindow::setActive(PeerConnection *c)
     }
     m_active.insert(onion, c);
     m_lastError.remove(onion);
+    m_backoff.remove(onion);
 
     const bool isNew = mergeMember(onion, c->peerNickname());
     if (isNew)
@@ -1130,6 +1182,10 @@ void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
 void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
 {
     const QString type = o.value("t").toString();
+    if (type.startsWith(QLatin1String("term-"))) {
+        onTerminalMessage(c, o);
+        return;
+    }
     if (type == "members") {
         bool changed = false;
         for (const QJsonValue &v : o.value("m").toArray()) {
@@ -1171,6 +1227,11 @@ void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
         }
         appendMessage(o, false, ChatEntry::Verified);
 
+        // L'auteur vient d'écrire (message relayé) : il est en ligne, inutile d'attendre pour le rappeler
+        const QString authorOnion = o.value("a").toString();
+        if (!m_active.contains(authorOnion) && m_backoff.remove(authorOnion) > 0)
+            connectToMembers();
+
         // Relais : au cas où un membre ne serait pas encore relié directement à l'auteur
         broadcast(o, c);
 
@@ -1197,6 +1258,11 @@ void MainWindow::closeAll()
     m_active.clear();
     m_attempts.clear();
     m_pending.clear();
+    m_dropped.clear();
+    m_backoff.clear();
+    for (const PeerConnection *c : std::as_const(all))
+        if (c->isReady())
+            terminalPeerLost(c->peerOnion());
     for (PeerConnection *c : all)
         c->close();
 }
@@ -1244,3 +1310,223 @@ void MainWindow::resetAll()
     appendSystem(tr("Vous avez quitté le groupe."));
     updateStatus();
 }
+
+// ---------------------------------------------------------------- Console partagée
+
+void MainWindow::sendTo(const QString &onion, const QJsonObject &obj)
+{
+    if (PeerConnection *c = m_active.value(onion))
+        c->send(obj);
+}
+
+#ifdef P2P_TERMINAL
+
+void MainWindow::shareTerminal()
+{
+    if (m_term || !m_termOffer.sid.isEmpty()) {
+        QMessageBox::information(this, tr("Partager ma console"), tr("Un partage de console est déjà en cours."));
+        return;
+    }
+    QList<Member> online;
+    for (const Member &m : members())
+        if (m_active.contains(m.onion))
+            online << m;
+    if (online.isEmpty()) {
+        QMessageBox::information(this, tr("Partager ma console"), tr("Personne n'est en ligne pour le moment."));
+        return;
+    }
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Partager ma console"));
+    auto *lay = new QVBoxLayout(&dlg);
+    lay->addWidget(new QLabel(tr("Ouvrir une console sur ce poste, partagée avec :"), &dlg));
+    auto *who = new QComboBox(&dlg);
+    for (const Member &m : std::as_const(online))
+        who->addItem(m.nick, m.onion);
+    lay->addWidget(who);
+    auto *control = new QCheckBox(tr("Autoriser cette personne à taper des commandes"), &dlg);
+    lay->addWidget(control);
+    auto *warn = new QLabel(tr("Elle verra tout ce qui s'affiche dans la console. Avec le contrôle, elle pourra "
+                               "exécuter des commandes avec vos droits sur ce poste. Vous pourrez retirer le "
+                               "contrôle ou arrêter à tout moment (menu ⋮, ou « exit » dans la console)."),
+                            &dlg);
+    warn->setWordWrap(true);
+    warn->setStyleSheet("color: #5f6368;");
+    lay->addWidget(warn);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    buttons->button(QDialogButtonBox::Ok)->setText(tr("Proposer"));
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    lay->addWidget(buttons);
+    if (dlg.exec() != QDialog::Accepted || m_term || !m_termOffer.sid.isEmpty())
+        return;
+
+    const QString onion = who->currentData().toString();
+    if (!m_active.contains(onion)) {
+        QMessageBox::information(this, tr("Partager ma console"), tr("%1 n'est plus en ligne.").arg(memberNick(onion)));
+        return;
+    }
+    const QString sid = QString::fromLatin1(Crypto::randomBytes(12).toHex());
+    m_termOffer = {sid, onion, control->isChecked()};
+    sendTo(onion, {{"t", "term-offer"}, {"sid", sid}, {"ctl", m_termOffer.control}});
+    appendSystem(tr("Proposition de partage de console envoyée à %1…").arg(memberNick(onion)));
+
+    QTimer::singleShot(120000, this, [this, sid] {
+        if (m_termOffer.sid != sid)
+            return;
+        sendTo(m_termOffer.onion, {{"t", "term-end"}, {"sid", sid}});
+        appendSystem(tr("%1 n'a pas répondu à la proposition de partage de console.").arg(memberNick(m_termOffer.onion)));
+        m_termOffer = {};
+    });
+}
+
+void MainWindow::stopTerminal()
+{
+    if (m_term) {
+        m_term->end(m_term->role() == TerminalSession::Host ? tr("vous avez arrêté le partage")
+                                                            : tr("vous avez quitté la console"));
+    } else if (!m_termOffer.sid.isEmpty()) {
+        sendTo(m_termOffer.onion, {{"t", "term-end"}, {"sid", m_termOffer.sid}});
+        appendSystem(tr("Proposition de partage de console annulée."));
+        m_termOffer = {};
+    }
+}
+
+bool MainWindow::startTerminal(bool host, const QString &sid, const QString &onion, bool control)
+{
+    auto *t = new TerminalSession(host ? TerminalSession::Host : TerminalSession::Guest, sid, onion,
+                                  memberNick(onion), control, this);
+    t->setBacklogProbe([this, onion] {
+        const PeerConnection *c = m_active.value(onion);
+        return c ? c->pendingBytes() : qint64(0);
+    });
+    connect(t, &TerminalSession::sendToPeer, this, [this, onion](const QJsonObject &o) { sendTo(onion, o); });
+    connect(t, &TerminalSession::finished, this, [this, t](const QString &reason) {
+        if (m_term == t)
+            m_term = nullptr;
+        t->deleteLater();
+        appendSystem(tr("Console partagée fermée : %1.").arg(reason));
+    });
+    m_term = t;
+    QString error;
+    if (!t->start(&error)) {
+        t->end(error); // prévient l'autre membre
+        return false;
+    }
+    return true;
+}
+
+void MainWindow::onTerminalMessage(PeerConnection *c, const QJsonObject &o)
+{
+    const QString type = o.value("t").toString();
+    const QString sid = o.value("sid").toString();
+    const QString from = c->peerOnion();
+    if (sid.isEmpty())
+        return;
+
+    if (type == "term-offer") {
+        if (m_term || m_termPrompt || !m_termOffer.sid.isEmpty()) {
+            c->send({{"t", "term-refuse"}, {"sid", sid}, {"busy", true}});
+            return;
+        }
+        const bool control = o.value("ctl").toBool();
+        const QString nick = memberNick(from);
+        m_termIncoming = {sid, from, control};
+        auto *box = new QMessageBox(
+            QMessageBox::Question, tr("Console partagée"),
+            tr("<b>%1</b> vous propose de voir sa console.<br><br>%2")
+                .arg(nick.toHtmlEscaped(),
+                     control ? tr("Vous pourrez y taper des commandes, exécutées sur son poste.")
+                             : tr("En lecture seule : vous verrez ce qui s'affiche, sans pouvoir taper.")),
+            QMessageBox::NoButton, this);
+        QPushButton *accept = box->addButton(tr("Ouvrir la console"), QMessageBox::AcceptRole);
+        box->addButton(tr("Refuser"), QMessageBox::RejectRole);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        m_termPrompt = box;
+        connect(box, &QMessageBox::finished, this, [this, box, accept] {
+            const TermOffer offer = m_termIncoming;
+            m_termIncoming = {};
+            if (offer.sid.isEmpty())
+                return; // annulée entre-temps par l'autre membre
+            if (box->clickedButton() != accept) {
+                sendTo(offer.onion, {{"t", "term-refuse"}, {"sid", offer.sid}});
+                appendSystem(tr("Vous avez refusé la console de %1.").arg(memberNick(offer.onion)));
+                return;
+            }
+            if (!m_active.contains(offer.onion) || m_term) {
+                appendSystem(tr("%1 n'est plus en ligne : console non ouverte.").arg(memberNick(offer.onion)));
+                return;
+            }
+            if (startTerminal(false, offer.sid, offer.onion, offer.control))
+                sendTo(offer.onion, {{"t", "term-accept"}, {"sid", offer.sid}});
+        });
+        box->open();
+        if (!isVisible() || !isActiveWindow()) {
+            m_notifier->notify(nick, tr("vous propose de partager sa console"));
+            if (isVisible())
+                QApplication::alert(this);
+        }
+        return;
+    }
+
+    // Réponses à notre proposition
+    if (!m_termOffer.sid.isEmpty() && sid == m_termOffer.sid && from == m_termOffer.onion) {
+        const TermOffer offer = m_termOffer;
+        if (type == "term-accept") {
+            m_termOffer = {};
+            if (startTerminal(true, offer.sid, offer.onion, offer.control))
+                appendSystem(tr("Console partagée avec %1 (%2).")
+                                 .arg(memberNick(offer.onion),
+                                      offer.control ? tr("peut taper des commandes") : tr("lecture seule")));
+        } else if (type == "term-refuse" || type == "term-end") {
+            m_termOffer = {};
+            appendSystem(o.value("busy").toBool()
+                             ? tr("%1 a déjà une console partagée en cours.").arg(memberNick(offer.onion))
+                             : tr("%1 a refusé le partage de console.").arg(memberNick(offer.onion)));
+        }
+        return;
+    }
+
+    // Proposition reçue, annulée avant notre réponse
+    if (type == "term-end" && sid == m_termIncoming.sid && from == m_termIncoming.onion) {
+        m_termIncoming = {};
+        if (m_termPrompt)
+            m_termPrompt->close();
+        appendSystem(tr("%1 a annulé sa proposition de console.").arg(memberNick(from)));
+        return;
+    }
+
+    // Session en cours : seul l'autre membre de la session peut y écrire
+    if (m_term && sid == m_term->sid() && from == m_term->peerOnion())
+        m_term->handlePeerMessage(o);
+}
+
+void MainWindow::terminalPeerLost(const QString &onion)
+{
+    if (m_term && m_term->peerOnion() == onion)
+        m_term->end(tr("liaison avec %1 perdue").arg(memberNick(onion)), false);
+    if (m_termOffer.onion == onion && !m_termOffer.sid.isEmpty()) {
+        m_termOffer = {};
+        appendSystem(tr("Proposition de console annulée : %1 s'est déconnecté(e).").arg(memberNick(onion)));
+    }
+    if (m_termIncoming.onion == onion && !m_termIncoming.sid.isEmpty()) {
+        m_termIncoming = {};
+        if (m_termPrompt)
+            m_termPrompt->close();
+    }
+}
+
+#else // pas de console partagée sur cette plateforme
+
+void MainWindow::shareTerminal() {}
+void MainWindow::stopTerminal() {}
+bool MainWindow::startTerminal(bool, const QString &, const QString &, bool) { return false; }
+void MainWindow::terminalPeerLost(const QString &) {}
+
+void MainWindow::onTerminalMessage(PeerConnection *c, const QJsonObject &o)
+{
+    if (o.value("t").toString() == "term-offer")
+        c->send({{"t", "term-refuse"}, {"sid", o.value("sid").toString()}});
+}
+
+#endif

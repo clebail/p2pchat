@@ -169,6 +169,11 @@ void PeerConnection::send(const QJsonObject &obj)
         sendEncrypted(obj);
 }
 
+qint64 PeerConnection::pendingBytes() const
+{
+    return m_socket->bytesToWrite();
+}
+
 void PeerConnection::close()
 {
     fail(tr("connexion fermée"));

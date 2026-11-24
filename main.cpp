@@ -5,8 +5,18 @@
 #include <QInputDialog>
 #include <QSettings>
 
+#ifdef P2P_TERMINAL
+#  include "terminalclient.h"
+#  include <cstring>
+#endif
+
 int main(int argc, char *argv[])
 {
+#ifdef P2P_TERMINAL
+    // Fenêtre de console partagée : simple relais terminal <-> P2P Chat, sans interface graphique
+    if (argc >= 3 && std::strcmp(argv[1], "--terminal") == 0)
+        return runTerminalClient(argv[2], argc >= 4 ? argv[3] : nullptr);
+#endif
     QApplication app(argc, argv);
     QApplication::setOrganizationName("p2pchat");
     QApplication::setApplicationName("p2pchat");

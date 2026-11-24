@@ -34,6 +34,7 @@ public:
     QByteArray peerIdentityKey() const { return m_peerKey; } // vérifiée par la signature du hello
     void send(const QJsonObject &obj);
     void close();
+    qint64 pendingBytes() const; // en attente d'envoi (Tor plus lent que l'émetteur)
 
 signals:
     void ready();

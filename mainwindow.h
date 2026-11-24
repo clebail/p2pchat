@@ -6,12 +6,15 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMainWindow>
+#include <QPointer>
 #include <QSet>
 #include <QSettings>
 #include <QTimer>
 
 class PeerConnection;
+class QAction;
 class QLabel;
+class QMessageBox;
 class QLineEdit;
 class QPushButton;
 class QTcpServer;
@@ -19,6 +22,7 @@ class QStackedWidget;
 class QSystemTrayIcon;
 class Notifier;
 class QToolButton;
+class TerminalSession;
 class TorService;
 
 // Conversation de groupe en maillage complet : chaque membre est connecté
@@ -97,6 +101,14 @@ private:
     void closeAll();
     void sendCurrent();
 
+    // Console partagée (Linux) : un membre ouvre sa console à un autre, cf. terminalsession.h
+    void shareTerminal();
+    void stopTerminal();
+    void onTerminalMessage(PeerConnection *c, const QJsonObject &obj);
+    bool startTerminal(bool host, const QString &sid, const QString &onion, bool control);
+    void terminalPeerLost(const QString &onion);
+    void sendTo(const QString &onion, const QJsonObject &obj);
+
     void changeNickname();
     void resetAll();
     QString nickname() const;
@@ -112,12 +124,38 @@ private:
     QHash<QString, PeerConnection *> m_attempts; // onion -> connexion sortante en cours
     QSet<PeerConnection *> m_pending;            // entrantes avant le hello
     QHash<QString, QString> m_lastError;         // onion -> dernière erreur
+    // Déconnexions pas encore annoncées : on laisse au membre un délai de grâce pour revenir
+    struct Dropped
+    {
+        QString reason;
+        quint64 token = 0;
+    };
+    QHash<QString, Dropped> m_dropped; // onion -> déconnexion en attente d'annonce
+    quint64 m_dropToken = 0;
+    // Espacement progressif des appels vers les membres injoignables
+    struct Backoff
+    {
+        int delay = 0;       // secondes
+        qint64 nextTry = 0;  // ms depuis l'époque
+    };
+    QHash<QString, Backoff> m_backoff;
     QSet<QString> m_seenIds;                     // anti-doublon des messages relayés
     QSet<QString> m_identityWarned;              // avertissements d'identité déjà affichés
     QHash<QString, QJsonObject> m_store;         // historique signé : id -> message
     QTimer m_retryTimer;
     QTimer m_syncTimer; // inventaire de contrôle périodique
     int m_unread = 0;
+
+    struct TermOffer
+    {
+        QString sid, onion;
+        bool control = false;
+    };
+    TerminalSession *m_term = nullptr;  // une seule console partagée à la fois
+    TermOffer m_termOffer;              // proposition envoyée, en attente de réponse
+    TermOffer m_termIncoming;           // proposition reçue, en attente de notre réponse
+    QPointer<QMessageBox> m_termPrompt;
+    QAction *m_termShareAct = nullptr, *m_termCtlAct = nullptr, *m_termStopAct = nullptr;
 
     ChatView *m_chat = nullptr;
     QStackedWidget *m_pages = nullptr; // accueil (pas de groupe) / conversation

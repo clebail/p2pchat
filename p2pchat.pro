@@ -20,6 +20,14 @@ macx {
     unix: QT += dbus
 }
 
+# Console partagée (Linux uniquement pour l'instant) : pseudo-terminal + fenêtre de terminal
+linux {
+    DEFINES += P2P_TERMINAL
+    SOURCES += terminalsession.cpp terminalclient.cpp
+    HEADERS += terminalsession.h terminalclient.h
+    LIBS += -lutil   # forkpty (glibc < 2.34)
+}
+
 # Linux : « make install » => menu des applications + icône (notifications, barre des tâches)
 unix:!macx {
     isEmpty(PREFIX): PREFIX = $$(HOME)/.local
