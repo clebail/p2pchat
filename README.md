@@ -4,7 +4,9 @@ Micro messagerie de groupe pair-à-pair en Qt 6 / C++ (Linux, macOS, Windows) :
 - **aucun serveur à héberger** ;
 - **aucune configuration de box** : ça fonctionne derrière n'importe quelle box, en 4G, en CGNAT, etc. ;
 - connexions sortantes uniquement vers les **ports 443/80** ;
-- chiffrement de bout en bout.
+- chiffrement de bout en bout ;
+- **console partagée** (Linux, macOS) : ouvrir sa console à un autre membre pour qu'il voie, voire tape, des
+  commandes exécutées sur son poste.
 
 ## Principe
 
@@ -47,8 +49,11 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
 - Clic droit sur un message → copier
-- Menu ⋮ : inviter, rejoindre, changer de pseudo, **vider la conversation** (efface l'historique local), quitter le groupe
-- Survoler la ligne d'état sous le titre affiche l'état de chaque membre
+- Menu ⋮ : inviter, rejoindre, se reconnecter, **partager ma console**, changer de pseudo,
+  **vider la conversation** (efface l'historique local), quitter le groupe
+- Survoler la ligne d'état sous le titre affiche l'état de chaque membre (dernière erreur, heure du prochain essai)
+- Arrivées et départs regroupés : les « X est en ligne » / « X s'est déconnecté(e) » consécutifs tiennent sur une
+  seule ligne (un clic la déplie). Une coupure n'est annoncée que si le membre n'est pas revenu au bout de 60 s.
 - **Notifications natives** avec l'icône de l'application quand un message arrive et que la fenêtre n'est pas
   au premier plan. Un clic sur la notification rouvre la fenêtre.
 - **Linux / Windows** : icône dans la zone de notification, avec une pastille rouge s'il y a des messages non lus.
@@ -59,6 +64,50 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
   et Cmd+Q quitte. Le nombre de messages non lus s'affiche en pastille sur l'icône du Dock. Au premier lancement,
   macOS demande l'autorisation d'afficher des notifications. Les notifications ne fonctionnent que depuis le
   bundle `P2PChat.app`, pas en lançant le binaire directement.
+
+### Présence et reconnexion
+
+Un membre est « en ligne » quand une connexion directe et authentifiée est ouverte avec lui. Chaque côté
+envoie un ping chiffré toutes les 30 s ; sans nouvelles pendant 100 s, la connexion est fermée.
+
+Les membres hors ligne sont rappelés de plus en plus espacé (10 s, 20 s, 40 s… jusqu'à 5 min), pour ne pas
+solliciter Tor en permanence. Le délai repart de zéro quand le membre se connecte à nous, quand un message de
+lui nous parvient par relais, ou avec ⋮ → *Se reconnecter maintenant*.
+
+### Console partagée (Linux, macOS)
+
+Pour dépanner quelqu'un ou travailler à deux sur une machine : A ouvre une console sur son poste et la
+partage avec un membre B. Les deux voient la même chose ; les commandes ne s'exécutent que chez A.
+
+1. A choisit ⋮ → **Partager ma console…**, sélectionne un membre en ligne et coche, ou non,
+   « Autoriser cette personne à taper des commandes ».
+2. B reçoit la proposition (avec une notification si la fenêtre est cachée) et choisit
+   **Ouvrir la console** ou **Refuser**. Sans réponse, la proposition expire au bout de 2 minutes.
+3. Une fenêtre de terminal s'ouvre de chaque côté. Le shell de A y démarre ; le titre de la fenêtre et un
+   message en tête de console rappellent le mode (contrôle ou lecture seule).
+
+Pendant la session :
+- A peut **donner ou retirer le contrôle** à tout moment (menu ⋮). En lecture seule, ce que tape B est ignoré,
+  et c'est le poste de A qui le vérifie.
+- La taille de la console est la plus petite des deux fenêtres.
+- Pour arrêter : `exit` dans la console, fermer sa fenêtre, ou ⋮ → *Arrêter le partage* / *Quitter la console*.
+- **Coupure de la liaison** : la session reste ouverte jusqu'à 2 minutes, le temps que la connexion se rétablisse.
+  A continue de travailler normalement ; à la reprise, B reçoit ce qui s'est affiché entre-temps (jusqu'à 1 Mo,
+  au-delà un message signale la partie perdue). Ce que B tape pendant la coupure est ignoré, jamais exécuté
+  plus tard à l'aveugle. Un message perdu en route est redemandé automatiquement.
+- Une seule console partagée à la fois, avec un seul invité. B ne voit que ce qui s'affiche après son arrivée.
+- Via Tor, l'écho des frappes de B prend environ une demi-seconde à une seconde : confortable pour des
+  commandes, moins pour un éditeur plein écran.
+
+Fenêtre de terminal utilisée :
+- **Linux** : konsole, gnome-terminal, xfce4-terminal, kitty, alacritty, foot, wezterm, x-terminal-emulator ou
+  xterm, dans cet ordre. La variable `P2PCHAT_TERMINAL` en impose un autre (appelé avec `-e commande`).
+- **macOS** : iTerm2 s'il est installé, sinon Terminal. `P2PCHAT_TERMINAL=Ghostty` (nom d'application) en
+  impose un autre. Le shell est lancé en shell de connexion, comme dans Terminal (`~/.zprofile` est lu).
+- **Windows** : pas encore disponible ; une proposition reçue est refusée automatiquement.
+
+Dans le shell partagé, la variable `P2PCHAT_SHARED_WITH` contient le pseudo de l'invité (pratique pour
+l'afficher dans son invite de commande).
 
 ## Installer tor
 
@@ -76,7 +125,8 @@ permet de choisir l'exécutable à la main (clé `torPath` de la configuration).
 
 ## Compiler
 
-Dépendances : Qt 6 (Widgets, Network) et OpenSSL 3 (libcrypto).
+Dépendances : Qt 6 (Widgets, Network) et OpenSSL 3 (libcrypto). Qt 5.15 fonctionne aussi
+(`qtbase5-dev`, puis `qmake` au lieu de `qmake6`).
 
 **Linux**
 ```bash
@@ -127,7 +177,11 @@ windeployqt release/p2pchat.exe   # + copier libcrypto-3-x64.dll et le dossier t
 - **Limites** :
   - le code d'invitation permet d'entrer dans le groupe : envoyez-le par un canal de confiance ;
   - on ne peut pas exclure un seul membre : il faut que chacun quitte le groupe et en recrée un ;
-  - les notifications affichent le texte des messages.
+  - les notifications affichent le texte des messages ;
+  - **console partagée** : l'invité voit tout ce qui s'affiche dans la console et, avec le contrôle, exécute
+    des commandes avec les droits de l'hôte. Ne donnez le contrôle qu'à quelqu'un de confiance. Seul le membre
+    choisi peut se joindre à la session (identité vérifiée par sa clé Ed25519), et rien n'est accessible sans
+    l'accord de l'hôte à chaque session.
 
 ## Fichiers
 
@@ -139,7 +193,9 @@ windeployqt release/p2pchat.exe   # + copier libcrypto-3-x64.dll et le dossier t
 | `invitation.*` | Encodage / décodage du code d'invitation |
 | `mainwindow.*` | Fenêtre, groupe (membres, maillage, relais), reconnexion automatique, historique |
 | `notifier.*`, `notifier_mac.mm` | Notifications natives (D-Bus sous Linux, UserNotifications sous macOS) |
-| `chatview.*` | Liste de messages en bulles (modèle + délégué de dessin) |
+| `chatview.*` | Liste de messages en bulles (modèle + délégué de dessin), regroupement des messages de présence |
+| `terminalsession.*` | Console partagée : shell dans un pseudo-terminal (hôte), miroir (invité), échanges avec l'autre membre |
+| `terminalclient.*` | Mode `p2pchat --terminal` exécuté dans la fenêtre de terminal (mode brut, relais vers P2P Chat) |
 | `icons/` | Icône : `p2pchat.svg` (source), `.icns` (macOS), `.ico` (Windows), `.png` |
 
 La configuration (`p2pchat.ini`) est dans `~/.config/p2pchat/` (Linux), `~/Library/Preferences/p2pchat/` (macOS)

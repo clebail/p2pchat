@@ -1062,6 +1062,10 @@ void MainWindow::setActive(PeerConnection *c)
     if (isNew)
         broadcast(membersMessage(), c);
     c->send(inventoryMessage()); // après la liste des membres : les clés des auteurs sont connues
+#ifdef P2P_TERMINAL
+    if (m_term && m_term->peerOnion() == onion)
+        m_term->setLinkUp(); // reprise de la console partagée
+#endif
     updateStatus();
 }
 
@@ -1263,6 +1267,10 @@ void MainWindow::closeAll()
     for (const PeerConnection *c : std::as_const(all))
         if (c->isReady())
             terminalPeerLost(c->peerOnion());
+#ifdef P2P_TERMINAL
+    if (m_term) // plus aucune connexion (Tor arrêté, groupe quitté) : inutile d'attendre
+        m_term->end(tr("connexions fermées"), false);
+#endif
     for (PeerConnection *c : all)
         c->close();
 }
@@ -1497,14 +1505,19 @@ void MainWindow::onTerminalMessage(PeerConnection *c, const QJsonObject &o)
     }
 
     // Session en cours : seul l'autre membre de la session peut y écrire
-    if (m_term && sid == m_term->sid() && from == m_term->peerOnion())
+    if (m_term && sid == m_term->sid() && from == m_term->peerOnion()) {
         m_term->handlePeerMessage(o);
+        return;
+    }
+    // Reprise d'une session qui n'existe plus chez nous (terminée pendant la coupure)
+    if (type == "term-resume")
+        c->send({{"t", "term-end"}, {"sid", sid}});
 }
 
 void MainWindow::terminalPeerLost(const QString &onion)
 {
     if (m_term && m_term->peerOnion() == onion)
-        m_term->end(tr("liaison avec %1 perdue").arg(memberNick(onion)), false);
+        m_term->setLinkDown(); // la session attend le retour du membre (2 min au plus)
     if (m_termOffer.onion == onion && !m_termOffer.sid.isEmpty()) {
         m_termOffer = {};
         appendSystem(tr("Proposition de console annulée : %1 s'est déconnecté(e).").arg(memberNick(onion)));

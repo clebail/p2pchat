@@ -38,6 +38,8 @@ constexpr int ChunkBytes = 32 * 1024;         // affichage envoyé par message (
 constexpr qint64 BacklogHigh = 256 * 1024;    // au-delà, on cesse de lire le shell…
 constexpr qint64 BacklogLow = 64 * 1024;      // …jusqu'à ce que Tor ait écoulé le retard
 constexpr int MaxLocalPending = 1024 * 1024;  // affichage gardé en attendant la fenêtre locale
+constexpr int MaxHistory = 1024 * 1024;       // affichage gardé pour l'invité pendant une coupure
+constexpr int LinkGraceMs = 2 * 60 * 1000;    // durée maximale d'une coupure de la liaison
 
 #ifdef Q_OS_MACOS
 
@@ -153,6 +155,10 @@ TerminalSession::TerminalSession(Role role, const QString &sid, const QString &p
     m_flushTimer.setInterval(20); // regroupe les petites écritures du shell
     connect(&m_flushTimer, &QTimer::timeout, this, &TerminalSession::flushRemote);
 
+    m_graceTimer.setSingleShot(true);
+    m_graceTimer.setInterval(LinkGraceMs);
+    connect(&m_graceTimer, &QTimer::timeout, this, [this] { end(tr("liaison avec %1 perdue").arg(m_peerNick), false); });
+
     m_backpressureTimer.setInterval(100);
     connect(&m_backpressureTimer, &QTimer::timeout, this, [this] {
         if (!m_backlog || m_backlog() < BacklogLow) {
@@ -257,6 +263,13 @@ void TerminalSession::onLocalReadyRead()
         if (type == 'D') {
             if (m_role == Host) {
                 writePty(payload);
+            } else if (!m_linkUp) {
+                // Pas de frappes mises en attente : les exécuter plus tard, à l'aveugle, serait dangereux
+                const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                if (now - m_lastReadOnlyNotice > 5000) {
+                    m_lastReadOnlyNotice = now;
+                    sendLocal('M', tr("Liaison coupée : frappes ignorées en attendant la reconnexion.").toUtf8());
+                }
             } else if (m_control) {
                 emit sendToPeer({{"t", "term-data"}, {"sid", m_sid}, {"d", QString::fromLatin1(b64(payload))}});
             } else {
@@ -274,7 +287,10 @@ void TerminalSession::onLocalReadyRead()
                 m_localRows = rows;
                 applySize();
             } else {
-                emit sendToPeer({{"t", "term-resize"}, {"sid", m_sid}, {"c", cols}, {"r", rows}});
+                m_lastCols = cols;
+                m_lastRows = rows;
+                if (m_linkUp)
+                    emit sendToPeer({{"t", "term-resize"}, {"sid", m_sid}, {"c", cols}, {"r", rows}});
             }
         }
     }
@@ -328,9 +344,21 @@ void TerminalSession::handlePeerMessage(const QJsonObject &o)
     if (type == "term-data") {
         const QByteArray data = QByteArray::fromBase64(o.value("d").toString().toLatin1(), QByteArray::Base64UrlEncoding);
         if (m_role == Guest)
-            sendLocal('D', data);
+            receiveOutput(qint64(o.value("o").toDouble(-1)), data, o.value("gap").toBool());
         else if (m_control) // l'hôte vérifie lui-même : un invité en lecture seule ne tape rien
             writePty(data);
+    } else if (type == "term-resume" && m_role == Host) {
+        // L'invité indique jusqu'où il a reçu : on reprend de là (dans la limite de l'historique)
+        qint64 from = qint64(o.value("o").toDouble());
+        const qint64 end = m_historyStart + m_history.size();
+        from = qBound(qint64(0), from, end);
+        if (from < m_historyStart) {
+            emit sendToPeer({{"t", "term-data"}, {"sid", m_sid}, {"o", double(m_historyStart)}, {"gap", true}});
+            from = m_historyStart;
+        }
+        m_sentOffset = from;
+        m_awaitingResume = false;
+        flushRemote();
     } else if (type == "term-resize" && m_role == Host) {
         m_remoteCols = qBound(0, o.value("c").toInt(), 1000);
         m_remoteRows = qBound(0, o.value("r").toInt(), 1000);
@@ -351,6 +379,7 @@ void TerminalSession::end(const QString &reason, bool notifyPeer)
     m_ended = true;
     m_connectTimeout.stop();
     m_backpressureTimer.stop();
+    m_graceTimer.stop();
     if (m_role == Host)
         flushRemote(); // dernier affichage du shell
     m_flushTimer.stop();
@@ -460,8 +489,13 @@ void TerminalSession::readPty()
         if (n > 0) {
             const QByteArray data(buf, int(n));
             sendLocal('D', data);
-            m_toRemote += data;
-            if (m_toRemote.size() >= ChunkBytes)
+            m_history += data;
+            if (m_history.size() > MaxHistory) {
+                const int drop = m_history.size() - MaxHistory;
+                m_history.remove(0, drop);
+                m_historyStart += drop;
+            }
+            if (m_historyStart + m_history.size() - m_sentOffset >= ChunkBytes)
                 flushRemote();
             else if (!m_flushTimer.isActive())
                 m_flushTimer.start();
@@ -474,7 +508,7 @@ void TerminalSession::readPty()
         return;
     }
     // Tor ne suit pas : on cesse de lire, le shell sera bloqué en écriture (comme en SSH)
-    if (m_backlog && m_backlog() > BacklogHigh && m_readNotifier) {
+    if (m_linkUp && m_backlog && m_backlog() > BacklogHigh && m_readNotifier) {
         m_readNotifier->setEnabled(false);
         m_backpressureTimer.start();
     }
@@ -482,10 +516,85 @@ void TerminalSession::readPty()
 
 void TerminalSession::flushRemote()
 {
-    while (!m_toRemote.isEmpty()) {
-        const QByteArray chunk = m_toRemote.left(ChunkBytes);
-        m_toRemote.remove(0, chunk.size());
-        emit sendToPeer({{"t", "term-data"}, {"sid", m_sid}, {"d", QString::fromLatin1(b64(chunk))}});
+    if (!m_linkUp || m_awaitingResume)
+        return; // gardé dans m_history, envoyé à la reprise
+    const qint64 end = m_historyStart + m_history.size();
+    while (m_sentOffset < end) {
+        const QByteArray chunk = m_history.mid(int(m_sentOffset - m_historyStart), ChunkBytes);
+        emit sendToPeer({{"t", "term-data"},
+                         {"sid", m_sid},
+                         {"o", double(m_sentOffset)},
+                         {"d", QString::fromLatin1(b64(chunk))}});
+        m_sentOffset += chunk.size();
+    }
+}
+
+void TerminalSession::receiveOutput(qint64 offset, const QByteArray &data, bool gap)
+{
+    if (offset < 0) { // pas de position : flux supposé continu
+        sendLocal('D', data);
+        m_received += data.size();
+        return;
+    }
+    if (gap) {
+        // L'hôte n'a plus ce qui a été affiché pendant la coupure
+        if (offset > m_received) {
+            sendLocal('M', tr("Une partie de l'affichage a été perdue pendant la coupure "
+                              "(Ctrl+L pour rafraîchir l'écran).")
+                               .toUtf8());
+            m_received = offset;
+        }
+        return;
+    }
+    if (offset > m_received) {
+        // Trou : des messages se sont perdus (changement de connexion) ; on redemande la suite
+        if (!m_resumeRequested && m_linkUp) {
+            m_resumeRequested = true;
+            emit sendToPeer({{"t", "term-resume"}, {"sid", m_sid}, {"o", double(m_received)}});
+        }
+        return;
+    }
+    const qint64 skip = m_received - offset; // déjà reçu (renvoi après reprise)
+    if (skip >= data.size())
+        return;
+    sendLocal('D', data.mid(int(skip)));
+    m_received = offset + data.size();
+    m_resumeRequested = false;
+}
+
+void TerminalSession::setLinkDown()
+{
+    if (m_ended || !m_linkUp)
+        return;
+    m_linkUp = false;
+    m_awaitingResume = (m_role == Host);
+    m_flushTimer.stop();
+    // Le shell de l'hôte ne doit pas rester bloqué par Tor pendant la coupure
+    m_backpressureTimer.stop();
+    if (m_readNotifier)
+        m_readNotifier->setEnabled(true);
+    m_graceTimer.start();
+    sendLocal('M', tr("Liaison avec %1 coupée, attente de reconnexion (2 min au plus)…").arg(m_peerNick).toUtf8());
+}
+
+void TerminalSession::setLinkUp()
+{
+    if (m_ended)
+        return;
+    const bool wasDown = !m_linkUp;
+    m_linkUp = true;
+    m_graceTimer.stop();
+    if (wasDown)
+        sendLocal('M', tr("Liaison avec %1 rétablie.").arg(m_peerNick).toUtf8());
+    // Envoyé à chaque nouvelle connexion, même sans coupure annoncée : des messages ont pu se
+    // perdre sur l'ancienne connexion. L'hôte attend la position de l'invité avant de reprendre.
+    if (m_role == Guest) {
+        m_resumeRequested = true;
+        emit sendToPeer({{"t", "term-resume"}, {"sid", m_sid}, {"o", double(m_received)}});
+        if (m_lastCols > 0 && m_lastRows > 0)
+            emit sendToPeer({{"t", "term-resize"}, {"sid", m_sid}, {"c", m_lastCols}, {"r", m_lastRows}});
+    } else {
+        emit sendToPeer({{"t", "term-resume"}, {"sid", m_sid}});
     }
 }
 
