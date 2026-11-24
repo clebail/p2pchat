@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <sys/select.h>
 #include <string>
 #include <sys/ioctl.h>
@@ -81,7 +82,10 @@ void setTitle(const std::string &title)
 
 int runTerminalClient(const char *socketPath, const char *title)
 {
-    const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    // SOCK_CLOEXEC n'existe pas sur macOS : on positionne FD_CLOEXEC à part
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd >= 0)
+        ::fcntl(fd, F_SETFD, FD_CLOEXEC);
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
     if (fd < 0 || std::strlen(socketPath) >= sizeof(addr.sun_path)) {
