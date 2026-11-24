@@ -7,9 +7,18 @@
 // Liste de messages façon messagerie mobile (Material 3) : bulles arrondies,
 // regroupement des messages consécutifs, avatars, séparateurs de date.
 
+// Évènement de présence (connexion / déconnexion d'un membre)
+struct PresenceEvent
+{
+    QString who;
+    bool online = true;
+    QString reason; // motif de déconnexion
+    QDateTime ts;
+};
+
 struct ChatEntry
 {
-    enum Kind { Message, System };
+    enum Kind { Message, System, Presence };
     enum Trust { Verified, Unsigned, Invalid }; // signature de l'auteur (historique)
     Kind kind = Message;
     QString author;
@@ -17,6 +26,9 @@ struct ChatEntry
     QDateTime ts;
     bool mine = false;
     Trust trust = Verified;
+    // Presence : évènements consécutifs regroupés en une seule ligne, dépliable d'un clic
+    QList<PresenceEvent> events;
+    bool expanded = false;
 };
 
 class ChatModel : public QAbstractListModel
@@ -30,6 +42,9 @@ public:
     void append(const ChatEntry &e);
     int insertSorted(const ChatEntry &e); // à sa place chronologique ; renvoie la ligne
     void clear();
+    // Ajoute un évènement à la ligne de présence `row` (text et ts sont recalculés)
+    void addPresenceEvent(int row, const PresenceEvent &ev);
+    void toggleExpanded(int row);
 
 private:
     QList<ChatEntry> m_entries;
@@ -57,6 +72,9 @@ public:
     void addMessage(const QString &author, const QString &text, const QDateTime &ts, bool mine,
                     ChatEntry::Trust trust = ChatEntry::Verified);
     void addSystem(const QString &text);
+    // « X est en ligne » / « X s'est déconnecté(e) » : fusionné avec la ligne de présence
+    // précédente tant qu'aucun autre message ne s'est intercalé (même jour)
+    void addPresence(const QString &who, bool online, const QString &reason = {});
     void clearAll();
     ChatModel *chatModel() const { return m_model; }
 

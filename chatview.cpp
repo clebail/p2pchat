@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QContextMenuEvent>
+#include <QHash>
 #include <QLocale>
 #include <QMenu>
 #include <QPainter>
@@ -96,6 +97,48 @@ bool sameGroup(const ChatEntry &a, const ChatEntry &b)
            && a.author == b.author && a.ts.date() == b.ts.date() && std::abs(a.ts.secsTo(b.ts)) < GroupGapSec;
 }
 
+QString eventText(const PresenceEvent &ev)
+{
+    if (ev.online)
+        return QObject::tr("%1 est en ligne.").arg(ev.who);
+    return ev.reason.isEmpty() ? QObject::tr("%1 s'est déconnecté(e).").arg(ev.who)
+                               : QObject::tr("%1 s'est déconnecté(e) : %2").arg(ev.who, ev.reason);
+}
+
+// Résumé d'une ligne de présence : état final de chaque membre concerné
+QString presenceText(const ChatEntry &e)
+{
+    if (e.events.size() == 1)
+        return eventText(e.events.first());
+
+    QStringList online, offline; // dans l'ordre de première apparition
+    QHash<QString, bool> last;
+    for (const PresenceEvent &ev : e.events) {
+        if (!last.contains(ev.who))
+            (ev.online ? online : offline).append(ev.who);
+        last.insert(ev.who, ev.online);
+    }
+    QStringList on, off;
+    for (const QString &who : online + offline)
+        (last.value(who) ? on : off).append(who);
+
+    QStringList parts;
+    if (!on.isEmpty())
+        parts << (on.size() == 1 ? QObject::tr("%1 est en ligne") : QObject::tr("%1 sont en ligne"))
+                     .arg(on.join(", "));
+    if (!off.isEmpty())
+        parts << (off.size() == 1 ? QObject::tr("%1 s'est déconnecté(e)") : QObject::tr("%1 se sont déconnecté(e)s"))
+                     .arg(off.join(", "));
+    QString text = parts.join(QStringLiteral(" · "));
+
+    if (!e.expanded)
+        return text + QObject::tr("  ▾ %1 évènements").arg(e.events.size());
+    text += QStringLiteral("  ▴");
+    for (const PresenceEvent &ev : e.events)
+        text += QChar(QChar::LineSeparator) + ev.ts.toString("HH:mm") + QStringLiteral("  ") + eventText(ev);
+    return text;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------- Modèle
@@ -133,6 +176,25 @@ int ChatModel::insertSorted(const ChatEntry &e)
     const int first = qMax(0, row - 1), last = qMin(int(m_entries.size()) - 1, row + 1);
     emit dataChanged(index(first), index(last));
     return row;
+}
+
+void ChatModel::addPresenceEvent(int row, const PresenceEvent &ev)
+{
+    ChatEntry &e = m_entries[row];
+    e.events.append(ev);
+    e.ts = ev.ts;
+    e.text = presenceText(e);
+    emit dataChanged(index(row), index(row));
+}
+
+void ChatModel::toggleExpanded(int row)
+{
+    ChatEntry &e = m_entries[row];
+    if (e.kind != ChatEntry::Presence || e.events.size() < 2)
+        return;
+    e.expanded = !e.expanded;
+    e.text = presenceText(e);
+    emit dataChanged(index(row), index(row));
 }
 
 void ChatModel::clear()
@@ -174,7 +236,7 @@ ChatDelegate::Geometry ChatDelegate::compute(const QModelIndex &index, int width
     g.top = (row == 0 ? 10 : (g.first ? 12 : 2)) + (g.dateHeader ? 34 : 0);
 
     const QFontMetrics small(smallFont());
-    if (e.kind == ChatEntry::System) {
+    if (e.kind != ChatEntry::Message) {
         QTextLayout tl(e.text, smallFont());
         g.bubbleH = int(std::ceil(layoutText(tl, width - 4 * Side, nullptr)));
         g.height = g.top + g.bubbleH + 6;
@@ -220,7 +282,7 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
 
     int y = r.top() + g.top;
 
-    if (e.kind == ChatEntry::System) {
+    if (e.kind != ChatEntry::Message) {
         QFont f = smallFont();
         f.setItalic(true);
         QTextLayout tl(e.text, f);
@@ -301,6 +363,10 @@ ChatView::ChatView(QWidget *parent) : QListView(parent), m_model(new ChatModel(t
     setResizeMode(QListView::Adjust);
     setUniformItemSizes(false);
     setFrameShape(QFrame::NoFrame);
+    connect(this, &QListView::clicked, this, [this](const QModelIndex &idx) {
+        m_model->toggleExpanded(idx.row());
+        scheduleDelayedItemsLayout(); // la hauteur de la ligne change
+    });
 }
 
 QColor ChatView::colorFor(const QString &name)
@@ -328,12 +394,46 @@ void ChatView::appendEntry(const ChatEntry &e)
 void ChatView::addMessage(const QString &author, const QString &text, const QDateTime &ts, bool mine,
                           ChatEntry::Trust trust)
 {
-    appendEntry({ChatEntry::Message, author, text, ts, mine, trust});
+    ChatEntry e;
+    e.author = author;
+    e.text = text;
+    e.ts = ts;
+    e.mine = mine;
+    e.trust = trust;
+    appendEntry(e);
 }
 
 void ChatView::addSystem(const QString &text)
 {
-    appendEntry({ChatEntry::System, {}, text, QDateTime::currentDateTime(), false, ChatEntry::Verified});
+    ChatEntry e;
+    e.kind = ChatEntry::System;
+    e.text = text;
+    e.ts = QDateTime::currentDateTime();
+    appendEntry(e);
+}
+
+void ChatView::addPresence(const QString &who, bool online, const QString &reason)
+{
+    const PresenceEvent ev{who, online, reason, QDateTime::currentDateTime()};
+    const int lastRow = m_model->rowCount() - 1;
+    if (lastRow >= 0) {
+        const ChatEntry &last = m_model->entry(lastRow);
+        if (last.kind == ChatEntry::Presence && last.ts.date() == ev.ts.date()) {
+            QScrollBar *sb = verticalScrollBar();
+            const bool atBottom = sb->value() >= sb->maximum() - 40;
+            m_model->addPresenceEvent(lastRow, ev);
+            scheduleDelayedItemsLayout();
+            if (atBottom)
+                QMetaObject::invokeMethod(this, [this] { scrollToBottom(); }, Qt::QueuedConnection);
+            return;
+        }
+    }
+    ChatEntry e;
+    e.kind = ChatEntry::Presence;
+    e.ts = ev.ts;
+    e.events.append(ev);
+    e.text = presenceText(e);
+    appendEntry(e);
 }
 
 void ChatView::clearAll()

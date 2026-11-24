@@ -948,7 +948,7 @@ void MainWindow::watch(PeerConnection *c)
         if (!activeKey.isEmpty()) {
             m_active.remove(activeKey);
             m_lastError.insert(activeKey, reason);
-            appendSystem(tr("%1 s'est déconnecté(e) : %2").arg(memberNick(activeKey), reason));
+            m_chat->addPresence(memberNick(activeKey), false, reason);
             QTimer::singleShot(5000, this, &MainWindow::connectToMembers);
         }
         updateStatus();
@@ -1003,7 +1003,7 @@ void MainWindow::setActive(PeerConnection *c)
     if (isNew)
         appendSystem(tr("%1 a rejoint la conversation.").arg(c->peerNickname()));
     else if (!wasOnline)
-        appendSystem(tr("%1 est en ligne.").arg(c->peerNickname()));
+        m_chat->addPresence(c->peerNickname(), true);
 
     // Échange des listes de membres : chacun découvre ceux qu'il ne connaît pas encore
     c->send(membersMessage());
