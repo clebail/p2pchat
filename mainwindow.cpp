@@ -707,9 +707,9 @@ void MainWindow::updateStatus()
                                                     : tr("hors ligne");
         if (relayed.contains(m.onion) && attempting)
             state += tr(", connexion directe…");
-        if (const int version = m_node->peerVersion(m.onion); connected && version < Protocol::Version)
-            state += tr(" — ancienne version de P2P Chat (ne voit pas %1)")
-                         .arg(Protocol::missingFeatures(version).join(", "));
+        if (const QStringList missing = Protocol::missingFeatures(m_node->peerVersion(m.onion));
+            connected && !missing.isEmpty())
+            state += tr(" — ancienne version de P2P Chat (ne voit pas %1)").arg(missing.join(", "));
         if (!connected && !m_node->lastError(m.onion).isEmpty())
             state += " — " + m_node->lastError(m.onion);
         if (!connected && !attempting && m_node->nextTry(m.onion) > QDateTime::currentMSecsSinceEpoch())

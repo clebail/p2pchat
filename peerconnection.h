@@ -17,6 +17,8 @@ class QTcpSocket;
 //   4. le hello contient la clé d'identité Ed25519 du poste et sa signature de
 //      (clé éphémère émise, clé éphémère reçue, adresse onion annoncée)
 //      ainsi que la version du protocole ("v", cf. Protocol::Version)
+//   5. une trame chiffrée qui ne commence pas par « { » est binaire (version 10) : son premier octet en
+//      donne le type (cf. sendBinary), le reste est brut (pas de base64)
 // Un pair sans le bon secret échoue au premier message chiffré ; un membre qui
 // annonce l'adresse d'un autre ne peut pas produire la signature attendue.
 class PeerConnection : public QObject
@@ -35,12 +37,18 @@ public:
     QByteArray peerIdentityKey() const { return m_peerKey; } // vérifiée par la signature du hello
     int peerVersion() const { return m_peerVersion; }        // version du protocole annoncée dans le hello
     void send(const QJsonObject &obj);
+    // Trame binaire : type (premier octet, jamais « { ») puis contenu brut. Seulement si peerVersion() >= 10.
+    void sendBinary(quint8 type, const QByteArray &payload);
+    int binaryFramesReceived() const { return m_binaryReceived; }
+    // Version annoncée dans notre hello (les tests simulent ainsi une version précédente)
+    void setAdvertisedVersion(int version) { m_advertisedVersion = version; }
     void close();
     qint64 pendingBytes() const; // en attente d'envoi (Tor plus lent que l'émetteur)
 
 signals:
     void ready();
     void received(const QJsonObject &obj);
+    void binaryReceived(quint8 type, const QByteArray &payload);
     void closed(const QString &reason); // émis une seule fois
 
 private:
@@ -60,6 +68,8 @@ private:
     QByteArray m_identitySeed, m_peerKey, m_ourEphemeral, m_peerEphemeral;
     State m_state = Connecting;
     int m_peerVersion = 0;
+    int m_advertisedVersion;
+    int m_binaryReceived = 0;
     KeyExchange m_kx;
     SecureChannel m_channel;
     QByteArray m_buffer;

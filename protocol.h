@@ -14,10 +14,14 @@ namespace Protocol {
 constexpr int MaxNickLength = 40;
 
 // Version annoncée dans le hello. 4 : identité Ed25519 ; 5 : citations (réponses) ; 6 : images ;
-// 7 : réactions (cf. reactions.h) ; 8 : GIF animés ; 9 : fichiers (cf. filestore.h).
-// Les versions antérieures à MinVersion sont refusées.
-constexpr int Version = 9;
+// 7 : réactions (cf. reactions.h) ; 8 : GIF animés ; 9 : fichiers (cf. filestore.h) ;
+// 10 : morceaux de fichiers en trames binaires (sans base64). Les versions antérieures à MinVersion
+// sont refusées.
+constexpr int Version = 10;
 constexpr int FilesVersion = 9;
+constexpr int BinaryVersion = 10;
+// Types de trames binaires (cf. PeerConnection::sendBinary)
+constexpr quint8 FileChunkFrame = 0x01; // empreinte du fichier (32 octets), rang (4 octets), données
 constexpr int MinVersion = 4;
 
 // Ce qu'un pair de cette version ne voit pas (pour l'avertir dans l'état des membres) ; vide s'il est à jour

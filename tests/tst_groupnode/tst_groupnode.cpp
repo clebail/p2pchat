@@ -420,6 +420,7 @@ private slots:
         QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
         QCOMPARE(contentOf(b, id), content);
         QVERIFY(progress.count() > 3); // progression signalée en route
+        QCOMPARE(b.node->binaryChunksReceived(), Files::FileInfo::expectedChunks(content.size())); // tout en binaire
         QCOMPARE(c.node->fileState(id).kind, GroupNode::FileState::NotDownloaded); // C n'a rien demandé
         QVERIFY(!c.node->files().has(id));
     }
@@ -501,6 +502,24 @@ private slots:
         a.node->setOnline(a.onion); // l'auteur revient : C termine auprès de lui
         QTRY_COMPARE_WITH_TIMEOUT(c.node->fileState(id).kind, GroupNode::FileState::Complete, 10000);
         QCOMPARE(contentOf(c, id), content);
+    }
+
+    void previousVersionGetsJsonChunks()
+    {
+        // B se présente comme une version 9 : les morceaux lui arrivent en JSON (base64), et ça marche
+        Peer &a = peer('a'), &b = peer('b');
+        b.node->setAdvertisedVersion(9);
+        a.node->createGroup();
+        a.node->setOnline(a.onion);
+        b.node->join(invitation(a));
+        b.node->setOnline(b.onion);
+        QTRY_VERIFY(linked(a, b));
+        QCOMPARE(a.node->peerVersion(b.onion), 9);
+        const QByteArray content = Crypto::randomBytes(1024 * 1024);
+        const QString id = fileId(a.node->sendFile(sourceFile("compat.bin", content)));
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QCOMPARE(contentOf(b, id), content);
+        QCOMPARE(b.node->binaryChunksReceived(), 0);
     }
 
     void fileLimitsAndClearing()

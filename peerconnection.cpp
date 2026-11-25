@@ -15,7 +15,7 @@ static const QByteArray HelloContext("p2pchat-hello-v4");
 PeerConnection::PeerConnection(QTcpSocket *socket, bool outgoing, const QByteArray &psk, const QString &nickname,
                                const QString &ownOnion, const QByteArray &identitySeed, QObject *parent)
     : QObject(parent), m_socket(socket), m_outgoing(outgoing), m_psk(psk), m_nick(nickname), m_ownOnion(ownOnion),
-      m_identitySeed(identitySeed)
+      m_identitySeed(identitySeed), m_advertisedVersion(Protocol::Version)
 {
     socket->setParent(this);
     connect(socket, &QTcpSocket::connected, this, &PeerConnection::onConnected);
@@ -96,7 +96,7 @@ void PeerConnection::handleFrame(const QByteArray &frame)
         sendEncrypted({{"t", "hello"},
                        {"n", m_nick},
                        {"o", m_ownOnion},
-                       {"v", Protocol::Version},
+                       {"v", m_advertisedVersion},
                        {"k", Protocol::toB64(Ed25519::publicKey(m_identitySeed))},
                        {"s", Protocol::toB64(proof)}});
         return;
@@ -108,6 +108,12 @@ void PeerConnection::handleFrame(const QByteArray &frame)
         return;
     }
     m_idleTimer.start();
+    // Trame binaire (après la poignée de main seulement)
+    if (m_state == Ready && !plain.isEmpty() && plain.at(0) != '{') {
+        ++m_binaryReceived;
+        emit binaryReceived(quint8(plain.at(0)), plain.mid(1));
+        return;
+    }
     const QJsonObject o = QJsonDocument::fromJson(plain).object();
     const QString type = o.value("t").toString();
 
@@ -154,6 +160,13 @@ void PeerConnection::sendEncrypted(const QJsonObject &obj)
     if (m_state != WaitHello && m_state != Ready)
         return;
     sendFrame(m_channel.encrypt(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+}
+
+void PeerConnection::sendBinary(quint8 type, const QByteArray &payload)
+{
+    if (m_state != Ready || type == quint8('{'))
+        return;
+    sendFrame(m_channel.encrypt(QByteArray(1, char(type)) + payload));
 }
 
 void PeerConnection::send(const QJsonObject &obj)

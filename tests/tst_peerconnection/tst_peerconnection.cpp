@@ -132,6 +132,19 @@ private slots:
         QTRY_COMPARE(received.count(), 4);
         QCOMPARE(received.at(3).at(0).toJsonObject(), chunk);
 
+        // Trames binaires (version 10), mêlées au JSON : contenu brut, sans base64
+        QSignalSpy binary(m_incoming, &PeerConnection::binaryReceived);
+        const QByteArray raw = QByteArray(36, '\x00') + Crypto::randomBytes(Files::ChunkBytes); // morceau maximal
+        out->sendBinary(Protocol::FileChunkFrame, raw);
+        out->send({{"t", "après"}});
+        out->sendBinary(quint8('{'), "refusé : se confondrait avec du JSON");
+        QTRY_COMPARE(received.count(), 5);
+        QCOMPARE(binary.count(), 1);
+        QCOMPARE(binary.first().at(0).value<quint8>(), Protocol::FileChunkFrame);
+        QCOMPARE(binary.first().at(1).toByteArray(), raw);
+        QCOMPARE(m_incoming->binaryFramesReceived(), 1);
+        QCOMPARE(received.last().at(0).toJsonObject().value("t").toString(), QString("après"));
+
         QSignalSpy back(out, &PeerConnection::received);
         m_incoming->send({{"t", "reply"}});
         QTRY_COMPARE(back.count(), 1);

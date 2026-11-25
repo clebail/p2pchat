@@ -39,6 +39,7 @@ private slots:
         QCOMPARE(Protocol::missingFeatures(4),
                  QStringList({"les citations", "les images", "les réactions", "les GIF animés", "les fichiers"}));
         QCOMPARE(Protocol::missingFeatures(7), QStringList({"les GIF animés", "les fichiers"}));
+        QCOMPARE(Protocol::missingFeatures(9), QStringList()); // la 10 n'apporte rien de visible
     }
 
     void base64()

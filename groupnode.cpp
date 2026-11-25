@@ -12,6 +12,7 @@
 #include <QRegularExpression>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QtEndian>
 
 #include <algorithm>
 
@@ -334,6 +335,9 @@ PeerConnection *GroupNode::newConnection(QTcpSocket *socket, bool outgoing)
                                  m_group.identitySeed(), this);
     connect(c, &PeerConnection::ready, this, [this, c] { setActive(c); });
     connect(c, &PeerConnection::received, this, [this, c](const QJsonObject &o) { onReceived(c, o); });
+    connect(c, &PeerConnection::binaryReceived, this,
+            [this, c](quint8 type, const QByteArray &payload) { onBinary(c, type, payload); });
+    c->setAdvertisedVersion(m_advertisedVersion);
     connect(c, &PeerConnection::closed, this, [this, c](const QString &reason) { onClosed(c, reason); });
     return c;
 }
@@ -1009,11 +1013,17 @@ void GroupNode::serveQueued()
         if (!it->isEmpty() && c->pendingBytes() < m_timing.fileBacklogBytes) {
             const QPair<QString, int> request = it->takeFirst();
             const QByteArray data = m_files->readChunk(request.first, request.second);
-            if (data.isEmpty())
+            if (data.isEmpty()) {
                 c->send({{"t", "file-none"}, {"f", request.first}});
-            else
+            } else if (c->peerVersion() >= Protocol::BinaryVersion) { // brut : un tiers de moins qu'en base64
+                char index[4];
+                qToBigEndian<quint32>(quint32(request.second), index);
+                c->sendBinary(Protocol::FileChunkFrame,
+                              QByteArray::fromHex(request.first.toLatin1()) + QByteArray(index, 4) + data);
+            } else {
                 c->send({{"t", "file-chunk"}, {"f", request.first}, {"i", request.second},
                          {"d", Protocol::toB64(data)}});
+            }
         }
         it = it->isEmpty() ? m_serveQueue.erase(it) : std::next(it);
     }
@@ -1021,14 +1031,26 @@ void GroupNode::serveQueued()
 
 void GroupNode::onFileChunk(PeerConnection *c, const QJsonObject &o)
 {
+    handleChunk(c, o.value("f").toString(), o.value("i").toInt(-1), Protocol::fromB64(o.value("d")));
+}
+
+void GroupNode::onBinary(PeerConnection *c, quint8 type, const QByteArray &payload)
+{
+    if (type != Protocol::FileChunkFrame || payload.size() < 36)
+        return; // type inconnu (version plus récente) : ignoré
+    ++m_binaryChunks;
+    const QString id = QString::fromLatin1(payload.left(32).toHex());
+    const int index = int(qFromBigEndian<quint32>(payload.constData() + 32));
+    handleChunk(c, id, index, payload.mid(36));
+}
+
+void GroupNode::handleChunk(PeerConnection *c, const QString &id, int index, const QByteArray &data)
+{
     const QString peer = m_active.key(c);
-    const QString id = o.value("f").toString();
-    const int index = o.value("i").toInt(-1);
     const auto it = m_downloads.find(id);
     if (peer.isEmpty() || it == m_downloads.end() || it->source != peer || it->chunk != index)
         return; // pas demandé (ou plus attendu)
     it->chunk = -1;
-    const QByteArray data = Protocol::fromB64(o.value("d"));
     switch (data.size() > Files::ChunkBytes ? Files::FileStore::ChunkResult::Rejected
                                             : m_files->writeChunk(id, index, data)) {
     case Files::FileStore::ChunkResult::Accepted:

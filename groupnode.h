@@ -135,6 +135,8 @@ public:
     qint64 nextTry(const QString &onion) const { return m_backoff.value(onion).nextTry; }
     QHash<QString, QString> relayedOnline() const; // onion -> onion du membre qui le voit en ligne
     QStringList typingMembers() const;             // onions des membres en train d'écrire
+    int binaryChunksReceived() const { return m_binaryChunks; } // morceaux reçus en trame binaire (tests)
+    void setAdvertisedVersion(int version) { m_advertisedVersion = version; } // tests : version précédente
 
 signals:
     // À afficher : message chargé, reçu (direct ou synchronisation) ou envoyé
@@ -191,6 +193,8 @@ private:
     void onFileHave(PeerConnection *c, const QJsonObject &o);
     void onFileWant(PeerConnection *c, const QJsonObject &o);
     void onFileChunk(PeerConnection *c, const QJsonObject &o);
+    void onBinary(PeerConnection *c, quint8 type, const QByteArray &payload);
+    void handleChunk(PeerConnection *c, const QString &id, int index, const QByteArray &data);
     void onFileNone(PeerConnection *c, const QJsonObject &o);
     void pumpDownloads();
     void serveQueued();
@@ -249,6 +253,8 @@ private:
     QHash<QString, QList<QPair<QString, int>>> m_serveQueue; // membre -> morceaux qu'il nous a demandés
     QTimer m_fileTimer;
     qint64 m_lastCleanup = 0;
+    int m_binaryChunks = 0;
+    int m_advertisedVersion = Protocol::Version;
 
     QTimer m_retryTimer, m_syncTimer, m_presenceTimer, m_typingTimer, m_wakeTimer;
 };

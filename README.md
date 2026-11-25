@@ -70,7 +70,7 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
   image. La bulle montre le type, le nom, la taille et l'état. Les fichiers de 2 Mo au plus sont téléchargés
   automatiquement, les autres d'un clic sur « Télécharger » ; un téléchargement interrompu reprend tout seul.
   N'importe quel membre qui a le fichier peut le fournir (chaque morceau est vérifié grâce à l'annonce signée
-  de l'auteur). Clic sur un fichier reçu : *Ouvrir* (avertissement avant un programme ou un script) ; clic
+  de l'auteur ; ils voyagent en trames binaires, sans base64). Clic sur un fichier reçu : *Ouvrir* (avertissement avant un programme ou un script) ; clic
   droit : *Enregistrer sous…*, *Annuler le téléchargement*. Fichiers conservés 30 jours, effacés avec la
   conversation.
 - **Images** : bouton 🖼 à gauche de la zone de saisie, glisser-déposer d'un fichier ou d'une image n'importe où
