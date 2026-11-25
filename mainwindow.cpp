@@ -559,6 +559,8 @@ void MainWindow::updateStatus()
                                                        : tr("hors ligne");
         if (relayed.contains(m.onion) && m_attempts.contains(m.onion))
             state += tr(", connexion directe…");
+        if (const PeerConnection *c = m_active.value(m.onion); c && c->peerVersion() < Protocol::Version)
+            state += tr(" — ancienne version de P2P Chat (ne voit pas les citations)");
         if (!m_active.contains(m.onion) && m_lastError.contains(m.onion))
             state += " — " + m_lastError.value(m.onion);
         if (!m_active.contains(m.onion) && !m_attempts.contains(m.onion)
@@ -598,7 +600,7 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
     e.mentionsMe = !mine && (Mentions::mentions(found, m_group.nickname()) || repliesToMe(msg));
     if (trust == ChatEntry::Verified) { // identifiants et citations : seulement pour les messages authentiques
         e.id = id;
-        e.replyTo = Protocol::Message::replyTo(msg);
+        e.replyTo = replyTo(msg, mine);
     }
     m_chat->addMessage(e);
     if (!id.isEmpty() && trust == ChatEntry::Verified) { // seuls les messages authentiques sont resynchronisés
@@ -635,9 +637,16 @@ bool MainWindow::mentionsMe(const QJsonObject &msg) const
     return Mentions::mentions(Mentions::find(msg.value("x").toString(), mentionNames()), m_group.nickname());
 }
 
+QString MainWindow::replyTo(const QJsonObject &msg, bool mine) const
+{
+    // Comme verifyMessage : au chargement de l'historique, notre adresse onion n'est pas encore connue
+    const QByteArray key = mine ? m_group.identityKey() : m_group.pinnedKey(msg.value("a").toString());
+    return Protocol::Message::verifiedReplyTo(msg, key);
+}
+
 bool MainWindow::repliesToMe(const QJsonObject &msg) const
 {
-    const QString quoted = Protocol::Message::replyTo(msg);
+    const QString quoted = replyTo(msg, false); // appelé pour les messages des autres
     return !quoted.isEmpty() && m_store.value(quoted).value("mine").toBool();
 }
 

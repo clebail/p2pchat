@@ -1,5 +1,6 @@
 #include "crypto.h"
 #include "peerconnection.h"
+#include "protocol.h"
 
 #include <QNetworkProxy>
 #include <QSignalSpy>
@@ -101,6 +102,8 @@ private slots:
         QCOMPARE(m_incoming->peerOnion(), a.onion);
         QCOMPARE(m_incoming->peerNickname(), a.nick);
         QCOMPARE(m_incoming->peerIdentityKey(), Ed25519::publicKey(a.seed));
+        QCOMPARE(out->peerVersion(), Protocol::Version); // annoncée dans le hello
+        QCOMPARE(m_incoming->peerVersion(), Protocol::Version);
 
         QSignalSpy received(m_incoming, &PeerConnection::received);
         out->send({{"t", "msg"}, {"x", "bonjour"}});

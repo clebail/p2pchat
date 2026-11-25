@@ -53,6 +53,7 @@ private:
     QStringList mentionNames() const;
     bool mentionsMe(const QJsonObject &msg) const;
     bool repliesToMe(const QJsonObject &msg) const; // réponse à l'un de nos messages
+    QString replyTo(const QJsonObject &msg, bool mine) const; // message cité, si la citation est bien signée
     QString notificationTitle(const QJsonObject &msg) const;
     // Réponse avec citation : bandeau au-dessus de la zone de saisie
     void startReply(const QString &id, const QString &author, const QString &text);

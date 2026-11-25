@@ -50,7 +50,9 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
 - Clic droit sur un message → copier, ou **répondre** : un bandeau « Réponse à … » apparaît au-dessus de la zone
   de saisie (✕ ou Échap pour annuler). La réponse affiche une citation du message d'origine ; un clic dessus y
-  ramène. Le message cité fait partie de ce que l'auteur signe : personne ne peut le changer en relayant. Une
+  ramène. La citation porte sa propre signature de l'auteur : personne ne peut la changer ni en ajouter une
+  en relayant. Les versions précédentes de P2P Chat affichent les réponses sans la citation (et les relaient
+  intactes) ; l'infobulle de la ligne d'état signale les membres qui utilisent une ancienne version. Une
   réponse à l'un de vos messages est mise en avant et notifiée (« Alice vous a répondu »).
 - **Mentions** : taper `@` propose les pseudos des membres (flèches puis Entrée ou Tab), `@tous` pour tout le
   monde. Liste fermée, Tab complète comme dans un terminal (le pseudo s'il est seul possible, sinon la liste). Les mentions apparaissent en gras ; un message qui vous mentionne a une bulle jaune, et sa notification

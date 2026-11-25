@@ -16,6 +16,7 @@ class QTcpSocket;
 //      {"t":"hello"} puis {"t":"members"}, {"t":"msg"}, {"t":"ping"}
 //   4. le hello contient la clé d'identité Ed25519 du poste et sa signature de
 //      (clé éphémère émise, clé éphémère reçue, adresse onion annoncée)
+//      ainsi que la version du protocole ("v", cf. Protocol::Version)
 // Un pair sans le bon secret échoue au premier message chiffré ; un membre qui
 // annonce l'adresse d'un autre ne peut pas produire la signature attendue.
 class PeerConnection : public QObject
@@ -32,6 +33,7 @@ public:
     QString peerNickname() const { return m_peerNick; }
     QString peerOnion() const { return m_peerOnion; }
     QByteArray peerIdentityKey() const { return m_peerKey; } // vérifiée par la signature du hello
+    int peerVersion() const { return m_peerVersion; }        // version du protocole annoncée dans le hello
     void send(const QJsonObject &obj);
     void close();
     qint64 pendingBytes() const; // en attente d'envoi (Tor plus lent que l'émetteur)
@@ -57,6 +59,7 @@ private:
     QString m_nick, m_ownOnion, m_peerNick, m_peerOnion;
     QByteArray m_identitySeed, m_peerKey, m_ourEphemeral, m_peerEphemeral;
     State m_state = Connecting;
+    int m_peerVersion = 0;
     KeyExchange m_kx;
     SecureChannel m_channel;
     QByteArray m_buffer;

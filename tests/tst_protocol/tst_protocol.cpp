@@ -94,29 +94,41 @@ private slots:
     {
         const QByteArray seed = Ed25519::generateSeed();
         const QByteArray key = Ed25519::publicKey(seed);
-        const QJsonObject m = Message::create(seed, QString(56, 'b') + ".onion", "Bob", "d'accord", 5, "id-cite");
-        QCOMPARE(Message::replyTo(m), QString("id-cite"));
+        const QString onion = QString(56, 'b') + ".onion";
+        const QJsonObject m = Message::create(seed, onion, "Bob", "d'accord", 5, "id-cite");
         QVERIFY(Message::verify(m, key));
+        QCOMPARE(Message::verifiedReplyTo(m, key), QString("id-cite"));
+        QVERIFY(Message::verifiedReplyTo(m, Ed25519::publicKey(Ed25519::generateSeed())).isEmpty());
 
-        // Un relais ne peut ni changer, ni retirer, ni ajouter le message cité
+        // Un relais ne peut ni changer la citation ni en ajouter une
         QJsonObject changed = m;
         changed["r"] = "autre";
-        QVERIFY(!Message::verify(changed, key));
+        QVERIFY(Message::verify(changed, key)); // le message reste authentique…
+        QVERIFY(Message::verifiedReplyTo(changed, key).isEmpty()); // …mais la citation est ignorée
+        QJsonObject added = Message::create(seed, onion, "Bob", "x", 5);
+        added["r"] = "id-cite";
+        added["sr"] = m.value("sr"); // signature d'un autre message
+        QVERIFY(Message::verifiedReplyTo(added, key).isEmpty());
+        // La retirer est possible : le message redevient un message ordinaire
         QJsonObject removed = m;
         removed.remove("r");
-        QVERIFY(!Message::verify(removed, key));
-        QJsonObject added = Message::create(seed, QString(56, 'b') + ".onion", "Bob", "x", 5);
-        added["r"] = "id-cite";
-        QVERIFY(!Message::verify(added, key));
+        QVERIFY(Message::verify(removed, key));
+        QVERIFY(Message::verifiedReplyTo(removed, key).isEmpty());
     }
 
-    void messageWithoutReplyKeepsLegacySignature()
+    void replyIsReadableByPreviousVersions()
     {
-        // Les versions précédentes signaient exactement ces six parties : elles vérifient toujours nos messages
-        const QJsonObject m{{"id", "i"}, {"a", "a"}, {"n", "n"}, {"x", "x"}, {"ts", 42.0}};
-        QCOMPARE(Message::signingBytes(m), Crypto::pack({"p2pchat-msg-v1", "i", "a", "n", "x", "42"}));
-        QVERIFY(Message::replyTo(m).isEmpty());
-        QCOMPARE(Message::create(Ed25519::generateSeed(), "a", "n", "x", 1, QString(100, 'r')).value("r").toString().size(),
+        // Les versions précédentes vérifient "s" sur ces six parties, sans regarder "r" ni "sr"
+        const QByteArray seed = Ed25519::generateSeed();
+        const QJsonObject m = Message::create(seed, "a", "n", "x", 42, "cite");
+        const QByteArray legacy = Crypto::pack({"p2pchat-msg-v1", Message::id(m).toUtf8(), "a", "n", "x", "42"});
+        QCOMPARE(Message::signingBytes(m), legacy);
+        QVERIFY(Ed25519::verify(Ed25519::publicKey(seed), legacy, fromB64(m.value("s"))));
+
+        const QJsonObject plain{{"id", "i"}, {"a", "a"}, {"n", "n"}, {"x", "x"}, {"ts", 42.0}};
+        QVERIFY(!Message::create(seed, "a", "n", "x", 1).contains("sr"));
+        QVERIFY(Message::verifiedReplyTo(plain, Ed25519::publicKey(seed)).isEmpty());
+        QCOMPARE(Message::create(seed, "a", "n", "x", 1, QString(100, 'r')).value("r").toString().size(),
                  Message::MaxIdLength);
     }
 

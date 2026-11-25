@@ -8,6 +8,7 @@
 namespace {
 constexpr auto B64Options = QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals;
 const QByteArray MessageContext("p2pchat-msg-v1");
+const QByteArray ReplyContext("p2pchat-reply-v1");
 } // namespace
 
 bool Protocol::isValidOnion(const QString &s)
@@ -33,15 +34,16 @@ QByteArray Protocol::fromB64(const QJsonValue &v)
 
 QByteArray Protocol::Message::signingBytes(const QJsonObject &m)
 {
-    QList<QByteArray> parts{MessageContext,
-                            m.value("id").toString().toUtf8(),
-                            m.value("a").toString().toUtf8(),
-                            m.value("n").toString().toUtf8(),
-                            m.value("x").toString().toUtf8(),
-                            QByteArray::number(timestamp(m))};
-    if (m.contains("r"))
-        parts << m.value("r").toString().toUtf8();
-    return Crypto::pack(parts);
+    return Crypto::pack({MessageContext, m.value("id").toString().toUtf8(), m.value("a").toString().toUtf8(),
+                         m.value("n").toString().toUtf8(), m.value("x").toString().toUtf8(),
+                         QByteArray::number(timestamp(m))});
+}
+
+QByteArray Protocol::Message::replySigningBytes(const QJsonObject &m)
+{
+    return Crypto::pack({ReplyContext, m.value("id").toString().toUtf8(), m.value("a").toString().toUtf8(),
+                         m.value("n").toString().toUtf8(), m.value("x").toString().toUtf8(),
+                         QByteArray::number(timestamp(m)), m.value("r").toString().toUtf8()});
 }
 
 QJsonObject Protocol::Message::create(const QByteArray &identitySeed, const QString &authorOnion,
@@ -54,9 +56,11 @@ QJsonObject Protocol::Message::create(const QByteArray &identitySeed, const QStr
                   {"n", nick},
                   {"x", text},
                   {"ts", double(timestampMs)}};
-    if (!replyTo.isEmpty())
-        m.insert("r", replyTo.left(MaxIdLength));
     m.insert("s", toB64(Ed25519::sign(identitySeed, signingBytes(m))));
+    if (!replyTo.isEmpty()) {
+        m.insert("r", replyTo.left(MaxIdLength));
+        m.insert("sr", toB64(Ed25519::sign(identitySeed, replySigningBytes(m))));
+    }
     return m;
 }
 
@@ -75,7 +79,10 @@ qint64 Protocol::Message::timestamp(const QJsonObject &m)
     return qint64(m.value("ts").toDouble());
 }
 
-QString Protocol::Message::replyTo(const QJsonObject &m)
+QString Protocol::Message::verifiedReplyTo(const QJsonObject &m, const QByteArray &authorKey)
 {
-    return m.value("r").toString().left(MaxIdLength);
+    const QString r = m.value("r").toString();
+    if (r.isEmpty() || r.size() > MaxIdLength || !m.contains("sr"))
+        return {};
+    return Ed25519::verify(authorKey, replySigningBytes(m), fromB64(m.value("sr"))) ? r : QString();
 }

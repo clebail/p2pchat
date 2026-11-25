@@ -96,7 +96,7 @@ void PeerConnection::handleFrame(const QByteArray &frame)
         sendEncrypted({{"t", "hello"},
                        {"n", m_nick},
                        {"o", m_ownOnion},
-                       {"v", 4},
+                       {"v", Protocol::Version},
                        {"k", Protocol::toB64(Ed25519::publicKey(m_identitySeed))},
                        {"s", Protocol::toB64(proof)}});
         return;
@@ -121,7 +121,8 @@ void PeerConnection::handleFrame(const QByteArray &frame)
             m_peerNick = tr("Correspondant");
         m_peerOnion = o.value("o").toString().left(70);
         const QByteArray key = Protocol::fromB64(o.value("k")), proof = Protocol::fromB64(o.value("s"));
-        if (o.value("v").toInt() < 4) {
+        m_peerVersion = o.value("v").toInt();
+        if (m_peerVersion < Protocol::MinVersion) {
             fail(tr("le correspondant utilise une ancienne version de P2P Chat"));
             return;
         }
