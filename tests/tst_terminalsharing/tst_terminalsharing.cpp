@@ -91,7 +91,7 @@ private slots:
         QVERIFY(m_a && m_b);
         m_a->node->createGroup();
         m_a->node->setOnline(m_a->onion);
-        m_b->node->join({m_a->store->secret(), m_a->onion, m_a->nick, m_a->store->identityKey()});
+        m_b->node->join({m_a->store->secret(), m_a->onion, m_a->nick, m_a->store->identityKey(), {}});
         m_b->node->setOnline(m_b->onion);
         QTRY_VERIFY(m_a->node->isConnected(m_b->onion) && m_b->node->isConnected(m_a->onion));
     }

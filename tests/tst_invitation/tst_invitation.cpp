@@ -10,7 +10,7 @@ const QString Onion = QString(56, 'a') + ".onion";
 
 Invitation sample()
 {
-    return {QByteArray(16, '\x42'), Onion, "Alice", QByteArray(32, '\x07')};
+    return {QByteArray(16, '\x42'), Onion, "Alice", QByteArray(32, '\x07'), {}};
 }
 
 // Code construit à la main, pour fabriquer des invitations invalides
@@ -110,6 +110,16 @@ private slots:
         QFETCH(QJsonObject, obj);
         QFETCH(bool, valid);
         QCOMPARE(Invitation::fromCode(codeFrom(obj)).has_value(), valid);
+    }
+
+    void groupId()
+    {
+        Invitation inv = sample();
+        QVERIFY(Invitation::fromCode(inv.toCode())->groupId.isEmpty()); // groupe sans gouvernance
+        inv.groupId = QString(64, 'c');
+        QCOMPARE(Invitation::fromCode(inv.toCode())->groupId, QString(64, 'c'));
+        inv.groupId = "pas une empreinte";
+        QVERIFY(Invitation::fromCode(inv.toCode())->groupId.isEmpty()); // ignoré, le code reste valable
     }
 
     void truncatesNickname()

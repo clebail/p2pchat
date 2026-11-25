@@ -23,6 +23,7 @@ private:
     {
         QString onion, nick;
         QByteArray psk, seed = Ed25519::generateSeed();
+        QList<QByteArray> secrets; // plusieurs secrets (groupe renouvelé) : le plus récent d'abord
     };
 
     QTcpServer m_server;
@@ -36,6 +37,7 @@ private:
         auto *s = new QTcpSocket;
         s->setProxy(QNetworkProxy::NoProxy);
         auto *c = new PeerConnection(s, true, side.psk, side.nick, side.onion, side.seed, this);
+        c->setSecrets(side.secrets);
         s->connectToHost(QHostAddress::LocalHost, m_server.serverPort());
         return c;
     }
@@ -67,6 +69,7 @@ private slots:
             while (QTcpSocket *s = m_server.nextPendingConnection()) {
                 m_incoming = new PeerConnection(s, false, m_serverSide.psk, m_serverSide.nick, m_serverSide.onion,
                                                 m_serverSide.seed, this);
+                m_incoming->setSecrets(m_serverSide.secrets);
                 m_inReady = std::make_unique<QSignalSpy>(m_incoming, &PeerConnection::ready);
                 m_inClosed = std::make_unique<QSignalSpy>(m_incoming, &PeerConnection::closed);
             }
@@ -171,6 +174,60 @@ private slots:
         QCOMPARE(outReady.count(), 0);
         QCOMPARE(m_inReady->count(), 0);
         delete out;
+    }
+
+    void agreesOnCommonSecret_data()
+    {
+        // Le groupe a changé de secret : chacun connaît une partie des secrets, du plus récent au plus ancien
+        QTest::addColumn<QList<QByteArray>>("client");
+        QTest::addColumn<QList<QByteArray>>("server");
+        QTest::addColumn<int>("clientIndex"); // secret retenu de chaque côté (-1 : pas de secret commun)
+        QTest::addColumn<int>("serverIndex");
+        const QByteArray s1("secret 1 ......."), s2("secret 2 ......."), s3("secret 3 .......");
+        QTest::newRow("absent revenu (ancien secret seul)") << QList<QByteArray>{s1} << QList<QByteArray>{s2, s1} << 0 << 1;
+        QTest::newRow("absent qui reçoit") << QList<QByteArray>{s2, s1} << QList<QByteArray>{s1} << 1 << 0;
+        QTest::newRow("tous deux à jour") << QList<QByteArray>{s2, s1} << QList<QByteArray>{s2, s1} << 0 << 0;
+        QTest::newRow("deux renouvellements") << QList<QByteArray>{s3, s2} << QList<QByteArray>{s2, s1} << 1 << 0;
+        QTest::newRow("rien en commun") << QList<QByteArray>{s3} << QList<QByteArray>{s2, s1} << -1 << -1;
+        QTest::newRow("rien en commun, étiquettes des deux côtés") << QList<QByteArray>{s3, s2} << QList<QByteArray>{s1}
+                                                                   << -1 << -1;
+    }
+
+    void agreesOnCommonSecret()
+    {
+        QFETCH(QList<QByteArray>, client);
+        QFETCH(QList<QByteArray>, server);
+        QFETCH(int, clientIndex);
+        QFETCH(int, serverIndex);
+        Side a = side('a', client.first());
+        a.secrets = client;
+        m_serverSide.psk = server.first();
+        m_serverSide.secrets = server;
+        PeerConnection *out = dial(a);
+        QSignalSpy outReady(out, &PeerConnection::ready), outClosed(out, &PeerConnection::closed);
+        QTRY_VERIFY(m_incoming);
+        if (clientIndex < 0) {
+            QTRY_COMPARE(m_inClosed->count(), 1);
+            QTRY_COMPARE(outClosed.count(), 1);
+            QCOMPARE(outReady.count(), 0);
+        } else {
+            QTRY_COMPARE(outReady.count(), 1);
+            QTRY_COMPARE(m_inReady->count(), 1);
+            QCOMPARE(out->secretIndex(), clientIndex);
+            QCOMPARE(m_incoming->secretIndex(), serverIndex);
+            QSignalSpy received(m_incoming, &PeerConnection::received);
+            out->send({{"t", "msg"}, {"x", "ok"}});
+            QTRY_COMPARE(received.count(), 1);
+        }
+        delete out;
+    }
+
+    void secretTagsAreUnlinkable()
+    {
+        const QByteArray secret("secret du groupe");
+        QCOMPARE(PeerConnection::secretTag(secret, "clé 1").size(), 8);
+        QVERIFY(PeerConnection::secretTag(secret, "clé 1") != PeerConnection::secretTag(secret, "clé 2"));
+        QVERIFY(PeerConnection::secretTag(secret, "clé 1") != PeerConnection::secretTag("autre", "clé 1"));
     }
 
     void rejectsNonP2PChatPeer()

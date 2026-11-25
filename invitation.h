@@ -11,6 +11,7 @@ struct Invitation
     QString onion;
     QString nickname;
     QByteArray identityKey; // clé publique Ed25519 de l'invitant
+    QString groupId;        // identifiant du groupe (cf. governance.h), vide pour un groupe sans gouvernance
 
     QString toCode() const;
     static std::optional<Invitation> fromCode(const QString &code);

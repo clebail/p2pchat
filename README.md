@@ -282,6 +282,7 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 | `links.*` | Détection des liens dans le texte des messages |
 | `mentions.*`, `mentioncompleter.*` | Détection des « @pseudo », autocomplétion dans la zone de saisie |
 | `groupstore.*` | État persistant : pseudo, identité, secret, membres, trousseau des clés |
+| `governance.*` | Gouvernance du groupe : administrateurs, exclusions, secret en vigueur (enregistrements signés) |
 | `history.*` | Historique local, inventaire et lots de synchronisation |
 | `connectionpolicy.*` | Espacement des appels, appels croisés, présence relayée |
 | `core.pri` | Liste des fichiers ci-dessus (sans interface), partagée par l'application et les tests |

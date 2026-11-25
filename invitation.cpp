@@ -11,11 +11,13 @@ static constexpr auto B64 = QByteArray::Base64UrlEncoding | QByteArray::OmitTrai
 
 QString Invitation::toCode() const
 {
-    const QJsonObject o{{"v", 3},
+    QJsonObject o{{"v", 3},
                         {"k", Protocol::toB64(secret)},
                         {"o", onion},
                         {"n", nickname},
                         {"i", Protocol::toB64(identityKey)}};
+    if (!groupId.isEmpty())
+        o.insert("g", groupId); // ignoré par les versions précédentes
     return Prefix + QString::fromLatin1(QJsonDocument(o).toJson(QJsonDocument::Compact).toBase64(B64));
 }
 
@@ -42,6 +44,9 @@ std::optional<Invitation> Invitation::fromCode(const QString &code)
     inv.onion = o.value("o").toString();
     inv.nickname = o.value("n").toString().left(Protocol::MaxNickLength);
     inv.identityKey = Protocol::fromB64(o.value("i"));
+    static const QRegularExpression groupRe(QStringLiteral("^[0-9a-f]{64}$"));
+    if (groupRe.match(o.value("g").toString()).hasMatch())
+        inv.groupId = o.value("g").toString();
     if (inv.secret.size() < 16 || inv.identityKey.size() != 32 || !Protocol::isValidOnion(inv.onion))
         return std::nullopt;
     return inv;

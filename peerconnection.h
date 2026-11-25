@@ -17,6 +17,9 @@ class QTcpSocket;
 //   4. le hello contient la clé d'identité Ed25519 du poste et sa signature de
 //      (clé éphémère émise, clé éphémère reçue, adresse onion annoncée)
 //      ainsi que la version du protocole ("v", cf. Protocol::Version)
+//   1 bis. plusieurs secrets (le groupe en a changé, cf. governance.h) : la trame de clé est suivie d'une
+//      étiquette de 8 octets par secret, et les deux côtés retiennent le plus récent qu'ils ont en commun.
+//      Avec un seul secret, la trame est celle des versions précédentes.
 //   5. une trame chiffrée qui ne commence pas par « { » est binaire (version 10) : son premier octet en
 //      donne le type (cf. sendBinary), le reste est brut (pas de base64)
 // Un pair sans le bon secret échoue au premier message chiffré ; un membre qui
@@ -37,6 +40,10 @@ public:
     QByteArray peerIdentityKey() const { return m_peerKey; } // vérifiée par la signature du hello
     int peerVersion() const { return m_peerVersion; }        // version du protocole annoncée dans le hello
     void send(const QJsonObject &obj);
+    // Secrets acceptés, du plus récent au plus ancien (à régler avant la connexion)
+    void setSecrets(const QList<QByteArray> &secrets);
+    int secretIndex() const { return m_pskIndex; } // secret retenu : 0 = le plus récent, -1 = pas encore
+    static QByteArray secretTag(const QByteArray &secret, const QByteArray &ephemeralPublic);
     // Trame binaire : type (premier octet, jamais « { ») puis contenu brut. Seulement si peerVersion() >= 10.
     void sendBinary(quint8 type, const QByteArray &payload);
     int binaryFramesReceived() const { return m_binaryReceived; }
@@ -59,11 +66,15 @@ private:
     void handleFrame(const QByteArray &frame);
     void sendFrame(const QByteArray &payload);
     void sendEncrypted(const QJsonObject &obj);
+    void sendHello();
     void fail(const QString &reason);
 
     QTcpSocket *m_socket;
     bool m_outgoing;
-    QByteArray m_psk;
+    QList<QByteArray> m_psks;
+    int m_pskIndex = -1;
+    QByteArray m_dh;
+    bool m_waitPeerHello = false; // secret à deviner d'après le hello du correspondant (sans étiquettes)
     QString m_nick, m_ownOnion, m_peerNick, m_peerOnion;
     QByteArray m_identitySeed, m_peerKey, m_ourEphemeral, m_peerEphemeral;
     State m_state = Connecting;

@@ -64,6 +64,58 @@ void GroupStore::leaveGroup()
     m_settings.remove("group");
 }
 
+void GroupStore::retireSecret(const QByteArray &secret, qint64 untilMs)
+{
+    QJsonArray previous = QJsonDocument::fromJson(m_settings.value("group/previousSecrets").toByteArray()).array();
+    previous.prepend(QJsonObject{{"k", Protocol::toB64(secret)}, {"until", double(untilMs)}});
+    while (previous.size() > 3) // le secret actuel et trois précédents au plus
+        previous.removeLast();
+    m_settings.setValue("group/previousSecrets", QJsonDocument(previous).toJson(QJsonDocument::Compact));
+}
+
+QList<QByteArray> GroupStore::acceptedSecrets(qint64 nowMs) const
+{
+    QList<QByteArray> out;
+    if (!secret().isEmpty())
+        out << secret();
+    const QJsonArray previous = QJsonDocument::fromJson(m_settings.value("group/previousSecrets").toByteArray()).array();
+    for (const QJsonValue &v : previous) {
+        const QJsonObject o = v.toObject();
+        const QByteArray k = Protocol::fromB64(o.value("k"));
+        if (!k.isEmpty() && qint64(o.value("until").toDouble()) > nowMs && !out.contains(k))
+            out << k;
+    }
+    return out;
+}
+
+QList<QJsonObject> GroupStore::governanceRecords() const
+{
+    QList<QJsonObject> out;
+    for (const QJsonValue &v : QJsonDocument::fromJson(m_settings.value("group/records").toByteArray()).array())
+        out << v.toObject();
+    return out;
+}
+
+void GroupStore::appendGovernanceRecord(const QJsonObject &record)
+{
+    QJsonArray records = QJsonDocument::fromJson(m_settings.value("group/records").toByteArray()).array();
+    records.append(record);
+    m_settings.setValue("group/records", QJsonDocument(records).toJson(QJsonDocument::Compact));
+}
+
+QString GroupStore::expectedGroupId() const
+{
+    return m_settings.value("group/expectedId").toString();
+}
+
+void GroupStore::setExpectedGroupId(const QString &id)
+{
+    if (id.isEmpty())
+        m_settings.remove("group/expectedId");
+    else
+        m_settings.setValue("group/expectedId", id);
+}
+
 void GroupStore::ensureIdentity()
 {
     if (identitySeed().size() != 32)

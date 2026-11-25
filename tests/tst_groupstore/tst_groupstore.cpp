@@ -168,6 +168,42 @@ private slots:
         QVERIFY(!m_store->isVerified(a));
     }
 
+    void previousSecrets()
+    {
+        QVERIFY(m_store->acceptedSecrets(0).isEmpty());
+        m_store->setSecret("s1");
+        QCOMPARE(m_store->acceptedSecrets(0), QList<QByteArray>({"s1"}));
+        // Renouvellement : l'ancien reste accepté jusqu'à sa date
+        m_store->retireSecret("s1", 1000);
+        m_store->setSecret("s2");
+        m_store->retireSecret("s2", 2000);
+        m_store->setSecret("s3");
+        reopen();
+        QCOMPARE(m_store->acceptedSecrets(500), QList<QByteArray>({"s3", "s2", "s1"})); // du plus récent
+        QCOMPARE(m_store->acceptedSecrets(1500), QList<QByteArray>({"s3", "s2"}));
+        QCOMPARE(m_store->acceptedSecrets(2500), QList<QByteArray>({"s3"}));
+        for (int i = 0; i < 5; ++i)
+            m_store->retireSecret(QByteArray::number(i), 10000);
+        QCOMPARE(m_store->acceptedSecrets(0).size(), 4); // l'actuel et trois précédents au plus
+        m_store->leaveGroup();
+        QVERIFY(m_store->acceptedSecrets(0).isEmpty());
+    }
+
+    void governanceRecordsAndGroupId()
+    {
+        QVERIFY(m_store->governanceRecords().isEmpty());
+        m_store->appendGovernanceRecord({{"seq", 0}});
+        m_store->appendGovernanceRecord({{"seq", 1}});
+        m_store->setExpectedGroupId(QString(64, 'a'));
+        reopen();
+        QCOMPARE(m_store->governanceRecords().size(), 2);
+        QCOMPARE(m_store->governanceRecords().at(1).value("seq").toInt(), 1);
+        QCOMPARE(m_store->expectedGroupId(), QString(64, 'a'));
+        m_store->leaveGroup(); // la gouvernance appartient au groupe quitté
+        QVERIFY(m_store->governanceRecords().isEmpty());
+        QVERIFY(m_store->expectedGroupId().isEmpty());
+    }
+
     void sharedHistoryMakesFirstSeenZero()
     {
         m_store->setShareHistoryUntil(1000);

@@ -107,7 +107,7 @@ private:
 
     static Invitation invitation(Peer &p)
     {
-        return {p.store->secret(), p.onion, p.nick, p.store->identityKey()};
+        return {p.store->secret(), p.onion, p.nick, p.store->identityKey(), {}};
     }
 
     static bool linked(Peer &a, Peer &b)

@@ -15,6 +15,7 @@ SUBDIRS += \
     tst_safetynumber \
     tst_singleinstance \
     tst_filestore \
+    tst_governance \
     tst_groupnode \
     tst_groupstore \
     tst_history \

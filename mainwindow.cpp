@@ -957,7 +957,7 @@ void MainWindow::invite()
 void MainWindow::showInvitation()
 {
     const QString code =
-        Invitation{m_group.secret(), m_node->ownOnion(), m_group.nickname(), m_group.identityKey()}.toCode();
+        Invitation{m_group.secret(), m_node->ownOnion(), m_group.nickname(), m_group.identityKey(), {}}.toCode();
 
     QDialog dlg(this);
     dlg.setWindowTitle(tr("Code d'invitation"));

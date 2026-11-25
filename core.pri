@@ -9,6 +9,7 @@ SOURCES += \
     $$PWD/connectionpolicy.cpp \
     $$PWD/crypto.cpp \
     $$PWD/filestore.cpp \
+    $$PWD/governance.cpp \
     $$PWD/groupnode.cpp \
     $$PWD/groupstore.cpp \
     $$PWD/history.cpp \
@@ -28,6 +29,7 @@ HEADERS += \
     $$PWD/connectionpolicy.h \
     $$PWD/crypto.h \
     $$PWD/filestore.h \
+    $$PWD/governance.h \
     $$PWD/groupnode.h \
     $$PWD/groupstore.h \
     $$PWD/history.h \

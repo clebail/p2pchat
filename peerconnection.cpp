@@ -3,6 +3,7 @@
 #include "protocol.h"
 
 #include <QDebug>
+#include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QTcpSocket>
 #include <QtEndian>
@@ -11,10 +12,13 @@ static const QByteArray Magic("P2PCHAT1");
 static constexpr quint32 MaxFrame = 256 * 1024;
 
 static const QByteArray HelloContext("p2pchat-hello-v4");
+static const QByteArray TagContext("p2pchat-secret-tag-v1");
+static constexpr int TagBytes = 8;
+static constexpr int MaxSecrets = 4; // le secret actuel et quelques précédents
 
 PeerConnection::PeerConnection(QTcpSocket *socket, bool outgoing, const QByteArray &psk, const QString &nickname,
                                const QString &ownOnion, const QByteArray &identitySeed, QObject *parent)
-    : QObject(parent), m_socket(socket), m_outgoing(outgoing), m_psk(psk), m_nick(nickname), m_ownOnion(ownOnion),
+    : QObject(parent), m_socket(socket), m_outgoing(outgoing), m_psks{psk}, m_nick(nickname), m_ownOnion(ownOnion),
       m_identitySeed(identitySeed), m_advertisedVersion(Protocol::Version)
 {
     socket->setParent(this);
@@ -54,7 +58,36 @@ void PeerConnection::onConnected()
     qInfo().noquote() << "[peer]" << (m_outgoing ? "sortante" : "entrante") << "connectée, envoi de la clé";
     m_state = WaitPeerKey;
     m_handshakeTimer.start(30000);
-    sendFrame(Magic + m_kx.publicKey());
+    QByteArray frame = Magic + m_kx.publicKey();
+    if (m_psks.size() > 1) // sinon : trame des versions précédentes
+        for (const QByteArray &psk : std::as_const(m_psks))
+            frame += secretTag(psk, m_kx.publicKey());
+    sendFrame(frame);
+}
+
+void PeerConnection::setSecrets(const QList<QByteArray> &secrets)
+{
+    if (!secrets.isEmpty())
+        m_psks = secrets.mid(0, MaxSecrets);
+}
+
+QByteArray PeerConnection::secretTag(const QByteArray &secret, const QByteArray &ephemeralPublic)
+{
+    // Lié à la clé éphémère : d'une connexion à l'autre, rien ne permet de relier les étiquettes
+    return QCryptographicHash::hash(TagContext + secret + ephemeralPublic, QCryptographicHash::Sha256).left(TagBytes);
+}
+
+void PeerConnection::sendHello()
+{
+    // Preuve d'identité liée à cette session (les clés éphémères ne servent qu'une fois)
+    const QByteArray proof = Ed25519::sign(
+        m_identitySeed, Crypto::pack({HelloContext, m_ourEphemeral, m_peerEphemeral, m_ownOnion.toUtf8()}));
+    sendEncrypted({{"t", "hello"},
+                   {"n", m_nick},
+                   {"o", m_ownOnion},
+                   {"v", m_advertisedVersion},
+                   {"k", Protocol::toB64(Ed25519::publicKey(m_identitySeed))},
+                   {"s", Protocol::toB64(proof)}});
 }
 
 void PeerConnection::onReadyRead()
@@ -77,33 +110,65 @@ void PeerConnection::onReadyRead()
 void PeerConnection::handleFrame(const QByteArray &frame)
 {
     if (m_state == WaitPeerKey) {
-        if (frame.size() != Magic.size() + 32 || !frame.startsWith(Magic)) {
+        const int tagsBytes = int(frame.size()) - Magic.size() - 32;
+        if (!frame.startsWith(Magic) || tagsBytes < 0 || tagsBytes % TagBytes != 0 || tagsBytes > MaxSecrets * TagBytes) {
             fail(tr("ce n'est pas un P2P Chat à l'autre bout"));
             return;
         }
-        const QByteArray ourPub = m_kx.publicKey(), peerPub = frame.mid(Magic.size());
-        if (!m_channel.init(m_kx.sharedSecret(peerPub), m_psk, ourPub, peerPub)) {
+        const QByteArray ourPub = m_kx.publicKey(), peerPub = frame.mid(Magic.size(), 32);
+        m_dh = m_kx.sharedSecret(peerPub);
+        m_ourEphemeral = ourPub;
+        m_peerEphemeral = peerPub;
+        m_state = WaitHello;
+        if (m_dh.isEmpty()) {
+            fail(tr("échange de clés impossible"));
+            return;
+        }
+        // Secret commun : le plus récent des nôtres qui figure parmi les siens
+        if (tagsBytes > 0) {
+            QList<QByteArray> theirs;
+            for (int i = 0; i < tagsBytes; i += TagBytes)
+                theirs << frame.mid(Magic.size() + 32 + i, TagBytes);
+            for (int k = 0; k < m_psks.size() && m_pskIndex < 0; ++k)
+                if (theirs.contains(secretTag(m_psks.at(k), peerPub)))
+                    m_pskIndex = k;
+            if (m_pskIndex < 0) {
+                fail(tr("code secret différent (invitation périmée ?)"));
+                return;
+            }
+        } else if (m_psks.size() == 1) {
+            m_pskIndex = 0; // comme les versions précédentes
+        } else {
+            // Un seul secret de son côté, sans étiquette : on le reconnaîtra à son hello, et on répondra ensuite
+            m_waitPeerHello = true;
+            qInfo().noquote() << "[peer] clé reçue, attente de son hello pour choisir le secret";
+            return;
+        }
+        if (!m_channel.init(m_dh, m_psks.at(m_pskIndex), ourPub, peerPub)) {
             fail(tr("échange de clés impossible"));
             return;
         }
         qInfo().noquote() << "[peer] clé reçue, envoi du hello";
-        m_ourEphemeral = ourPub;
-        m_peerEphemeral = peerPub;
-        m_state = WaitHello;
-        // Preuve d'identité liée à cette session (les clés éphémères ne servent qu'une fois)
-        const QByteArray proof = Ed25519::sign(
-            m_identitySeed, Crypto::pack({HelloContext, ourPub, peerPub, m_ownOnion.toUtf8()}));
-        sendEncrypted({{"t", "hello"},
-                       {"n", m_nick},
-                       {"o", m_ownOnion},
-                       {"v", m_advertisedVersion},
-                       {"k", Protocol::toB64(Ed25519::publicKey(m_identitySeed))},
-                       {"s", Protocol::toB64(proof)}});
+        sendHello();
         return;
     }
 
     QByteArray plain;
-    if (!m_channel.decrypt(frame, plain)) {
+    if (m_waitPeerHello) {
+        for (int k = 0; k < m_psks.size() && m_pskIndex < 0; ++k) {
+            SecureChannel candidate;
+            if (candidate.init(m_dh, m_psks.at(k), m_ourEphemeral, m_peerEphemeral) && candidate.decrypt(frame, plain)) {
+                m_channel = candidate;
+                m_pskIndex = k;
+            }
+        }
+        if (m_pskIndex < 0) {
+            fail(tr("code secret différent (invitation périmée ?)"));
+            return;
+        }
+        m_waitPeerHello = false;
+        sendHello(); // avec le secret qu'il utilise
+    } else if (!m_channel.decrypt(frame, plain)) {
         fail(m_state == WaitHello ? tr("code secret différent (invitation périmée ?)") : tr("message corrompu"));
         return;
     }
