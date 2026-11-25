@@ -4,6 +4,7 @@
 #include <QMouseEvent>
 #include <QSignalSpy>
 #include <QScrollBar>
+#include <QToolButton>
 #include <QtTest>
 
 namespace {
@@ -468,6 +469,65 @@ private slots:
         QCOMPARE(changed.count(), 1);
         view.setAuthorVerified(QString(), true); // nos messages n'ont pas d'onion
         QVERIFY(!view.chatModel()->entry(1).authorVerified);
+        view.grab();
+    }
+
+    void hoverBar()
+    {
+        ChatView view;
+        view.resize(480, 400);
+        const QDateTime t0 = QDateTime::currentDateTime();
+        ChatEntry m = message("Survolez-moi", t0);
+        m.id = "m";
+        m.reactions = {{QStringLiteral("❤️"), 1, true, "Vous"}};
+        view.addMessage(m);
+        view.addSystem("ligne système");
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        auto hover = [&](int row) {
+            const QPoint pos = view.visualRect(view.chatModel()->index(row)).center();
+            QMouseEvent move(QEvent::MouseMove, pos, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(view.viewport(), &move);
+        };
+
+        hover(0);
+        QVERIFY(view.isHoverBarVisible());
+        // À cheval sur le haut de la bulle, dans la vue
+        QVERIFY(view.viewport()->rect().contains(view.hoverBar()->geometry()));
+        const auto buttons = view.hoverBar()->findChildren<QToolButton *>();
+        QCOMPARE(buttons.size(), 7); // 6 réactions + Répondre
+        QToolButton *heart = nullptr;
+        for (QToolButton *b : buttons)
+            if (b->property("emoji").toString() == QStringLiteral("❤️"))
+                heart = b;
+        QVERIFY(heart && heart->isChecked()); // notre réaction est cochée
+
+        QSignalSpy toggled(&view, &ChatView::reactionToggled);
+        buttons.first()->click();
+        QCOMPARE(toggled.count(), 1);
+        QCOMPARE(toggled.first(), QVariantList({"m", QStringLiteral("👍")}));
+        QVERIFY(!view.isHoverBarVisible()); // fermée après le choix
+
+        hover(0);
+        QSignalSpy reply(&view, &ChatView::replyRequested);
+        view.hoverBar()->findChild<QToolButton *>("hoverReply")->click();
+        QCOMPARE(reply.count(), 1);
+        QCOMPARE(reply.first(), QVariantList({"m", "Alice", "Survolez-moi"}));
+
+        // Pas de barre sur une ligne système ; elle disparaît peu après avoir quitté le message
+        hover(0);
+        QVERIFY(view.isHoverBarVisible());
+        hover(1);
+        QVERIFY(view.isHoverBarVisible()); // le temps d'aller jusqu'à la barre
+        QTRY_VERIFY(!view.isHoverBarVisible());
+        hover(1);
+        QVERIFY(!view.isHoverBarVisible());
+
+        // Défilement : la barre serait mal placée, elle est masquée
+        hover(0);
+        QVERIFY(view.isHoverBarVisible());
+        emit view.verticalScrollBar()->valueChanged(1);
+        QVERIFY(!view.isHoverBarVisible());
         view.grab();
     }
 

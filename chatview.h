@@ -11,6 +11,7 @@
 #include <QTimer>
 
 class QToolButton;
+class HoverBar;
 
 // Liste de messages façon messagerie mobile (Material 3) : bulles arrondies,
 // regroupement des messages consécutifs, avatars, séparateurs de date.
@@ -127,6 +128,8 @@ public:
         QString who;   // Reaction : qui a réagi
     };
     Hit hitTest(const QModelIndex &index, const QRect &rect, const QPoint &pos) const;
+    // Bulle d'un message dans la vue (vide pour une ligne qui n'est pas un message)
+    QRectF bubbleAt(const QModelIndex &index, const QRect &rect) const;
 };
 
 class ChatView : public QListView
@@ -167,6 +170,10 @@ public:
     int newMessagesBelow() const { return m_newBelow; }
     bool isDownButtonVisible() const;
 
+    // Barre d'actions au survol d'un message : Répondre et réactions rapides
+    bool isHoverBarVisible() const;
+    QWidget *hoverBar() const;
+
     static QColor colorFor(const QString &name);
     // Extrait d'un message pour une citation : une ligne, espaces regroupés, coupé à maxChars
     static QString excerpt(const QString &text, int maxChars = 120);
@@ -186,11 +193,13 @@ protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
-    bool viewportEvent(QEvent *event) override; // infobulle des réactions
+    bool viewportEvent(QEvent *event) override; // infobulle des réactions, sortie du pointeur
 
 private:
     void appendEntry(const ChatEntry &e);
     void updateDownButton();
+    void showHoverBar(const QModelIndex &index);
+    void hideHoverBarSoon(); // sauf si le pointeur est passé sur la barre
     ChatModel *m_model;
     ChatDelegate *m_delegate;
     QPersistentModelIndex m_flash;
@@ -199,5 +208,8 @@ private:
     QString m_searchTerm;
     QPersistentModelIndex m_searchCurrent;
     QToolButton *m_downButton;
+    HoverBar *m_hoverBar;
+    QPersistentModelIndex m_hoverIndex;
+    QTimer *m_hoverHide;
     int m_newBelow = 0;
 };

@@ -27,6 +27,7 @@
 #include <QScrollBar>
 #include <QTextLayout>
 #include <cmath>
+#include <functional>
 
 namespace {
 
@@ -545,6 +546,16 @@ QRectF ChatDelegate::bubbleRect(const ChatEntry &e, const Geometry &g, const QRe
     return QRectF(left, r.top() + g.top + g.nameH, g.bubbleW, g.bubbleH);
 }
 
+QRectF ChatDelegate::bubbleAt(const QModelIndex &index, const QRect &rect) const
+{
+    if (!index.isValid())
+        return {};
+    const ChatEntry &e = static_cast<const ChatModel *>(index.model())->entry(index.row());
+    if (e.kind != ChatEntry::Message)
+        return {};
+    return bubbleRect(e, compute(index, rect.width()), rect);
+}
+
 QRectF ChatDelegate::imageRect(const Geometry &g, const QRectF &bubble) const
 {
     return QRectF(bubble.left() + ImageMargin, bubble.top() + g.imageTop, g.imageW, g.imageH);
@@ -822,6 +833,86 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
     p->restore();
 }
 
+// ---------------------------------------------------------------- Barre de survol
+
+// Petite barre flottante au coin de la bulle survolée : réactions rapides et « Répondre »
+class HoverBar : public QFrame
+{
+public:
+    explicit HoverBar(QWidget *parent) : QFrame(parent)
+    {
+        setObjectName("hoverBar");
+        setAttribute(Qt::WA_StyledBackground);
+        setStyleSheet("QFrame#hoverBar { background: #ffffff; border: 1px solid #e1e3e1; border-radius: 17px; }"
+                      "QToolButton { border: none; border-radius: 14px; background: transparent; padding: 0; }"
+                      "QToolButton:hover { background: #e9eef6; }"
+                      "QToolButton:checked { background: #d3e3fd; }");
+        auto *lay = new QHBoxLayout(this);
+        lay->setContentsMargins(3, 2, 3, 2);
+        lay->setSpacing(0);
+        for (const QString &emoji : Reactions::Allowed) {
+            auto *b = button(emoji, tr("Réagir %1").arg(emoji));
+            QFont big = reactionFont();
+            big.setPointSizeF(big.pointSizeF() * 1.2);
+            b->setFont(emojiFont(big));
+            b->setCheckable(true);
+            b->setProperty("emoji", emoji);
+            m_reactions << b;
+            lay->addWidget(b);
+        }
+        auto *sep = new QFrame(this);
+        sep->setFrameShape(QFrame::VLine);
+        sep->setStyleSheet("color: #e1e3e1;");
+        lay->addWidget(sep);
+        m_reply = button(QStringLiteral("↩"), tr("Répondre"));
+        m_reply->setObjectName("hoverReply");
+        QFont f = m_reply->font();
+        f.setPointSizeF(f.pointSizeF() * 1.25);
+        m_reply->setFont(f);
+        lay->addWidget(m_reply);
+        hide();
+    }
+
+    std::function<void()> onLeave; // le pointeur quitte la barre
+
+    QList<QToolButton *> reactionButtons() const { return m_reactions; }
+    QToolButton *replyButton() const { return m_reply; }
+
+    // Nos réactions actuelles, cochées
+    void setMine(const QList<ChatEntry::Reaction> &reactions)
+    {
+        for (QToolButton *b : std::as_const(m_reactions)) {
+            const QString emoji = b->property("emoji").toString();
+            b->setChecked(std::any_of(reactions.cbegin(), reactions.cend(), [&](const ChatEntry::Reaction &r) {
+                return r.emoji == emoji && r.mine;
+            }));
+        }
+    }
+
+protected:
+    void leaveEvent(QEvent *event) override
+    {
+        QFrame::leaveEvent(event);
+        if (onLeave)
+            onLeave();
+    }
+
+private:
+    QToolButton *button(const QString &text, const QString &tip)
+    {
+        auto *b = new QToolButton(this);
+        b->setText(text);
+        b->setToolTip(tip);
+        b->setFixedSize(28, 28);
+        b->setCursor(Qt::PointingHandCursor);
+        b->setFocusPolicy(Qt::NoFocus); // la zone de saisie garde le focus
+        return b;
+    }
+
+    QList<QToolButton *> m_reactions;
+    QToolButton *m_reply;
+};
+
 // ---------------------------------------------------------------- Vue
 
 ChatView::ChatView(QWidget *parent) : QListView(parent), m_model(new ChatModel(this))
@@ -856,6 +947,36 @@ ChatView::ChatView(QWidget *parent) : QListView(parent), m_model(new ChatModel(t
     m_downButton->hide();
     connect(m_downButton, &QToolButton::clicked, this, [this] { scrollToBottom(); });
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, &ChatView::updateDownButton);
+
+    // Barre d'actions au survol
+    m_hoverBar = new HoverBar(viewport());
+    m_hoverBar->onLeave = [this] { hideHoverBarSoon(); };
+    m_hoverHide = new QTimer(this);
+    m_hoverHide->setSingleShot(true);
+    m_hoverHide->setInterval(250); // le temps d'aller de la bulle à la barre
+    connect(m_hoverHide, &QTimer::timeout, this, [this] {
+        if (!m_hoverBar->underMouse()) {
+            m_hoverBar->hide();
+            m_hoverIndex = QPersistentModelIndex();
+        }
+    });
+    for (QToolButton *b : m_hoverBar->reactionButtons())
+        connect(b, &QToolButton::clicked, this, [this, b] {
+            if (m_hoverIndex.isValid())
+                emit reactionToggled(m_model->entry(m_hoverIndex.row()).id, b->property("emoji").toString());
+            m_hoverBar->hide();
+        });
+    connect(m_hoverBar->replyButton(), &QToolButton::clicked, this, [this] {
+        if (m_hoverIndex.isValid()) {
+            const ChatEntry &e = m_model->entry(m_hoverIndex.row());
+            emit replyRequested(e.id, e.author, e.text.isEmpty() && !e.image.isNull() ? tr("📷 Image") : e.text);
+        }
+        m_hoverBar->hide();
+    });
+    // Les lignes bougent : la barre serait mal placée
+    connect(verticalScrollBar(), &QScrollBar::valueChanged, m_hoverBar, &QWidget::hide);
+    connect(m_model, &QAbstractItemModel::rowsInserted, m_hoverBar, &QWidget::hide);
+    connect(m_model, &QAbstractItemModel::modelReset, m_hoverBar, &QWidget::hide);
     connect(verticalScrollBar(), &QScrollBar::rangeChanged, this, &ChatView::updateDownButton);
     setSelectionMode(QAbstractItemView::NoSelection);
     setFocusPolicy(Qt::NoFocus);
@@ -919,6 +1040,8 @@ void ChatView::setReactions(const QString &id, const QList<ChatEntry::Reaction> 
 
 bool ChatView::viewportEvent(QEvent *event)
 {
+    if (event->type() == QEvent::Leave) // vers la barre, ou hors de la liste
+        hideHoverBarSoon();
     if (event->type() == QEvent::ToolTip) {
         const auto *help = static_cast<QHelpEvent *>(event);
         const QModelIndex idx = indexAt(help->pos());
@@ -942,6 +1065,52 @@ void ChatView::mouseMoveEvent(QMouseEvent *event)
     const QModelIndex idx = indexAt(event->pos());
     const bool clickable = m_delegate->hitTest(idx, visualRect(idx), event->pos()).kind != ChatDelegate::Hit::None;
     viewport()->setCursor(clickable ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    showHoverBar(idx);
+}
+
+void ChatView::showHoverBar(const QModelIndex &index)
+{
+    // Seulement pour les messages authentiques (les seuls auxquels on peut répondre ou réagir)
+    const bool usable = index.isValid() && m_model->entry(index.row()).kind == ChatEntry::Message
+                        && !m_model->entry(index.row()).id.isEmpty()
+                        && m_model->entry(index.row()).trust == ChatEntry::Verified;
+    if (!usable) {
+        hideHoverBarSoon();
+        return;
+    }
+    m_hoverHide->stop();
+    if (m_hoverBar->isVisible() && m_hoverIndex == index)
+        return;
+    m_hoverIndex = index;
+    const ChatEntry &e = m_model->entry(index.row());
+    m_hoverBar->setMine(e.reactions);
+    m_hoverBar->adjustSize();
+    // À cheval sur le bord haut de la bulle, côté opposé à l'avatar ; toujours dans la vue
+    const QRectF bubble = m_delegate->bubbleAt(index, visualRect(index));
+    const QSize size = m_hoverBar->size();
+    int x = e.mine ? int(bubble.left()) - 12 : int(bubble.right()) - size.width() + 12;
+    int y = int(bubble.top()) - size.height() / 2 - 4;
+    x = qBound(4, x, qMax(4, viewport()->width() - size.width() - 4));
+    y = qBound(2, y, qMax(2, viewport()->height() - size.height() - 2));
+    m_hoverBar->move(x, y);
+    m_hoverBar->show();
+    m_hoverBar->raise();
+}
+
+void ChatView::hideHoverBarSoon()
+{
+    if (m_hoverBar->isVisible() && !m_hoverHide->isActive())
+        m_hoverHide->start();
+}
+
+bool ChatView::isHoverBarVisible() const
+{
+    return m_hoverBar->isVisible();
+}
+
+QWidget *ChatView::hoverBar() const
+{
+    return m_hoverBar;
 }
 
 void ChatView::addMessage(const QString &author, const QString &text, const QDateTime &ts, bool mine,

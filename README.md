@@ -48,6 +48,7 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 ### Interface
 
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
+- **Au survol d'un message**, une petite barre apparaît au coin de la bulle : réactions rapides et ↩ *Répondre*.
 - **Réactions** (👍 ❤️ 😂 😮 😢 🎉) : clic droit sur un message → *Réagir*, ou clic sur une pastille existante pour
   ajouter ou retirer la vôtre ; survoler une pastille montre qui a réagi. Chaque réaction est signée par son
   auteur, synchronisée et relayée comme les messages (pas envoyée aux versions précédentes, qui l'ignoreraient).
