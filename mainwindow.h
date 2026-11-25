@@ -36,6 +36,8 @@ class TorService;
 
 // Fenêtre principale : la conversation, Tor, les notifications et la console partagée.
 // Le groupe lui-même (connexions, synchronisation, historique) est dans GroupNode.
+class Switchboard;
+
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -142,6 +144,7 @@ private:
     QSettings m_settings;
     Conversations m_conversations{m_settings, dataDir()};
     GroupStore m_group{m_settings, initialConversation()};
+    Switchboard *m_board = nullptr;
     GroupNode *m_node = nullptr;
     TorService *m_tor = nullptr;
     QString m_torStatus, m_torError;

@@ -12,6 +12,7 @@
 #include "groupnode.h"
 #include "protocol.h"
 #include "safetynumber.h"
+#include "switchboard.h"
 #include "torservice.h"
 #ifdef P2P_TERMINAL
 #  include "terminalsession.h"
@@ -118,7 +119,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     // Le groupe : connexions, synchronisation, historique (cf. groupnode.h). Transport : Tor.
     m_node = new GroupNode(m_group, historyPath, this);
     QString listenError;
-    if (!m_node->listen(&listenError))
+    m_board = new Switchboard(this); // écoute commune à toutes les conversations
+    m_board->add(m_node);
+    if (!m_board->listen(&listenError))
         QMessageBox::critical(this, tr("P2P Chat"), tr("Écoute locale impossible : %1").arg(listenError));
     m_node->setDialer([this](const QString &onion) -> QTcpSocket * {
         if (!m_tor)
@@ -934,7 +937,7 @@ void MainWindow::startTor()
     m_torStatus.clear();
 
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/tor";
-    m_tor = new TorService(dir, m_node->port(), this);
+    m_tor = new TorService(dir, m_board->port(), this);
     connect(m_tor, &TorService::progress, this, [this](int pct, const QString &summary) {
         m_torStatus = QStringLiteral("%1 % (%2)").arg(pct).arg(summary);
         updateStatus();

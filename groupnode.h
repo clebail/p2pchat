@@ -21,8 +21,8 @@
 
 struct Invitation;
 class PeerConnection;
-class QTcpServer;
 class QTcpSocket;
+class Switchboard;
 
 // Un membre du groupe, sans interface : maillage complet (chaque membre est relié directement à chacun
 // des autres, via son adresse onion), reconnexion, présence relayée, synchronisation de l'historique,
@@ -67,9 +67,14 @@ public:
     }
     ~GroupNode() override;
 
-    // Écoute locale (127.0.0.1, port libre), jointe par le service onion
+    // Écoute locale (127.0.0.1, port libre), jointe par le service onion : propre à ce groupe. Avec plusieurs
+    // conversations, un Switchboard commun écoute à la place et confie à chacune ses connexions entrantes.
     bool listen(QString *error = nullptr);
     quint16 port() const;
+    bool acceptsIncoming() const;           // groupe en cours, réseau prêt
+    QList<QByteArray> acceptedSecrets() const; // actuel, puis précédents (membres absents)
+    PeerConnection *createIncoming(QTcpSocket *socket, QObject *parent); // poignée de main à commencer
+    void adoptIncoming(PeerConnection *c);  // secret reconnu : la suite nous revient
     void setDialer(Dialer dialer) { m_dialer = std::move(dialer); }
 
     // Réseau prêt (adresse onion publiée) : on rappelle tout le monde, en mode rapide
@@ -176,7 +181,7 @@ signals:
 
 private:
     PeerConnection *newConnection(QTcpSocket *socket, bool outgoing);
-    void onNewConnection();
+    void wire(PeerConnection *c); // signaux de la connexion vers nous
     void dial(const QString &onion);
     void onClosed(PeerConnection *c, const QString &reason);
     void announceDropLater(const QString &onion, const QString &reason);
@@ -240,7 +245,7 @@ private:
     QString m_historyPath;
     Timing m_timing;
     Dialer m_dialer;
-    QTcpServer *m_server;
+    Switchboard *m_ownBoard = nullptr; // cf. listen()
     QString m_ownOnion;
 
     QHash<QString, PeerConnection *> m_active;   // onion -> connexion établie

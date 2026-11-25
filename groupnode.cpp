@@ -3,14 +3,13 @@
 #include "crypto.h"
 #include "invitation.h"
 #include "peerconnection.h"
+#include "switchboard.h"
 
 #include <QDateTime>
 #include <QDebug>
 #include <QFile>
 #include <QFileInfo>
-#include <QNetworkProxy>
 #include <QRegularExpression>
-#include <QTcpServer>
 #include <QTcpSocket>
 #include <QtEndian>
 
@@ -31,11 +30,8 @@ qint64 now()
 } // namespace
 
 GroupNode::GroupNode(GroupStore &group, const QString &historyPath, const Timing &timing, QObject *parent)
-    : QObject(parent), m_group(group), m_historyPath(historyPath), m_timing(timing), m_server(new QTcpServer(this))
+    : QObject(parent), m_group(group), m_historyPath(historyPath), m_timing(timing)
 {
-    m_server->setProxy(QNetworkProxy::NoProxy);
-    connect(m_server, &QTcpServer::newConnection, this, &GroupNode::onNewConnection);
-
     // Tentative périodique vers les membres hors ligne (chacun selon son délai, cf. m_backoff)
     m_retryTimer.setInterval(m_timing.retryIntervalMs);
     connect(&m_retryTimer, &QTimer::timeout, this, &GroupNode::connectToMembers);
@@ -92,16 +88,26 @@ GroupNode::~GroupNode()
 
 bool GroupNode::listen(QString *error)
 {
-    if (m_server->listen(QHostAddress::LocalHost, 0))
-        return true;
-    if (error)
-        *error = m_server->errorString();
-    return false;
+    if (!m_ownBoard) {
+        m_ownBoard = new Switchboard(this);
+        m_ownBoard->add(this);
+    }
+    return m_ownBoard->listen(error);
 }
 
 quint16 GroupNode::port() const
 {
-    return m_server->serverPort();
+    return m_ownBoard ? m_ownBoard->port() : 0;
+}
+
+bool GroupNode::acceptsIncoming() const
+{
+    return m_group.inGroup() && !m_ownOnion.isEmpty();
+}
+
+QList<QByteArray> GroupNode::acceptedSecrets() const
+{
+    return m_group.acceptedSecrets(now());
 }
 
 void GroupNode::setOnline(const QString &ownOnion)
@@ -361,26 +367,38 @@ PeerConnection *GroupNode::newConnection(QTcpSocket *socket, bool outgoing)
 {
     auto *c = new PeerConnection(socket, outgoing, m_group.secret(), m_group.nickname(), m_ownOnion,
                                  m_group.identitySeed(), this);
+    c->setSecrets(m_group.acceptedSecrets(now())); // actuel, puis précédents (membres absents)
+    wire(c);
+    return c;
+}
+
+void GroupNode::wire(PeerConnection *c)
+{
+    c->setAdvertisedVersion(m_advertisedVersion);
     connect(c, &PeerConnection::ready, this, [this, c] { setActive(c); });
     connect(c, &PeerConnection::received, this, [this, c](const QJsonObject &o) { onReceived(c, o); });
     connect(c, &PeerConnection::binaryReceived, this,
             [this, c](quint8 type, const QByteArray &payload) { onBinary(c, type, payload); });
-    c->setAdvertisedVersion(m_advertisedVersion);
-    c->setSecrets(m_group.acceptedSecrets(now())); // actuel, puis précédents (membres absents)
     connect(c, &PeerConnection::closed, this, [this, c](const QString &reason) { onClosed(c, reason); });
-    return c;
 }
 
-void GroupNode::onNewConnection()
+PeerConnection *GroupNode::createIncoming(QTcpSocket *socket, QObject *parent)
 {
-    while (QTcpSocket *s = m_server->nextPendingConnection()) {
-        if (!m_group.inGroup() || m_ownOnion.isEmpty() || m_pending.size() >= MaxPending) {
-            s->abort();
-            s->deleteLater();
-            continue;
-        }
-        m_pending.insert(newConnection(s, false));
+    return new PeerConnection(socket, false, m_group.secret(), m_group.nickname(), m_ownOnion,
+                              m_group.identitySeed(), parent);
+}
+
+void GroupNode::adoptIncoming(PeerConnection *c)
+{
+    if (!acceptsIncoming() || m_pending.size() >= MaxPending) {
+        c->close();
+        c->deleteLater();
+        return;
     }
+    c->setParent(this);
+    c->setNickname(m_group.nickname());
+    wire(c);
+    m_pending.insert(c);
 }
 
 void GroupNode::connectToMembers()

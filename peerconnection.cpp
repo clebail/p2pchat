@@ -18,7 +18,7 @@ static constexpr int MaxSecrets = 4; // le secret actuel et quelques précédent
 
 PeerConnection::PeerConnection(QTcpSocket *socket, bool outgoing, const QByteArray &psk, const QString &nickname,
                                const QString &ownOnion, const QByteArray &identitySeed, QObject *parent)
-    : QObject(parent), m_socket(socket), m_outgoing(outgoing), m_psks{psk}, m_nick(nickname), m_ownOnion(ownOnion),
+    : QObject(parent), m_socket(socket), m_outgoing(outgoing), m_groups{{psk}}, m_psks{psk}, m_nick(nickname), m_ownOnion(ownOnion),
       m_identitySeed(identitySeed), m_advertisedVersion(Protocol::Version)
 {
     socket->setParent(this);
@@ -58,6 +58,12 @@ void PeerConnection::onConnected()
     qInfo().noquote() << "[peer]" << (m_outgoing ? "sortante" : "entrante") << "connectée, envoi de la clé";
     m_state = WaitPeerKey;
     m_handshakeTimer.start(30000);
+    if (m_outgoing)
+        sendKeyFrame(); // en entrée : après celle de l'appelant (cf. handleFrame)
+}
+
+void PeerConnection::sendKeyFrame()
+{
     QByteArray frame = Magic + m_kx.publicKey();
     if (m_psks.size() > 1) // sinon : trame des versions précédentes
         for (const QByteArray &psk : std::as_const(m_psks))
@@ -68,7 +74,24 @@ void PeerConnection::onConnected()
 void PeerConnection::setSecrets(const QList<QByteArray> &secrets)
 {
     if (!secrets.isEmpty())
-        m_psks = secrets.mid(0, MaxSecrets);
+        setSecretGroups({secrets});
+}
+
+void PeerConnection::setSecretGroups(const QList<QList<QByteArray>> &groups)
+{
+    m_groups.clear();
+    for (const QList<QByteArray> &g : groups)
+        m_groups << g.mid(0, MaxSecrets);
+    m_psks = m_groups.value(0);
+}
+
+bool PeerConnection::chooseSecret(int group, int index)
+{
+    m_group = group;
+    m_psks = m_groups.at(group);
+    m_pskIndex = index;
+    emit secretChosen(group); // peut nous fermer (conversation qui refuse la connexion)
+    return m_state != Closed;
 }
 
 QByteArray PeerConnection::secretTag(const QByteArray &secret, const QByteArray &ephemeralPublic)
@@ -124,26 +147,42 @@ void PeerConnection::handleFrame(const QByteArray &frame)
             fail(tr("échange de clés impossible"));
             return;
         }
-        // Secret commun : le plus récent des nôtres qui figure parmi les siens
+        int candidates = 0;
+        for (const QList<QByteArray> &g : std::as_const(m_groups))
+            candidates += int(g.size());
+        // Secret commun : le plus récent des nôtres qui figure parmi les siens (en entrée : de la
+        // première conversation qui en a un)
         if (tagsBytes > 0) {
             QList<QByteArray> theirs;
             for (int i = 0; i < tagsBytes; i += TagBytes)
                 theirs << frame.mid(Magic.size() + 32 + i, TagBytes);
-            for (int k = 0; k < m_psks.size() && m_pskIndex < 0; ++k)
-                if (theirs.contains(secretTag(m_psks.at(k), peerPub)))
-                    m_pskIndex = k;
-            if (m_pskIndex < 0) {
+            const int groups = m_outgoing ? 1 : int(m_groups.size());
+            int group = -1, index = -1;
+            for (int g = 0; g < groups && group < 0; ++g)
+                for (int k = 0; k < m_groups.at(g).size() && group < 0; ++k)
+                    if (theirs.contains(secretTag(m_groups.at(g).at(k), peerPub))) {
+                        group = g;
+                        index = k;
+                    }
+            if (group < 0) {
                 fail(tr("code secret différent (invitation périmée ?)"));
                 return;
             }
-        } else if (m_psks.size() == 1) {
-            m_pskIndex = 0; // comme les versions précédentes
+            if (!chooseSecret(group, index))
+                return;
+        } else if (candidates == 1) {
+            if (!chooseSecret(0, 0)) // comme les versions précédentes
+                return;
         } else {
             // Un seul secret de son côté, sans étiquette : on le reconnaîtra à son hello, et on répondra ensuite
+            if (!m_outgoing)
+                sendFrame(Magic + m_kx.publicKey()); // sans étiquettes : il n'en attend pas
             m_waitPeerHello = true;
             qInfo().noquote() << "[peer] clé reçue, attente de son hello pour choisir le secret";
             return;
         }
+        if (!m_outgoing)
+            sendKeyFrame(); // la nôtre, avec les étiquettes de la conversation retenue
         if (!m_channel.init(m_dh, m_psks.at(m_pskIndex), ourPub, peerPub)) {
             fail(tr("échange de clés impossible"));
             return;
@@ -155,18 +194,25 @@ void PeerConnection::handleFrame(const QByteArray &frame)
 
     QByteArray plain;
     if (m_waitPeerHello) {
-        for (int k = 0; k < m_psks.size() && m_pskIndex < 0; ++k) {
-            SecureChannel candidate;
-            if (candidate.init(m_dh, m_psks.at(k), m_ourEphemeral, m_peerEphemeral) && candidate.decrypt(frame, plain)) {
-                m_channel = candidate;
-                m_pskIndex = k;
+        const int groups = m_outgoing ? 1 : int(m_groups.size());
+        int group = -1, index = -1;
+        for (int g = 0; g < groups && group < 0; ++g)
+            for (int k = 0; k < m_groups.at(g).size() && group < 0; ++k) {
+                SecureChannel candidate;
+                if (candidate.init(m_dh, m_groups.at(g).at(k), m_ourEphemeral, m_peerEphemeral)
+                    && candidate.decrypt(frame, plain)) {
+                    m_channel = candidate;
+                    group = g;
+                    index = k;
+                }
             }
-        }
-        if (m_pskIndex < 0) {
+        if (group < 0) {
             fail(tr("code secret différent (invitation périmée ?)"));
             return;
         }
         m_waitPeerHello = false;
+        if (!chooseSecret(group, index))
+            return;
         sendHello(); // avec le secret qu'il utilise
     } else if (!m_channel.decrypt(frame, plain)) {
         fail(m_state == WaitHello ? tr("code secret différent (invitation périmée ?)") : tr("message corrompu"));

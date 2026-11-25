@@ -24,12 +24,13 @@ private:
         QString onion, nick;
         QByteArray psk, seed = Ed25519::generateSeed();
         QList<QByteArray> secrets; // plusieurs secrets (groupe renouvelé) : le plus récent d'abord
+        QList<QList<QByteArray>> groups; // en entrée : plusieurs conversations
     };
 
     QTcpServer m_server;
     PeerConnection *m_incoming = nullptr;
     // Branchés dès la création : la connexion entrante peut se fermer avant que le test la voie
-    std::unique_ptr<QSignalSpy> m_inReady, m_inClosed;
+    std::unique_ptr<QSignalSpy> m_inReady, m_inClosed, m_inChosen;
     Side m_serverSide;
 
     PeerConnection *dial(const Side &side)
@@ -70,8 +71,11 @@ private slots:
                 m_incoming = new PeerConnection(s, false, m_serverSide.psk, m_serverSide.nick, m_serverSide.onion,
                                                 m_serverSide.seed, this);
                 m_incoming->setSecrets(m_serverSide.secrets);
+                if (!m_serverSide.groups.isEmpty())
+                    m_incoming->setSecretGroups(m_serverSide.groups);
                 m_inReady = std::make_unique<QSignalSpy>(m_incoming, &PeerConnection::ready);
                 m_inClosed = std::make_unique<QSignalSpy>(m_incoming, &PeerConnection::closed);
+                m_inChosen = std::make_unique<QSignalSpy>(m_incoming, &PeerConnection::secretChosen);
             }
         });
     }
@@ -86,6 +90,7 @@ private slots:
     {
         m_inReady.reset();
         m_inClosed.reset();
+        m_inChosen.reset();
         delete m_incoming;
         m_incoming = nullptr;
     }
@@ -220,6 +225,62 @@ private slots:
             QTRY_COMPARE(received.count(), 1);
         }
         delete out;
+    }
+
+    void routesToConversation_data()
+    {
+        // En entrée, plusieurs conversations : celle dont l'appelant présente le secret est retenue
+        QTest::addColumn<QList<QByteArray>>("client");
+        QTest::addColumn<int>("group"); // -1 : aucune
+        QTest::addColumn<int>("index");
+        const QByteArray x1("conversation X 1"), x2("conversation X 2"), y1("conversation Y 1"), z("conversation Z .");
+        QTest::newRow("étiquettes, seconde conversation") << QList<QByteArray>{y1, z} << 1 << 0;
+        QTest::newRow("étiquettes, ancien secret") << QList<QByteArray>{z, x1} << 0 << 1;
+        QTest::newRow("sans étiquette (hello)") << QList<QByteArray>{y1} << 1 << 0;
+        QTest::newRow("sans étiquette, ancien secret") << QList<QByteArray>{x1} << 0 << 1;
+        QTest::newRow("aucune, avec étiquettes") << QList<QByteArray>{z, QByteArray("autre ..........")} << -1 << -1;
+        QTest::newRow("aucune, sans étiquette") << QList<QByteArray>{z} << -1 << -1;
+    }
+
+    void routesToConversation()
+    {
+        QFETCH(QList<QByteArray>, client);
+        QFETCH(int, group);
+        QFETCH(int, index);
+        m_serverSide.groups = {{QByteArray("conversation X 2"), QByteArray("conversation X 1")},
+                               {QByteArray("conversation Y 1")}};
+        Side a = side('a', client.first());
+        a.secrets = client;
+        PeerConnection *out = dial(a);
+        QSignalSpy outReady(out, &PeerConnection::ready), outClosed(out, &PeerConnection::closed);
+        QTRY_VERIFY(m_incoming);
+        QSignalSpy &chosen = *m_inChosen;
+        if (group < 0) {
+            QTRY_COMPARE(m_inClosed->count(), 1);
+            QTRY_COMPARE(outClosed.count(), 1);
+            QCOMPARE(chosen.count(), 0);
+        } else {
+            QTRY_COMPARE(outReady.count(), 1);
+            QTRY_COMPARE(m_inReady->count(), 1);
+            QCOMPARE(chosen.count(), 1);
+            QCOMPARE(chosen.first().first().toInt(), group);
+            QCOMPARE(m_incoming->secretGroup(), group);
+            QCOMPARE(m_incoming->secretIndex(), index);
+            QSignalSpy received(out, &PeerConnection::received);
+            m_incoming->send({{"t", "msg"}, {"x", "ok"}});
+            QTRY_COMPARE(received.count(), 1);
+        }
+        delete out;
+    }
+
+    void incomingWaitsForCallerKey()
+    {
+        // Rien n'est envoyé avant la clé de l'appelant (qui dit quelle conversation il vise)
+        QTcpSocket *raw = rawSocket();
+        QTRY_VERIFY(m_incoming);
+        QTest::qWait(200);
+        QCOMPARE(raw->bytesAvailable(), 0);
+        delete raw;
     }
 
     void secretTagsAreUnlinkable()

@@ -278,6 +278,7 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 |---|---|
 | `torservice.*` | Lancement de tor, torrc, progression, adresse onion |
 | `peerconnection.*` | Trames, poignée de main, messages chiffrés, ping |
+| `switchboard.*` | Écoute locale commune : chaque connexion entrante va à la conversation dont elle présente le secret |
 | `crypto.*` | X25519, Ed25519, HKDF, ChaCha20-Poly1305 (OpenSSL) |
 | `protocol.*` | Formats communs (adresse onion, base64), messages signés |
 | `invitation.*` | Encodage / décodage du code d'invitation |

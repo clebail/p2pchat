@@ -2,6 +2,7 @@
 #include "groupnode.h"
 #include "governance.h"
 #include "invitation.h"
+#include "switchboard.h"
 
 #include <QNetworkProxy>
 #include <QFile>
@@ -705,6 +706,108 @@ private slots:
         c.node->announceNickname();
         QTest::qWait(200);
         QVERIFY(!a.store->isMember(b.onion));
+    }
+
+    // ---------------------------------------------------------------- Plusieurs conversations
+
+    void conversationsShareOneListener()
+    {
+        // P et Q partagent deux conversations, X et Y ; R n'est que dans Y. Une seule écoute par personne.
+        struct Person
+        {
+            QString onion, nick;
+            std::unique_ptr<QSettings> settings;
+            std::unique_ptr<Switchboard> board;
+            std::map<char, std::unique_ptr<GroupStore>> stores;
+            std::map<char, std::unique_ptr<GroupNode>> nodes;
+            std::map<char, QStringList> texts; // messages affichés, par conversation
+        };
+        std::map<char, Person> people;
+        auto person = [&](char name) -> Person & {
+            Person &p = people[name];
+            if (p.board)
+                return p;
+            p.onion = QString(56, QLatin1Char(name)) + ".onion";
+            p.nick = QStringLiteral("Personne %1").arg(name);
+            p.settings = std::make_unique<QSettings>(m_dir->filePath(QStringLiteral("p%1.ini").arg(name)),
+                                                     QSettings::IniFormat);
+            GroupStore(*p.settings).ensureIdentity();
+            GroupStore(*p.settings).setNickname(p.nick);
+            p.board = std::make_unique<Switchboard>();
+            [&] { QVERIFY(p.board->listen()); }();
+            return p;
+        };
+        auto node = [&](char who, char conv) -> GroupNode & {
+            Person &p = person(who);
+            auto &n = p.nodes[conv];
+            if (n)
+                return *n;
+            const QString id = QString(16, QLatin1Char(conv == 'x' ? '1' : '2'));
+            p.stores[conv] = std::make_unique<GroupStore>(*p.settings, id);
+            n = std::make_unique<GroupNode>(*p.stores[conv],
+                                            m_dir->filePath(QStringLiteral("p%1-%2.jsonl").arg(who).arg(conv)),
+                                            fastTiming());
+            n->setFilesDir(m_dir->filePath(QStringLiteral("p%1-%2-fichiers").arg(who).arg(conv)));
+            n->setDialer([&people](const QString &onion) {
+                auto *s = new QTcpSocket;
+                s->setProxy(QNetworkProxy::NoProxy);
+                quint16 port = 1;
+                for (auto &[name, other] : people)
+                    if (other.onion == onion)
+                        port = other.board->port();
+                s->connectToHost(QHostAddress::LocalHost, port);
+                return s;
+            });
+            QStringList *texts = &p.texts[conv];
+            connect(n.get(), &GroupNode::messageAdded, this,
+                    [texts](const QJsonObject &m, bool, GroupNode::Trust) { *texts << m.value("x").toString(); });
+            p.board->add(n.get());
+            return *n;
+        };
+        auto inv = [&](char who, char conv) -> Invitation {
+            Person &p = person(who);
+            return {p.stores[conv]->secret(), p.onion, p.nick, p.stores[conv]->identityKey(), node(who, conv).groupId()};
+        };
+
+        Person &pp = person('p'), &q = person('q'), &r = person('r');
+        for (char conv : {'x', 'y'}) {
+            node('p', conv).createGroup();
+            node('p', conv).setOnline(pp.onion);
+        }
+        QCOMPARE(node('q', 'x').join(inv('p', 'x')), GroupNode::JoinResult::Joined);
+        QCOMPARE(node('q', 'y').join(inv('p', 'y')), GroupNode::JoinResult::Joined);
+        QCOMPARE(node('r', 'y').join(inv('p', 'y')), GroupNode::JoinResult::Joined);
+        for (char conv : {'x', 'y'})
+            node('q', conv).setOnline(q.onion);
+        node('r', 'y').setOnline(r.onion);
+        // Chaque conversation a ses propres connexions, toutes arrivées par la même écoute
+        QTRY_VERIFY(node('p', 'x').isConnected(q.onion) && node('q', 'x').isConnected(pp.onion));
+        QTRY_VERIFY(node('p', 'y').isConnected(q.onion) && node('q', 'y').isConnected(pp.onion));
+        QTRY_VERIFY(node('p', 'y').isConnected(r.onion) && node('r', 'y').isConnected(pp.onion));
+        QTRY_VERIFY(node('q', 'y').isConnected(r.onion)); // découverte par la liste des membres de P
+        QVERIFY(!node('p', 'x').isConnected(r.onion));
+        QVERIFY(!pp.stores['x']->isMember(r.onion));
+        QVERIFY(node('p', 'x').groupId() != node('p', 'y').groupId());
+
+        node('q', 'x').sendMessage("dans X");
+        node('r', 'y').sendMessage("dans Y");
+        QTRY_VERIFY(pp.texts['x'].contains("dans X"));
+        QTRY_VERIFY(pp.texts['y'].contains("dans Y"));
+        QTRY_VERIFY(q.texts['y'].contains("dans Y"));
+        QTest::qWait(100);
+        QVERIFY(!pp.texts['y'].contains("dans X") && !q.texts['x'].contains("dans Y"));
+        QVERIFY(!r.texts['y'].contains("dans X"));
+
+        // Quitter X ne touche pas à Y
+        node('q', 'x').leaveGroup();
+        QTRY_VERIFY(!node('p', 'x').isConnected(q.onion));
+        QVERIFY(node('p', 'y').isConnected(q.onion));
+        node('p', 'y').sendMessage("toujours là");
+        QTRY_VERIFY(q.texts['y'].contains("toujours là"));
+
+        // Les nœuds d'abord (les connexions adoptées sont à eux), puis les écoutes
+        for (auto &[name, p] : people)
+            p.nodes.clear();
     }
 
     void cannotSendWithoutNetworkOrGroup()

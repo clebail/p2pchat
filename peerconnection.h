@@ -20,6 +20,9 @@ class QTcpSocket;
 //   1 bis. plusieurs secrets (le groupe en a changé, cf. governance.h) : la trame de clé est suivie d'une
 //      étiquette de 8 octets par secret, et les deux côtés retiennent le plus récent qu'ils ont en commun.
 //      Avec un seul secret, la trame est celle des versions précédentes.
+//   1 ter. en entrée, on attend la clé de l'appelant avant d'envoyer la nôtre : ses étiquettes disent quelle
+//      conversation il vise (cf. setSecretGroups) ; sans étiquettes, on répond sans étiquettes et on reconnaît
+//      son secret à son hello (versions précédentes comprises)
 //   5. une trame chiffrée qui ne commence pas par « { » est binaire (version 10) : son premier octet en
 //      donne le type (cf. sendBinary), le reste est brut (pas de base64)
 // Un pair sans le bon secret échoue au premier message chiffré ; un membre qui
@@ -43,6 +46,11 @@ public:
     // Secrets acceptés, du plus récent au plus ancien (à régler avant la connexion)
     void setSecrets(const QList<QByteArray> &secrets);
     int secretIndex() const { return m_pskIndex; } // secret retenu : 0 = le plus récent, -1 = pas encore
+    // En entrée, plusieurs conversations : les secrets de chacune (cf. setSecrets). Le choix est annoncé par
+    // secretChosen, avant l'envoi de notre hello.
+    void setSecretGroups(const QList<QList<QByteArray>> &groups);
+    int secretGroup() const { return m_group; }
+    void setNickname(const QString &nick) { m_nick = nick; } // avant le hello
     static QByteArray secretTag(const QByteArray &secret, const QByteArray &ephemeralPublic);
     // Trame binaire : type (premier octet, jamais « { ») puis contenu brut. Seulement si peerVersion() >= 10.
     void sendBinary(quint8 type, const QByteArray &payload);
@@ -53,6 +61,7 @@ public:
     qint64 pendingBytes() const; // en attente d'envoi (Tor plus lent que l'émetteur)
 
 signals:
+    void secretChosen(int group); // entrante : conversation reconnue (avant notre hello)
     void ready();
     void received(const QJsonObject &obj);
     void binaryReceived(quint8 type, const QByteArray &payload);
@@ -67,12 +76,15 @@ private:
     void sendFrame(const QByteArray &payload);
     void sendEncrypted(const QJsonObject &obj);
     void sendHello();
+    void sendKeyFrame();
+    bool chooseSecret(int group, int index); // false : échec (connexion fermée)
     void fail(const QString &reason);
 
     QTcpSocket *m_socket;
     bool m_outgoing;
-    QList<QByteArray> m_psks;
-    int m_pskIndex = -1;
+    QList<QList<QByteArray>> m_groups; // secrets par conversation, du plus récent au plus ancien
+    QList<QByteArray> m_psks;          // ceux de la conversation retenue (ou de l'unique)
+    int m_group = -1, m_pskIndex = -1;
     QByteArray m_dh;
     bool m_waitPeerHello = false; // secret à deviner d'après le hello du correspondant (sans étiquettes)
     QString m_nick, m_ownOnion, m_peerNick, m_peerOnion;
