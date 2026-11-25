@@ -63,14 +63,29 @@ QFont reactionFont()
     return f;
 }
 
-// Même taille, police d'émojis en couleur seule : sous Linux, fontconfig choisit sinon parfois une police
-// monochrome (Symbola). Jamais pour du texte ordinaire : elle a aussi des chiffres et des espaces, très larges.
-QFont emojiFont(const QFont &base)
+// Les émojis seuls (pastilles, barre de survol, menu « Réagir ») : un peu plus gros sous Linux, où Noto
+// Color Emoji paraît plus petite que le texte à taille égale
+#if defined(Q_OS_LINUX) || defined(Q_OS_FREEBSD)
+constexpr qreal EmojiBoost = 1.3;
+#else
+constexpr qreal EmojiBoost = 1.0;
+#endif
+
+// Police d'émojis en couleur seule : sous Linux, fontconfig choisit sinon parfois une police monochrome
+// (Symbola). Jamais pour du texte ordinaire : elle a aussi des chiffres et des espaces, très larges.
+QFont emojiFont(const QFont &base, qreal scale = 1.0)
 {
     QFont f = base;
     if (!Markup::emojiFontFamily().isEmpty())
         f.setFamilies({Markup::emojiFontFamily()});
+    if (scale != 1.0)
+        f.setPointSizeF(f.pointSizeF() * scale);
     return f;
+}
+
+QFont pillEmojiFont()
+{
+    return emojiFont(reactionFont(), EmojiBoost);
 }
 
 // Pastille : l'émoji (police en couleur) puis le nombre (police ordinaire)
@@ -81,13 +96,13 @@ QString reactionCount(const ChatEntry::Reaction &r)
 
 int reactionPillHeight()
 {
-    const qreal text = qMax(QFontMetricsF(reactionFont()).height(), QFontMetricsF(emojiFont(reactionFont())).height());
+    const qreal text = qMax(QFontMetricsF(reactionFont()).height(), QFontMetricsF(pillEmojiFont()).height());
     return int(std::ceil(text)) + 6;
 }
 
 qreal reactionTextWidth(const ChatEntry::Reaction &r)
 {
-    return QFontMetricsF(emojiFont(reactionFont())).horizontalAdvance(r.emoji)
+    return QFontMetricsF(pillEmojiFont()).horizontalAdvance(r.emoji)
            + QFontMetricsF(reactionFont()).horizontalAdvance(reactionCount(r));
 }
 
@@ -821,8 +836,8 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
             p->drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
             p->setPen(r.mine ? QColor("#041e49") : OtherText);
             const qreal left = pill.center().x() - reactionTextWidth(r) / 2;
-            const qreal emojiW = QFontMetricsF(emojiFont(reactionFont())).horizontalAdvance(r.emoji);
-            p->setFont(emojiFont(reactionFont()));
+            const qreal emojiW = QFontMetricsF(pillEmojiFont()).horizontalAdvance(r.emoji);
+            p->setFont(pillEmojiFont());
             p->drawText(QRectF(left, pill.top(), emojiW + 1, pill.height()), Qt::AlignVCenter | Qt::AlignLeft, r.emoji);
             p->setFont(reactionFont());
             p->drawText(QRectF(left + emojiW, pill.top(), pill.right() - left - emojiW, pill.height()),
@@ -861,8 +876,8 @@ public:
     {
         setObjectName("hoverBar");
         setAttribute(Qt::WA_StyledBackground);
-        setStyleSheet("QFrame#hoverBar { background: #ffffff; border: 1px solid #e1e3e1; border-radius: 17px; }"
-                      "QToolButton { border: none; border-radius: 14px; background: transparent; padding: 0; }"
+        setStyleSheet("QFrame#hoverBar { background: #ffffff; border: 1px solid #e1e3e1; border-radius: 20px; }"
+                      "QToolButton { border: none; border-radius: 17px; background: transparent; padding: 0; }"
                       "QToolButton:hover { background: #e9eef6; }"
                       "QToolButton:checked { background: #d3e3fd; }");
         auto *lay = new QHBoxLayout(this);
@@ -872,7 +887,7 @@ public:
             auto *b = button(emoji, tr("Réagir %1").arg(emoji));
             QFont big = reactionFont();
             big.setPointSizeF(big.pointSizeF() * 1.2);
-            b->setFont(emojiFont(big));
+            b->setFont(emojiFont(big, EmojiBoost));
             b->setCheckable(true);
             b->setProperty("emoji", emoji);
             m_reactions << b;
@@ -921,7 +936,7 @@ private:
         auto *b = new QToolButton(this);
         b->setText(text);
         b->setToolTip(tip);
-        b->setFixedSize(28, 28);
+        b->setFixedSize(34, 34);
         b->setCursor(Qt::PointingHandCursor);
         b->setFocusPolicy(Qt::NoFocus); // la zone de saisie garde le focus
         return b;
@@ -1400,7 +1415,7 @@ void ChatView::contextMenuEvent(QContextMenuEvent *event)
             const bool mine = std::any_of(e.reactions.cbegin(), e.reactions.cend(),
                                           [&](const ChatEntry::Reaction &r) { return r.emoji == emoji && r.mine; });
             QAction *a = react->addAction(emoji, this, [this, id, emoji] { emit reactionToggled(id, emoji); });
-            a->setFont(emojiFont(react->font())); // libellé : l'émoji seul
+            a->setFont(emojiFont(react->font(), 1.25 * EmojiBoost)); // libellé : l'émoji seul
             a->setCheckable(true);
             a->setChecked(mine); // cochée : la nôtre, la choisir la retire
         }
