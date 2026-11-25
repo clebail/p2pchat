@@ -248,7 +248,8 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
   quelqu'un qui possède le code ne peut pas se faire passer pour un autre membre.
 - **Messages** : l'auteur signe chaque message (identifiant, adresse, pseudo, texte, heure). Un message
   modifié en route ou attribué à quelqu'un d'autre est rejeté.
-- **Exclusion et secret** : le créateur du groupe en est l'administrateur. Les décisions (exclusions,
+- **Exclusion et secret** (⋮ → *Membres…* : rôles, présence, *Exclure…*, *Renouveler le secret…*) : le
+  créateur du groupe en est l'administrateur. Les décisions (exclusions,
   nouveau secret) forment une chaîne d'enregistrements signés par un administrateur, que tous les membres
   vérifient et se transmettent ; l'empreinte du premier identifie le groupe et figure dans les codes
   d'invitation. Exclure un membre renouvelle le secret : le nouveau ne voyage que par les connexions

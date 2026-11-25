@@ -42,6 +42,7 @@
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QActionGroup>
 #include <QMenu>
 #include <QPainter>
@@ -171,6 +172,29 @@ void MainWindow::connectNode()
     });
     connect(m_node, &GroupNode::invalidMessage, this, [this](const QString &author) {
         appendSystem(tr("⚠ Message attribué à « %1 » rejeté : signature invalide.").arg(author));
+    });
+    connect(m_node, &GroupNode::memberExcluded, this,
+            [this](const QString &, const QString &nick, const QString &by) {
+                appendSystem(tr("%1 ne fait plus partie du groupe (exclusion par %2).").arg(nick, by));
+            });
+    connect(m_node, &GroupNode::secretRenewed, this, [this](const QString &by) {
+        appendSystem(tr("Nouveau secret du groupe (renouvelé par %1) : les anciens codes d'invitation ne "
+                        "fonctionnent plus.").arg(by));
+    });
+    connect(m_node, &GroupNode::memberLeft, this, [this](const QString &, const QString &nick) {
+        appendSystem(tr("%1 a quitté le groupe.").arg(nick));
+    });
+    connect(m_node, &GroupNode::excludedFromGroup, this, [this](const QString &by) {
+        appendSystem(tr("⚠ %1 vous a exclu du groupe. L'historique est conservé ; il faudra une nouvelle "
+                        "invitation pour revenir.").arg(by));
+        updateStatus();
+        auto *box = new QMessageBox(QMessageBox::Information, tr("Exclu du groupe"),
+                                    tr("%1, administrateur du groupe, vous en a exclu.\n\n"
+                                       "Vous ne recevez plus les messages. L'historique déjà reçu est conservé.")
+                                        .arg(by),
+                                    QMessageBox::Ok, this);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        box->open(); // sans bloquer la boucle d'événements
     });
     connect(m_node, &GroupNode::stateChanged, this, &MainWindow::updateStatus);
     connect(m_node, &GroupNode::typingChanged, this, &MainWindow::updateStatus);
@@ -434,6 +458,7 @@ void MainWindow::buildUi()
     QMenu *notifications = menu->addMenu(tr("Notifications"));
     connect(notifications, &QMenu::aboutToShow, this, [this, notifications] { buildNotificationMenu(notifications); });
     buildNotificationMenu(notifications); // le sous-menu doit avoir un contenu pour s'afficher
+    menu->addAction(tr("Membres…"), this, &MainWindow::showMembers);
     menu->addAction(tr("Vérifier l'identité d'un membre…"), this, &MainWindow::verifyMember);
     menu->addAction(tr("Changer de pseudo…"), this, &MainWindow::changeNickname);
     menu->addAction(tr("Vider la conversation"), this, &MainWindow::clearConversation);
@@ -1399,6 +1424,129 @@ void MainWindow::resetAll()
     m_node->leaveGroup();
     appendSystem(tr("Vous avez quitté le groupe."));
     updateStatus();
+}
+
+// ---------------------------------------------------------------- Membres et gouvernance
+
+void MainWindow::showMembers()
+{
+    if (!m_group.inGroup()) {
+        QMessageBox::information(this, tr("Membres"), tr("Vous ne faites partie d'aucun groupe."));
+        return;
+    }
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Membres du groupe"));
+    dlg.resize(420, 420);
+    auto *lay = new QVBoxLayout(&dlg);
+    auto *list = new QListWidget(&dlg);
+    lay->addWidget(list);
+    auto *info = new QLabel(&dlg);
+    info->setWordWrap(true);
+    lay->addWidget(info);
+    auto *buttons = new QHBoxLayout;
+    auto *verifyBtn = new QPushButton(tr("Vérifier l'identité…"), &dlg);
+    auto *excludeBtn = new QPushButton(tr("Exclure…"), &dlg);
+    auto *renewBtn = new QPushButton(tr("Renouveler le secret…"), &dlg);
+    auto *closeBtn = new QPushButton(tr("Fermer"), &dlg);
+    buttons->addWidget(verifyBtn);
+    buttons->addWidget(excludeBtn);
+    buttons->addWidget(renewBtn);
+    buttons->addStretch(1);
+    buttons->addWidget(closeBtn);
+    lay->addLayout(buttons);
+    connect(closeBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+
+    auto fill = [this, list, info, renewBtn] {
+        const QString selected = list->currentItem() ? list->currentItem()->data(Qt::UserRole).toString() : QString();
+        list->clear();
+        auto roles = [this](const QString &onion) {
+            QStringList r;
+            if (m_node->isAdmin(onion))
+                r << tr("administrateur");
+            if (!onion.isEmpty() && m_group.isVerified(onion))
+                r << tr("identité vérifiée ✔");
+            return r;
+        };
+        QStringList mine = roles(m_node->ownOnion());
+        auto *me = new QListWidgetItem(mine.isEmpty() ? tr("%1 (vous)").arg(m_group.nickname())
+                                                      : tr("%1 (vous) — %2").arg(m_group.nickname(), mine.join(", ")));
+        QFont bold = me->font();
+        bold.setBold(true);
+        me->setFont(bold);
+        list->addItem(me);
+        for (const Member &m : m_group.members()) {
+            QStringList r = roles(m.onion);
+            r.prepend(m_node->isConnected(m.onion) ? tr("en ligne") : tr("hors ligne"));
+            auto *item = new QListWidgetItem(tr("%1 — %2").arg(m.nick, r.join(", ")));
+            item->setData(Qt::UserRole, m.onion);
+            list->addItem(item);
+            if (m.onion == selected)
+                list->setCurrentItem(item);
+        }
+        QString text;
+        if (m_node->groupId().isEmpty())
+            text = tr("Ce groupe n'a pas encore d'administrateur : le premier membre qui exclut quelqu'un ou "
+                      "renouvelle le secret le deviendra.");
+        else if (m_node->isAdmin())
+            text = tr("Vous administrez ce groupe : vous pouvez exclure un membre et renouveler le secret.");
+        else {
+            QStringList names;
+            for (const QString &a : m_node->admins())
+                names << memberNick(a);
+            text = tr("Administration : %1.").arg(names.join(", "));
+        }
+        if (const int n = int(m_node->excludedMembers().size()))
+            text += " " + tr("%n membre(s) exclu(s).", nullptr, n);
+        info->setText(text);
+        renewBtn->setEnabled(m_node->canGovern());
+    };
+    auto updateButtons = [this, list, verifyBtn, excludeBtn] {
+        const QString onion = list->currentItem() ? list->currentItem()->data(Qt::UserRole).toString() : QString();
+        verifyBtn->setEnabled(!onion.isEmpty() && !m_group.pinnedKey(onion).isEmpty());
+        excludeBtn->setEnabled(!onion.isEmpty() && m_node->canGovern());
+    };
+    auto current = [list] {
+        return list->currentItem() ? list->currentItem()->data(Qt::UserRole).toString() : QString();
+    };
+    connect(list, &QListWidget::currentItemChanged, &dlg, updateButtons);
+    connect(verifyBtn, &QPushButton::clicked, &dlg, [this, current] { showSafetyNumber(current()); });
+    connect(excludeBtn, &QPushButton::clicked, &dlg, [this, current] { confirmExclude(current()); });
+    connect(renewBtn, &QPushButton::clicked, &dlg, [this] { confirmRenewSecret(); });
+    connect(m_node, &GroupNode::stateChanged, &dlg, [fill, updateButtons] { fill(); updateButtons(); });
+    fill();
+    updateButtons();
+    dlg.exec();
+}
+
+void MainWindow::confirmExclude(const QString &onion)
+{
+    const QString nick = memberNick(onion);
+    if (QMessageBox::question(this, tr("Exclure %1").arg(nick),
+                              tr("Exclure %1 du groupe ?\n\n"
+                                 "Un nouveau secret est créé et transmis aux seuls autres membres : %1 ne recevra "
+                                 "plus les messages et ne pourra plus revenir, même avec un ancien code "
+                                 "d'invitation. Il garde l'historique déjà reçu.\n\n"
+                                 "Les membres absents recevront le nouveau secret à leur retour (dans les 30 jours).")
+                                  .arg(nick))
+        != QMessageBox::Yes)
+        return;
+    QString error;
+    if (!m_node->exclude(onion, &error))
+        QMessageBox::warning(this, tr("Exclure %1").arg(nick), tr("Impossible d'exclure %1 : %2.").arg(nick, error));
+}
+
+void MainWindow::confirmRenewSecret()
+{
+    if (QMessageBox::question(this, tr("Renouveler le secret"),
+                              tr("Créer un nouveau secret pour le groupe ?\n\n"
+                                 "Les codes d'invitation déjà donnés ne fonctionneront plus pour les personnes "
+                                 "qui ne sont pas encore venues. Les membres actuels reçoivent le nouveau secret "
+                                 "automatiquement (les absents, à leur retour dans les 30 jours)."))
+        != QMessageBox::Yes)
+        return;
+    QString error;
+    if (!m_node->renewSecret(&error))
+        QMessageBox::warning(this, tr("Renouveler le secret"), tr("Impossible : %1.").arg(error));
 }
 
 // ---------------------------------------------------------------- Code de sécurité

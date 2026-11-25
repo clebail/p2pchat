@@ -127,6 +127,10 @@ private:
     void changeNickname();
     // Code de sécurité (cf. safetynumber.h) : choix du membre, puis comparaison de vive voix
     void verifyMember();
+    // Membres (⋮ → Membres…) : rôles, présence, exclusion et renouvellement du secret (administrateurs)
+    void showMembers();
+    void confirmExclude(const QString &onion);
+    void confirmRenewSecret();
     void showSafetyNumber(const QString &onion);
     void resetAll();
 
