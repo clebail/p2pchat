@@ -24,6 +24,7 @@ class QTcpServer;
 class QTcpSocket;
 class QStackedWidget;
 class QSystemTrayIcon;
+class MentionCompleter;
 class Notifier;
 class QToolButton;
 class TerminalSession;
@@ -48,6 +49,14 @@ private:
     // msg : message signé tel qu'échangé sur le réseau (id, a, n, x, ts, s)
     void appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Trust trust, bool save = true);
     void appendSystem(const QString &text);
+    // Pseudos reconnus dans les mentions « @… » (membres, nous-même et « tous »)
+    QStringList mentionNames() const;
+    bool mentionsMe(const QJsonObject &msg) const;
+    bool repliesToMe(const QJsonObject &msg) const; // réponse à l'un de nos messages
+    QString notificationTitle(const QJsonObject &msg) const;
+    // Réponse avec citation : bandeau au-dessus de la zone de saisie
+    void startReply(const QString &id, const QString &author, const QString &text);
+    void cancelReply();
     void loadHistory();
     void clearConversation();
     void setupTray();
@@ -163,6 +172,10 @@ private:
     ChatView *m_chat = nullptr;
     QStackedWidget *m_pages = nullptr; // accueil (pas de groupe) / conversation
     QLineEdit *m_input = nullptr;
+    MentionCompleter *m_mentions = nullptr;
+    QWidget *m_replyBar = nullptr;
+    QLabel *m_replyLabel = nullptr;
+    QString m_replyTo; // identifiant du message cité par le message en cours d'écriture
     QToolButton *m_sendButton = nullptr;
     QLabel *m_title = nullptr, *m_subtitle = nullptr;
     QString m_historyPath;

@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QContextMenuEvent>
+#include <QMouseEvent>
 #include <QHash>
 #include <QLocale>
 #include <QMenu>
@@ -17,6 +18,8 @@ namespace {
 // Palette Material 3 (thème clair)
 const QColor MineBubble("#d3e3fd"), MineText("#041e49");
 const QColor OtherBubble("#e9eef6"), OtherText("#1f1f1f");
+const QColor MentionBubble("#fdefc3"); // message qui nous mentionne
+const QColor MentionText("#0b57d0");   // « @pseudo »
 const QColor Muted("#5f6368");
 
 constexpr int Side = 14;        // marge latérale
@@ -25,6 +28,8 @@ constexpr int AvatarGap = 8;
 constexpr int PadH = 14, PadV = 9;
 constexpr int RBig = 20, RSmall = 5;
 constexpr int GroupGapSec = 5 * 60;
+// Citation (réponse) : encadré en haut de la bulle
+constexpr int QuoteMargin = 8, QuoteGap = 6, QuotePadL = 11, QuotePadR = 8, QuotePadV = 5;
 
 QFont messageFont()
 {
@@ -62,6 +67,23 @@ qreal layoutText(QTextLayout &tl, int maxWidth, qreal *usedWidth)
     if (usedWidth)
         *usedWidth = w;
     return y;
+}
+
+// Texte d'un message, mentions en gras et en couleur
+void prepareMessageLayout(QTextLayout &tl, const ChatEntry &e)
+{
+    tl.setText(e.text);
+    tl.setFont(messageFont());
+    QVector<QTextLayout::FormatRange> formats;
+    for (const auto &m : e.mentions) {
+        QTextLayout::FormatRange r;
+        r.start = m.first;
+        r.length = m.second;
+        r.format.setFontWeight(QFont::DemiBold);
+        r.format.setForeground(MentionText);
+        formats.append(r);
+    }
+    tl.setFormats(formats);
 }
 
 QPainterPath roundedPath(const QRectF &r, qreal tl, qreal tr, qreal br, qreal bl)
@@ -164,14 +186,47 @@ void ChatModel::append(const ChatEntry &e)
         emit dataChanged(index(row - 1), index(row - 1));
 }
 
-int ChatModel::insertSorted(const ChatEntry &e)
+int ChatModel::rowOf(const QString &id) const
 {
+    if (id.isEmpty())
+        return -1;
+    for (int i = int(m_entries.size()) - 1; i >= 0; --i)
+        if (m_entries.at(i).id == id)
+            return i;
+    return -1;
+}
+
+void ChatModel::resolveReply(ChatEntry &e) const
+{
+    const int row = rowOf(e.replyTo);
+    if (e.replyTo.isEmpty() || row < 0)
+        return;
+    const ChatEntry &quoted = m_entries.at(row);
+    e.replyAuthor = quoted.mine ? QObject::tr("Vous") : quoted.author;
+    e.replyText = quoted.text;
+    e.replyFound = true;
+}
+
+int ChatModel::insertSorted(const ChatEntry &entry)
+{
+    ChatEntry e = entry;
+    resolveReply(e);
     int row = int(m_entries.size());
     while (row > 0 && m_entries.at(row - 1).ts > e.ts)
         --row;
     beginInsertRows({}, row, row);
     m_entries.insert(row, e);
     endInsertRows();
+    // Réponses arrivées avant ce message (synchronisation) : leur citation devient disponible
+    if (!e.id.isEmpty()) {
+        for (int i = 0; i < m_entries.size(); ++i) {
+            ChatEntry &other = m_entries[i];
+            if (!other.replyFound && other.replyTo == e.id) {
+                resolveReply(other);
+                emit dataChanged(index(i), index(i));
+            }
+        }
+    }
     // Les voisins peuvent changer d'aspect (regroupement : nom, heure, avatar, coins)
     const int first = qMax(0, row - 1), last = qMin(int(m_entries.size()) - 1, row + 1);
     emit dataChanged(index(first), index(last));
@@ -214,6 +269,9 @@ struct ChatDelegate::Geometry
     int top = 0;                    // espace au-dessus
     int nameH = 0, timeH = 0;
     int bubbleW = 0, bubbleH = 0, textW = 0;
+    int textTop = PadV;     // position du texte dans la bulle
+    int quoteH = 0;         // 0 : pas de citation
+    QString quoteText;      // extrait, coupé à la largeur disponible
     int height = 0;
 };
 
@@ -244,12 +302,27 @@ ChatDelegate::Geometry ChatDelegate::compute(const QModelIndex &index, int width
     }
 
     const int maxBubble = qMax(120, qMin(int(width * 0.75), width - 2 * Side - Avatar - AvatarGap - 24));
-    QTextLayout tl(e.text, messageFont());
+    QTextLayout tl;
+    prepareMessageLayout(tl, e);
     qreal used = 0;
     const qreal h = layoutText(tl, maxBubble - 2 * PadH, &used);
     g.textW = int(std::ceil(used));
     g.bubbleW = g.textW + 2 * PadH;
     g.bubbleH = int(std::ceil(h)) + 2 * PadV;
+    if (!e.replyTo.isEmpty()) {
+        const QFontMetrics bold(smallFont(true));
+        const QString author = e.replyFound ? e.replyAuthor : QObject::tr("Message cité");
+        const QString full = e.replyFound ? ChatView::excerpt(e.replyText)
+                                          : QObject::tr("indisponible sur ce poste (effacé ou antérieur à votre arrivée)");
+        const int maxQuote = maxBubble - 2 * QuoteMargin;
+        const int wanted = qMax(bold.horizontalAdvance(author), small.horizontalAdvance(full)) + QuotePadL + QuotePadR;
+        const int quoteW = qMin(wanted, maxQuote);
+        g.quoteText = small.elidedText(full, Qt::ElideRight, quoteW - QuotePadL - QuotePadR);
+        g.quoteH = bold.height() + small.height() + 2 * QuotePadV;
+        g.bubbleW = qMax(g.bubbleW, quoteW + 2 * QuoteMargin);
+        g.textTop = QuoteMargin + g.quoteH + QuoteGap;
+        g.bubbleH = g.textTop + int(std::ceil(h)) + PadV;
+    }
     g.nameH = (!e.mine && g.first) ? small.height() + 4 : 0;
     g.timeH = (g.last || e.trust != ChatEntry::Verified) ? small.height() + 4 : 0;
     g.height = g.top + g.nameH + g.bubbleH + g.timeH;
@@ -262,6 +335,34 @@ QSize ChatDelegate::sizeHint(const QStyleOptionViewItem &, const QModelIndex &in
     return {width, compute(index, width).height};
 }
 
+QRectF ChatDelegate::bubbleRect(const ChatEntry &e, const Geometry &g, const QRect &r) const
+{
+    const int left = e.mine ? r.right() - Side - g.bubbleW : r.left() + Side + Avatar + AvatarGap;
+    return QRectF(left, r.top() + g.top + g.nameH, g.bubbleW, g.bubbleH);
+}
+
+QRectF ChatDelegate::quoteRect(const Geometry &g, const QRectF &bubble) const
+{
+    return QRectF(bubble.left() + QuoteMargin, bubble.top() + QuoteMargin, bubble.width() - 2 * QuoteMargin, g.quoteH);
+}
+
+bool ChatDelegate::editorEvent(QEvent *event, QAbstractItemModel *model, const QStyleOptionViewItem &option,
+                               const QModelIndex &index)
+{
+    if (event->type() == QEvent::MouseButtonRelease) {
+        const auto *mouse = static_cast<QMouseEvent *>(event);
+        const ChatEntry &e = static_cast<const ChatModel *>(index.model())->entry(index.row());
+        if (mouse->button() == Qt::LeftButton && e.kind == ChatEntry::Message && !e.replyTo.isEmpty()) {
+            const Geometry g = compute(index, option.rect.width());
+            if (quoteRect(g, bubbleRect(e, g, option.rect)).contains(mouse->pos())) {
+                emit quoteClicked(e.replyTo);
+                return true;
+            }
+        }
+    }
+    return QStyledItemDelegate::editorEvent(event, model, option, index);
+}
+
 void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
     const auto *model = static_cast<const ChatModel *>(index.model());
@@ -272,6 +373,11 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
     p->save();
     p->setRenderHint(QPainter::Antialiasing);
     p->setRenderHint(QPainter::TextAntialiasing);
+
+    // Message rejoint depuis une citation : brièvement mis en évidence
+    const auto *view = qobject_cast<const ChatView *>(m_view);
+    if (view && !e.id.isEmpty() && view->flashedId() == e.id)
+        p->fillRect(r.adjusted(0, g.dateHeader ? g.top - 6 : 0, 0, 0), QColor(11, 87, 208, 28));
 
     // Séparateur de date
     if (g.dateHeader) {
@@ -295,7 +401,8 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
     }
 
     // Nom de l'auteur (premier message d'un groupe reçu)
-    const int bubbleLeft = e.mine ? r.right() - Side - g.bubbleW : r.left() + Side + Avatar + AvatarGap;
+    const QRectF bubble = bubbleRect(e, g, r);
+    const int bubbleLeft = int(bubble.left());
     if (g.nameH) {
         p->setFont(smallFont());
         p->setPen(Muted);
@@ -304,16 +411,38 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
     }
 
     // Bulle : coins réduits côté auteur entre deux messages d'un même groupe
-    const QRectF bubble(bubbleLeft, y, g.bubbleW, g.bubbleH);
     const qreal top = g.first ? RBig : RSmall, bottom = g.last ? RBig : RSmall;
     const QPainterPath path = e.mine ? roundedPath(bubble, RBig, top, bottom, RBig)
                                      : roundedPath(bubble, top, RBig, RBig, bottom);
-    p->fillPath(path, e.mine ? MineBubble : OtherBubble);
+    p->fillPath(path, e.mine ? MineBubble : e.mentionsMe ? MentionBubble : OtherBubble);
 
-    QTextLayout tl(e.text, messageFont());
+    // Citation : barre de la couleur de l'auteur cité, son nom et un extrait
+    if (g.quoteH) {
+        const QRectF q = quoteRect(g, bubble);
+        QPainterPath box;
+        box.addRoundedRect(q, 8, 8);
+        p->fillPath(box, QColor(0, 0, 0, 16));
+        const QColor accent = e.replyFound ? ChatView::colorFor(e.replyAuthor) : Muted;
+        p->fillRect(QRectF(q.left(), q.top() + 4, 3, q.height() - 8), accent);
+        const QFontMetrics bold(smallFont(true));
+        p->setFont(smallFont(true));
+        p->setPen(accent);
+        p->drawText(QRectF(q.left() + QuotePadL, q.top() + QuotePadV, q.width() - QuotePadL - QuotePadR, bold.height()),
+                    Qt::AlignLeft | Qt::AlignVCenter,
+                    bold.elidedText(e.replyFound ? e.replyAuthor : QObject::tr("Message cité"), Qt::ElideRight,
+                                    int(q.width()) - QuotePadL - QuotePadR));
+        p->setFont(smallFont());
+        p->setPen(Muted);
+        p->drawText(QRectF(q.left() + QuotePadL, q.top() + QuotePadV + bold.height(),
+                           q.width() - QuotePadL - QuotePadR, q.height() - 2 * QuotePadV - bold.height()),
+                    Qt::AlignLeft | Qt::AlignVCenter, g.quoteText);
+    }
+
+    QTextLayout tl;
+    prepareMessageLayout(tl, e);
     layoutText(tl, g.bubbleW - 2 * PadH + 1, nullptr);
     p->setPen(e.mine ? MineText : OtherText);
-    tl.draw(p, QPointF(bubble.left() + PadH, bubble.top() + PadV));
+    tl.draw(p, QPointF(bubble.left() + PadH, bubble.top() + g.textTop));
 
     // Avatar (dernier message d'un groupe reçu)
     if (!e.mine && g.last) {
@@ -354,7 +483,16 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
 ChatView::ChatView(QWidget *parent) : QListView(parent), m_model(new ChatModel(this))
 {
     setModel(m_model);
-    setItemDelegate(new ChatDelegate(this));
+    auto *delegate = new ChatDelegate(this);
+    setItemDelegate(delegate);
+    connect(delegate, &ChatDelegate::quoteClicked, this, &ChatView::showMessage);
+    m_flashTimer = new QTimer(this);
+    m_flashTimer->setSingleShot(true);
+    m_flashTimer->setInterval(1600);
+    connect(m_flashTimer, &QTimer::timeout, this, [this] {
+        m_flashId.clear();
+        viewport()->update();
+    });
     setSelectionMode(QAbstractItemView::NoSelection);
     setFocusPolicy(Qt::NoFocus);
     setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
@@ -392,7 +530,7 @@ void ChatView::appendEntry(const ChatEntry &e)
 }
 
 void ChatView::addMessage(const QString &author, const QString &text, const QDateTime &ts, bool mine,
-                          ChatEntry::Trust trust)
+                          ChatEntry::Trust trust, const QList<QPair<int, int>> &mentions, bool mentionsMe)
 {
     ChatEntry e;
     e.author = author;
@@ -400,7 +538,34 @@ void ChatView::addMessage(const QString &author, const QString &text, const QDat
     e.ts = ts;
     e.mine = mine;
     e.trust = trust;
+    e.mentions = mentions;
+    e.mentionsMe = mentionsMe;
+    addMessage(e);
+}
+
+void ChatView::addMessage(ChatEntry e)
+{
+    e.kind = ChatEntry::Message;
+    e.mentionsMe = e.mentionsMe && !e.mine;
     appendEntry(e);
+}
+
+bool ChatView::showMessage(const QString &id)
+{
+    const int row = m_model->rowOf(id);
+    if (row < 0)
+        return false;
+    scrollTo(m_model->index(row), QAbstractItemView::PositionAtCenter);
+    m_flashId = id;
+    m_flashTimer->start();
+    viewport()->update();
+    return true;
+}
+
+QString ChatView::excerpt(const QString &text, int maxChars)
+{
+    const QString line = text.simplified();
+    return line.size() <= maxChars ? line : line.left(maxChars - 1) + QChar(0x2026);
 }
 
 void ChatView::addSystem(const QString &text)
@@ -453,6 +618,12 @@ void ChatView::contextMenuEvent(QContextMenuEvent *event)
     if (!idx.isValid())
         return;
     QMenu menu(this);
+    const ChatEntry &e = m_model->entry(idx.row());
+    // Seuls les messages authentiques ont un identifiant reconnu par les autres membres
+    if (e.kind == ChatEntry::Message && !e.id.isEmpty() && e.trust == ChatEntry::Verified) {
+        const QString id = e.id, author = e.author, text = e.text;
+        menu.addAction(tr("Répondre"), this, [this, id, author, text] { emit replyRequested(id, author, text); });
+    }
     menu.addAction(tr("Copier le message"), this, [this, idx] {
         QGuiApplication::clipboard()->setText(m_model->entry(idx.row()).text);
     });

@@ -90,6 +90,36 @@ private slots:
         QVERIFY(!Message::verify(m, Ed25519::publicKey(seed)));
     }
 
+    void replyIsSigned()
+    {
+        const QByteArray seed = Ed25519::generateSeed();
+        const QByteArray key = Ed25519::publicKey(seed);
+        const QJsonObject m = Message::create(seed, QString(56, 'b') + ".onion", "Bob", "d'accord", 5, "id-cite");
+        QCOMPARE(Message::replyTo(m), QString("id-cite"));
+        QVERIFY(Message::verify(m, key));
+
+        // Un relais ne peut ni changer, ni retirer, ni ajouter le message cité
+        QJsonObject changed = m;
+        changed["r"] = "autre";
+        QVERIFY(!Message::verify(changed, key));
+        QJsonObject removed = m;
+        removed.remove("r");
+        QVERIFY(!Message::verify(removed, key));
+        QJsonObject added = Message::create(seed, QString(56, 'b') + ".onion", "Bob", "x", 5);
+        added["r"] = "id-cite";
+        QVERIFY(!Message::verify(added, key));
+    }
+
+    void messageWithoutReplyKeepsLegacySignature()
+    {
+        // Les versions précédentes signaient exactement ces six parties : elles vérifient toujours nos messages
+        const QJsonObject m{{"id", "i"}, {"a", "a"}, {"n", "n"}, {"x", "x"}, {"ts", 42.0}};
+        QCOMPARE(Message::signingBytes(m), Crypto::pack({"p2pchat-msg-v1", "i", "a", "n", "x", "42"}));
+        QVERIFY(Message::replyTo(m).isEmpty());
+        QCOMPARE(Message::create(Ed25519::generateSeed(), "a", "n", "x", 1, QString(100, 'r')).value("r").toString().size(),
+                 Message::MaxIdLength);
+    }
+
     void extraFieldsAreNotSigned()
     {
         // "t" et "mine" sont ajoutés ou retirés en route (historique local) : la signature tient

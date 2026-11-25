@@ -33,13 +33,20 @@ QByteArray Protocol::fromB64(const QJsonValue &v)
 
 QByteArray Protocol::Message::signingBytes(const QJsonObject &m)
 {
-    return Crypto::pack({MessageContext, m.value("id").toString().toUtf8(), m.value("a").toString().toUtf8(),
-                         m.value("n").toString().toUtf8(), m.value("x").toString().toUtf8(),
-                         QByteArray::number(timestamp(m))});
+    QList<QByteArray> parts{MessageContext,
+                            m.value("id").toString().toUtf8(),
+                            m.value("a").toString().toUtf8(),
+                            m.value("n").toString().toUtf8(),
+                            m.value("x").toString().toUtf8(),
+                            QByteArray::number(timestamp(m))};
+    if (m.contains("r"))
+        parts << m.value("r").toString().toUtf8();
+    return Crypto::pack(parts);
 }
 
 QJsonObject Protocol::Message::create(const QByteArray &identitySeed, const QString &authorOnion,
-                                      const QString &nick, const QString &text, qint64 timestampMs)
+                                      const QString &nick, const QString &text, qint64 timestampMs,
+                                      const QString &replyTo)
 {
     QJsonObject m{{"t", "msg"},
                   {"id", QString::fromLatin1(Crypto::randomBytes(12).toHex())},
@@ -47,6 +54,8 @@ QJsonObject Protocol::Message::create(const QByteArray &identitySeed, const QStr
                   {"n", nick},
                   {"x", text},
                   {"ts", double(timestampMs)}};
+    if (!replyTo.isEmpty())
+        m.insert("r", replyTo.left(MaxIdLength));
     m.insert("s", toB64(Ed25519::sign(identitySeed, signingBytes(m))));
     return m;
 }
@@ -64,4 +73,9 @@ QString Protocol::Message::id(const QJsonObject &m)
 qint64 Protocol::Message::timestamp(const QJsonObject &m)
 {
     return qint64(m.value("ts").toDouble());
+}
+
+QString Protocol::Message::replyTo(const QJsonObject &m)
+{
+    return m.value("r").toString().left(MaxIdLength);
 }

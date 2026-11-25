@@ -48,7 +48,14 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 ### Interface
 
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
-- Clic droit sur un message → copier
+- Clic droit sur un message → copier, ou **répondre** : un bandeau « Réponse à … » apparaît au-dessus de la zone
+  de saisie (✕ ou Échap pour annuler). La réponse affiche une citation du message d'origine ; un clic dessus y
+  ramène. Le message cité fait partie de ce que l'auteur signe : personne ne peut le changer en relayant. Une
+  réponse à l'un de vos messages est mise en avant et notifiée (« Alice vous a répondu »).
+- **Mentions** : taper `@` propose les pseudos des membres (flèches puis Entrée ou Tab), `@tous` pour tout le
+  monde. Liste fermée, Tab complète comme dans un terminal (le pseudo s'il est seul possible, sinon la liste). Les mentions apparaissent en gras ; un message qui vous mentionne a une bulle jaune, et sa notification
+  l'indique (« Alice vous a mentionné(e) »). Elles sont retrouvées dans le texte signé : rien ne change dans le
+  protocole, et personne ne peut en ajouter en relayant un message.
 - Menu ⋮ : inviter, rejoindre, se reconnecter, **partager ma console**, changer de pseudo,
   **vider la conversation** (efface l'historique local), quitter le groupe
 - Survoler la ligne d'état sous le titre affiche l'état de chaque membre (dernière erreur, heure du prochain essai).
@@ -215,6 +222,7 @@ trousseau), l'historique et sa synchronisation, les règles de reconnexion, la p
 | `crypto.*` | X25519, Ed25519, HKDF, ChaCha20-Poly1305 (OpenSSL) |
 | `protocol.*` | Formats communs (adresse onion, base64), messages signés |
 | `invitation.*` | Encodage / décodage du code d'invitation |
+| `mentions.*`, `mentioncompleter.*` | Détection des « @pseudo », autocomplétion dans la zone de saisie |
 | `groupstore.*` | État persistant : pseudo, identité, secret, membres, trousseau des clés |
 | `history.*` | Historique local, inventaire et lots de synchronisation |
 | `connectionpolicy.*` | Espacement des appels, appels croisés, présence relayée |

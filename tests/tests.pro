@@ -3,6 +3,8 @@ TEMPLATE = subdirs
 SUBDIRS += \
     tst_crypto \
     tst_invitation \
+    tst_mentions \
+    tst_mentioncompleter \
     tst_protocol \
     tst_groupstore \
     tst_history \

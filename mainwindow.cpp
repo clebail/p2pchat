@@ -3,6 +3,8 @@
 #include "chatview.h"
 #include "crypto.h"
 #include "invitation.h"
+#include "mentioncompleter.h"
+#include "mentions.h"
 #include "notifier.h"
 #include "peerconnection.h"
 #include "protocol.h"
@@ -42,6 +44,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QShortcut>
 #include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -256,6 +259,10 @@ QToolButton#menuButton { border: none; border-radius: 20px; background: transpar
 QToolButton#menuButton:hover { background: #e9eef6; }
 QToolButton#menuButton::menu-indicator { image: none; }
 QWidget#composerBar { background: #ffffff; }
+QWidget#replyBar { background: #f0f4f9; border-left: 3px solid #0b57d0; border-radius: 6px; }
+QLabel#replyLabel { color: #444746; font-size: 13px; }
+QToolButton#replyClose { border: none; border-radius: 12px; color: #444746; font-size: 15px; }
+QToolButton#replyClose:hover { background: #dde3ea; }
 QLineEdit#composer { background: #f0f4f9; color: #1f1f1f; border: none; border-radius: 24px;
                      padding: 0 20px; font-size: 15px; min-height: 48px; }
 QLineEdit#composer:disabled { color: #9aa0a6; }
@@ -437,6 +444,32 @@ void MainWindow::buildUi()
     m_pages->addWidget(m_chat);
     layout->addWidget(m_pages, 1);
 
+    // Bandeau « Réponse à … » (réponse avec citation en cours d'écriture)
+    m_replyBar = new QWidget(central);
+    auto *replyRowLayout = new QHBoxLayout(m_replyBar);
+    replyRowLayout->setContentsMargins(12, 6, 12, 0);
+    auto *replyBox = new QWidget(m_replyBar);
+    replyBox->setObjectName("replyBar");
+    replyBox->setAttribute(Qt::WA_StyledBackground);
+    auto *replyLayout = new QHBoxLayout(replyBox);
+    replyLayout->setContentsMargins(12, 6, 6, 6);
+    m_replyLabel = new QLabel(replyBox);
+    m_replyLabel->setObjectName("replyLabel");
+    m_replyLabel->setTextFormat(Qt::RichText);
+    m_replyLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); // extrait long : pas d'élargissement
+    auto *replyClose = new QToolButton(replyBox);
+    replyClose->setObjectName("replyClose");
+    replyClose->setText(QStringLiteral("✕"));
+    replyClose->setFixedSize(24, 24);
+    replyClose->setCursor(Qt::PointingHandCursor);
+    replyClose->setToolTip(tr("Annuler la réponse (Échap)"));
+    connect(replyClose, &QToolButton::clicked, this, &MainWindow::cancelReply);
+    replyLayout->addWidget(m_replyLabel, 1);
+    replyLayout->addWidget(replyClose, 0, Qt::AlignTop);
+    replyRowLayout->addWidget(replyBox);
+    m_replyBar->setVisible(false);
+    layout->addWidget(m_replyBar);
+
     // Zone de saisie
     auto *composerBar = new QWidget(central);
     composerBar->setObjectName("composerBar");
@@ -448,6 +481,7 @@ void MainWindow::buildUi()
     m_input->setObjectName("composer");
     m_input->setMaxLength(4000);
     m_input->setPlaceholderText(tr("Message"));
+    m_mentions = new MentionCompleter(m_input);
     m_sendButton = new QToolButton(composerBar);
     m_sendButton->setObjectName("sendButton");
     m_sendButton->setIcon(sendIcon());
@@ -461,6 +495,10 @@ void MainWindow::buildUi()
     setCentralWidget(central);
 
     connect(m_input, &QLineEdit::returnPressed, this, &MainWindow::sendCurrent);
+    // Échap annule la réponse en cours (la liste des mentions, si elle est ouverte, se ferme d'abord)
+    auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), m_input, nullptr, nullptr, Qt::WidgetShortcut);
+    connect(escape, &QShortcut::activated, this, &MainWindow::cancelReply);
+    connect(m_chat, &ChatView::replyRequested, this, &MainWindow::startReply);
     connect(m_sendButton, &QToolButton::clicked, this, &MainWindow::sendCurrent);
 }
 
@@ -475,6 +513,10 @@ void MainWindow::updateStatus()
     for (const Member &m : list)
         names << (m.nick.isEmpty() ? tr("?") : m.nick);
     m_title->setText(names.isEmpty() ? tr("P2P Chat") : names.join(", "));
+    QStringList others;
+    for (const Member &m : list)
+        others << m.nick;
+    m_mentions->setNames(others << Mentions::Everyone);
 
     const QString dot = QStringLiteral("<span style='color:%1'>●</span> ");
     const QHash<QString, QString> relayed = relayedOnline();
@@ -540,9 +582,25 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
 {
     const qint64 ms = qint64(msg.value("ts").toDouble());
     const QDateTime ts = ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms) : QDateTime::currentDateTime();
-    m_chat->addMessage(msg.value("n").toString().left(Protocol::MaxNickLength), msg.value("x").toString(), ts, mine,
-                       trust);
+    const QString text = msg.value("x").toString();
+    QList<QPair<int, int>> spans;
+    const QList<Mentions::Span> found = Mentions::find(text, mentionNames());
+    for (const Mentions::Span &m : found)
+        spans.append({m.start, m.length});
     const QString id = Protocol::Message::id(msg);
+    ChatEntry e;
+    e.author = msg.value("n").toString().left(Protocol::MaxNickLength);
+    e.text = text;
+    e.ts = ts;
+    e.mine = mine;
+    e.trust = trust;
+    e.mentions = spans;
+    e.mentionsMe = !mine && (Mentions::mentions(found, m_group.nickname()) || repliesToMe(msg));
+    if (trust == ChatEntry::Verified) { // identifiants et citations : seulement pour les messages authentiques
+        e.id = id;
+        e.replyTo = Protocol::Message::replyTo(msg);
+    }
+    m_chat->addMessage(e);
     if (!id.isEmpty() && trust == ChatEntry::Verified) { // seuls les messages authentiques sont resynchronisés
         m_store.insert(id, History::stored(msg, mine));
         m_seenIds.insert(id);
@@ -562,6 +620,52 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
 void MainWindow::appendSystem(const QString &text)
 {
     m_chat->addSystem(text);
+}
+
+QStringList MainWindow::mentionNames() const
+{
+    QStringList names{m_group.nickname(), Mentions::Everyone};
+    for (const Member &m : m_group.members())
+        names << m.nick;
+    return names;
+}
+
+bool MainWindow::mentionsMe(const QJsonObject &msg) const
+{
+    return Mentions::mentions(Mentions::find(msg.value("x").toString(), mentionNames()), m_group.nickname());
+}
+
+bool MainWindow::repliesToMe(const QJsonObject &msg) const
+{
+    const QString quoted = Protocol::Message::replyTo(msg);
+    return !quoted.isEmpty() && m_store.value(quoted).value("mine").toBool();
+}
+
+QString MainWindow::notificationTitle(const QJsonObject &msg) const
+{
+    const QString author = msg.value("n").toString().left(Protocol::MaxNickLength);
+    if (repliesToMe(msg))
+        return tr("%1 vous a répondu").arg(author);
+    if (mentionsMe(msg))
+        return tr("%1 vous a mentionné(e)").arg(author);
+    return author;
+}
+
+void MainWindow::startReply(const QString &id, const QString &author, const QString &text)
+{
+    const bool mine = m_store.value(id).value("mine").toBool();
+    m_replyTo = id;
+    m_replyLabel->setText(tr("Réponse à <b>%1</b><br><span style='color:#5f6368'>%2</span>")
+                              .arg((mine ? tr("vous-même") : author).toHtmlEscaped(),
+                                   ChatView::excerpt(text, 90).toHtmlEscaped()));
+    m_replyBar->setVisible(true);
+    m_input->setFocus();
+}
+
+void MainWindow::cancelReply()
+{
+    m_replyTo.clear();
+    m_replyBar->setVisible(false);
 }
 
 void MainWindow::loadHistory()
@@ -593,6 +697,7 @@ void MainWindow::clearConversation()
         != QMessageBox::Yes)
         return;
     m_chat->clearAll();
+    cancelReply();
     QFile::remove(m_historyPath);
     m_store.clear();
     m_group.setClearedBefore(QDateTime::currentMSecsSinceEpoch());
@@ -1011,8 +1116,8 @@ void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
 {
     QList<QJsonObject> accepted;
     const qint64 cutoff = syncCutoff();
-    int received = 0;
-    QString lastAuthor, lastText;
+    int received = 0, mentioned = 0;
+    QString lastTitle, lastText;
     for (const QJsonValue &v : messages) {
         const QJsonObject m = v.toObject();
         const QString id = Protocol::Message::id(m);
@@ -1028,7 +1133,8 @@ void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
         accepted.append(m);
         if (!mine) {
             ++received;
-            lastAuthor = m.value("n").toString();
+            mentioned += (mentionsMe(m) || repliesToMe(m)) ? 1 : 0;
+            lastTitle = notificationTitle(m);
             lastText = m.value("x").toString();
         }
     }
@@ -1038,10 +1144,11 @@ void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
             if (p != from)
                 sendBatches(p, accepted);
     if (received == 1)
-        notifyUnread(1, lastAuthor, lastText);
+        notifyUnread(1, lastTitle, lastText);
     else if (received > 1)
         notifyUnread(received, tr("P2P Chat"),
-                     tr("%n message(s) reçu(s) pendant votre absence", nullptr, received));
+                     tr("%n message(s) reçu(s) pendant votre absence", nullptr, received)
+                         + (mentioned ? tr(", dont %n pour vous", nullptr, mentioned) : QString()));
 }
 
 void MainWindow::notifyUnread(int count, const QString &title, const QString &text)
@@ -1148,7 +1255,7 @@ void MainWindow::onChatMessage(PeerConnection *c, const QJsonObject &o)
     // Relais : au cas où un membre ne serait pas encore relié directement à l'auteur
     broadcast(o, c);
 
-    notifyUnread(1, author, o.value("x").toString());
+    notifyUnread(1, notificationTitle(o), o.value("x").toString());
     if (isVisible() && !isActiveWindow())
         QApplication::alert(this);
 }
@@ -1235,15 +1342,18 @@ void MainWindow::checkQuietDrops()
 
 void MainWindow::sendCurrent()
 {
+    if (m_mentions->isPopupVisible())
+        return; // Entrée choisit un pseudo dans la liste
     const QString text = m_input->text().trimmed();
     if (text.isEmpty() || !m_group.inGroup() || m_group.members().isEmpty() || m_myOnion.isEmpty())
         return; // sans personne en ligne, le message partira à la prochaine synchronisation
     const QJsonObject msg = Protocol::Message::create(m_group.identitySeed(), m_myOnion, m_group.nickname(), text,
-                                                      QDateTime::currentMSecsSinceEpoch());
+                                                      QDateTime::currentMSecsSinceEpoch(), m_replyTo);
     m_seenIds.insert(Protocol::Message::id(msg));
     broadcast(msg);
     appendMessage(msg, true, ChatEntry::Verified);
     m_input->clear();
+    cancelReply();
 }
 
 // ---------------------------------------------------------------- Réglages
