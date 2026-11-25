@@ -213,7 +213,8 @@ Sous AddressSanitizer et UndefinedBehaviorSanitizer (accès mémoire, fuites, co
 
 Ils couvrent la cryptographie, les codes d'invitation, la signature des messages, l'état du groupe (membres,
 trousseau), l'historique et sa synchronisation, les règles de reconnexion, la poignée de main entre deux
-`PeerConnection` reliées en local (sans Tor) et le modèle de la liste de messages (rendu hors écran).
+`PeerConnection` reliées en local (sans Tor), des scénarios complets entre plusieurs membres
+(`tst_groupnode` : maillage, relais, réactions, rattrapage après une absence, message falsifié, imposteur…) et le modèle de la liste de messages (rendu hors écran).
 
 ## Sécurité
 
@@ -272,7 +273,8 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 | `history.*` | Historique local, inventaire et lots de synchronisation |
 | `connectionpolicy.*` | Espacement des appels, appels croisés, présence relayée |
 | `core.pri` | Liste des fichiers ci-dessus (sans interface), partagée par l'application et les tests |
-| `mainwindow.*` | Fenêtre, maillage et relais, reconnexion automatique, console partagée |
+| `groupnode.*` | Le groupe, sans interface : maillage, reconnexion, présence, synchronisation, messages, réactions, historique |
+| `mainwindow.*` | Fenêtre : conversation, invitations, Tor, notifications, console partagée |
 | `notifier.*`, `notifier_mac.mm` | Notifications natives (D-Bus sous Linux, UserNotifications sous macOS) |
 | `chatmodel.*` | Contenu de la conversation : messages, lignes système et de présence, citations, réactions, recherche |
 | `chatdelegate.*` | Dessin des bulles (citation, image, texte, réactions) et de ce qui y est cliquable |

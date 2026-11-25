@@ -9,7 +9,7 @@
 #include "mentions.h"
 #include "notifications.h"
 #include "notifier.h"
-#include "peerconnection.h"
+#include "groupnode.h"
 #include "protocol.h"
 #include "safetynumber.h"
 #include "torservice.h"
@@ -56,7 +56,6 @@
 #include <QRegularExpression>
 #include <QShortcut>
 #include <QStandardPaths>
-#include <QTcpServer>
 #include <QTcpSocket>
 #include <QUrl>
 #include <QUrlQuery>
@@ -82,16 +81,6 @@ QString torInstallHelp()
 #endif
 }
 
-constexpr int MaxSeenIds = 5000;
-constexpr int MaxPending = 16;             // connexions entrantes pas encore authentifiées
-constexpr int PresenceGraceMs = 60 * 1000; // délai avant d'annoncer une déconnexion
-constexpr qint64 TypingSendMs = 3000;    // « écrit… » : renvoyé au plus toutes les 3 s pendant la frappe
-constexpr qint64 TypingShownMs = 6000;   // affiché tant que le dernier signal a moins de 6 s
-constexpr qint64 FastRetryMs = 2 * 60 * 1000; // après un (re)démarrage : essais toutes les 10 s
-constexpr qint64 WakeGapMs = 45 * 1000;       // tic de 10 s arrivé si tard : sortie de veille
-// Au-delà du délai d'inactivité du correspondant (100 s), il nous a déjà fermé la connexion
-constexpr qint64 SleepKillsLinksMs = 110 * 1000;
-
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
@@ -112,46 +101,19 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 
     m_group.migrateLegacy();
 
-    m_server = new QTcpServer(this);
-    m_server->setProxy(QNetworkProxy::NoProxy);
-    connect(m_server, &QTcpServer::newConnection, this, &MainWindow::onNewConnection);
-    if (!m_server->listen(QHostAddress::LocalHost, 0))
-        QMessageBox::critical(this, tr("P2P Chat"), tr("Écoute locale impossible : %1").arg(m_server->errorString()));
-
-    // Tentative périodique vers les membres hors ligne (chacun selon son délai, cf. m_backoff)
-    m_retryTimer.setInterval(10000);
-    connect(&m_retryTimer, &QTimer::timeout, this, &MainWindow::connectToMembers);
-    m_syncTimer.setInterval(5 * 60 * 1000);
-    connect(&m_syncTimer, &QTimer::timeout, this, [this] {
-        if (!m_active.isEmpty())
-            broadcast(inventoryMessage());
+    // Le groupe : connexions, synchronisation, historique (cf. groupnode.h). Transport : Tor.
+    m_node = new GroupNode(m_group, m_historyPath, this);
+    QString listenError;
+    if (!m_node->listen(&listenError))
+        QMessageBox::critical(this, tr("P2P Chat"), tr("Écoute locale impossible : %1").arg(listenError));
+    m_node->setDialer([this](const QString &onion) -> QTcpSocket * {
+        if (!m_tor)
+            return nullptr;
+        auto *s = new QTcpSocket;
+        s->setProxy(QNetworkProxy(QNetworkProxy::Socks5Proxy, "127.0.0.1", m_tor->socksPort()));
+        s->connectToHost(onion, TorService::OnionPort); // résolu par Tor, pas localement
+        return s;
     });
-    m_syncTimer.start();
-
-    m_presenceTimer.setSingleShot(true);
-    m_presenceTimer.setInterval(1000);
-    m_typingTimer.setInterval(1000);
-    connect(&m_typingTimer, &QTimer::timeout, this, [this] {
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
-        for (auto it = m_typing.begin(); it != m_typing.end();)
-            it = it.value() <= now ? m_typing.erase(it) : std::next(it);
-        if (m_typing.isEmpty())
-            m_typingTimer.stop();
-        updateStatus();
-    });
-    connect(&m_presenceTimer, &QTimer::timeout, this, [this] { broadcast(presenceMessage()); });
-
-    // Les minuteurs sont suspendus pendant la veille : un tic très en retard signale le réveil
-    m_wakeTimer.setInterval(10000);
-    connect(&m_wakeTimer, &QTimer::timeout, this, [this] {
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
-        const qint64 gap = now - m_lastTick;
-        m_lastTick = now;
-        if (gap > WakeGapMs)
-            onWake(gap);
-    });
-    m_lastTick = QDateTime::currentMSecsSinceEpoch();
-    m_wakeTimer.start();
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
     // Changement de réseau (Wi-Fi, 4G, câble) : inutile d'attendre la fin des délais d'attente
@@ -160,7 +122,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
                 [this](QNetworkInformation::Reachability r) {
                     qInfo().noquote() << "[réseau] joignabilité :" << int(r);
                     if (r == QNetworkInformation::Reachability::Online)
-                        QTimer::singleShot(3000, this, &MainWindow::retrySoon); // laisse Tor s'en apercevoir
+                        QTimer::singleShot(3000, m_node, &GroupNode::retrySoon); // laisse Tor s'en apercevoir
                 });
     }
 #endif
@@ -181,8 +143,47 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     if (m_hideOnClose)
         QApplication::setQuitOnLastWindowClosed(false);
 
-    loadHistory();
+    connectNode();
+    m_node->loadHistory();
+    m_chat->scrollToBottom();
     startTor();
+}
+
+void MainWindow::connectNode()
+{
+    connect(m_node, &GroupNode::messageAdded, this, &MainWindow::appendMessage);
+    connect(m_node, &GroupNode::messagesReceived, this, &MainWindow::onMessagesReceived);
+    connect(m_node, &GroupNode::reactionsChanged, this,
+            [this](const QString &id) { m_chat->setReactions(id, reactionSummary(id)); });
+    connect(m_node, &GroupNode::memberAdded, this, [this](const QString &, const QString &nick, bool direct) {
+        appendSystem(direct ? tr("%1 a rejoint la conversation.").arg(nick)
+                            : tr("%1 fait partie de la conversation.").arg(nick));
+    });
+    connect(m_node, &GroupNode::presenceChanged, this,
+            [this](const QString &onion, const QString &nick, bool online, const QString &reason) {
+                m_chat->addPresence(nick.isEmpty() ? memberNick(onion) : nick, online, reason);
+            });
+    connect(m_node, &GroupNode::identityRejected, this, [this](const QString &, const QString &nick) {
+        appendSystem(tr("⚠ Connexion refusée : « %1 » ne présente pas la clé d'identité connue pour ce membre.")
+                         .arg(nick));
+    });
+    connect(m_node, &GroupNode::invalidMessage, this, [this](const QString &author) {
+        appendSystem(tr("⚠ Message attribué à « %1 » rejeté : signature invalide.").arg(author));
+    });
+    connect(m_node, &GroupNode::stateChanged, this, &MainWindow::updateStatus);
+    connect(m_node, &GroupNode::typingChanged, this, &MainWindow::updateStatus);
+    connect(m_node, &GroupNode::terminalMessage, this, &MainWindow::onTerminalMessage);
+    connect(m_node, &GroupNode::peerLost, this, &MainWindow::terminalPeerLost);
+#ifdef P2P_TERMINAL
+    connect(m_node, &GroupNode::peerReady, this, [this](const QString &onion) {
+        if (m_term && m_term->peerOnion() == onion)
+            m_term->setLinkUp(); // reprise de la console partagée
+    });
+    connect(m_node, &GroupNode::allClosed, this, [this] {
+        if (m_term) // plus aucune connexion (Tor arrêté, groupe quitté) : inutile d'attendre
+            m_term->end(tr("connexions fermées"), false);
+    });
+#endif
 }
 
 // ---------------------------------------------------------------- Système (zone de notification, fermeture)
@@ -428,7 +429,7 @@ void MainWindow::buildUi()
     m_termStopAct = menu->addAction(QString(), this, &MainWindow::stopTerminal);
     connect(menu, &QMenu::aboutToShow, this, [this] {
         const bool host = m_term && m_term->role() == TerminalSession::Host;
-        m_termShareAct->setEnabled(!m_term && m_termOffer.sid.isEmpty() && !m_active.isEmpty());
+        m_termShareAct->setEnabled(!m_term && m_termOffer.sid.isEmpty() && m_node->hasConnections());
         m_termCtlAct->setVisible(host);
         if (host)
             m_termCtlAct->setText(m_term->control() ? tr("Retirer le contrôle à %1").arg(m_term->peerNick())
@@ -645,7 +646,8 @@ void MainWindow::buildUi()
     connect(escape, &QShortcut::activated, this, &MainWindow::cancelReply);
     connect(m_chat, &ChatView::replyRequested, this, &MainWindow::startReply);
     connect(m_chat, &ChatView::linkClicked, this, &MainWindow::openLink);
-    connect(m_chat, &ChatView::reactionToggled, this, &MainWindow::react);
+    connect(m_chat, &ChatView::reactionToggled, this,
+            [this](const QString &id, const QString &emoji) { m_node->react(id, emoji); });
     connect(m_chat, &ChatView::searchResultChanged, this, [this](int current, int total) {
         m_searchCount->setText(m_searchEdit->text().trimmed().isEmpty() ? QString()
                                : total == 0                             ? tr("Aucun résultat")
@@ -672,11 +674,11 @@ void MainWindow::updateStatus()
     m_mentions->setNames(others << Mentions::Everyone);
 
     const QString dot = QStringLiteral("<span style='color:%1'>●</span> ");
-    const QHash<QString, QString> relayed = relayedOnline();
+    const QHash<QString, QString> relayed = m_node->relayedOnline();
     QString sub;
     if (!m_torError.isEmpty()) {
         sub = dot.arg("#d93025") + tr("Tor : %1").arg(m_torError.toHtmlEscaped());
-    } else if (m_myOnion.isEmpty()) {
+    } else if (m_node->ownOnion().isEmpty()) {
         sub = dot.arg("#e37400") + tr("Connexion au réseau… %1").arg(m_torStatus.toHtmlEscaped());
     } else if (!inGroup) {
         sub = tr("Aucune conversation");
@@ -689,7 +691,7 @@ void MainWindow::updateStatus()
         QStringList online;
         bool allDirect = true;
         for (const Member &m : list) {
-            if (m_active.contains(m.onion)) {
+            if (m_node->isConnected(m.onion)) {
                 online << m.nick.toHtmlEscaped();
             } else if (relayed.contains(m.onion)) {
                 online << tr("%1 (via %2)").arg(m.nick, memberNick(relayed.value(m.onion))).toHtmlEscaped();
@@ -708,28 +710,28 @@ void MainWindow::updateStatus()
     // Infobulle : état détaillé de chaque membre
     QStringList tips;
     for (const Member &m : list) {
-        QString state = m_active.contains(m.onion)     ? tr("en ligne")
-                        : relayed.contains(m.onion)    ? tr("en ligne via %1").arg(memberNick(relayed.value(m.onion)))
-                        : m_attempts.contains(m.onion) ? tr("connexion…")
-                                                       : tr("hors ligne");
-        if (relayed.contains(m.onion) && m_attempts.contains(m.onion))
+        const bool connected = m_node->isConnected(m.onion), attempting = m_node->isAttempting(m.onion);
+        QString state = connected                   ? tr("en ligne")
+                        : relayed.contains(m.onion) ? tr("en ligne via %1").arg(memberNick(relayed.value(m.onion)))
+                        : attempting                ? tr("connexion…")
+                                                    : tr("hors ligne");
+        if (relayed.contains(m.onion) && attempting)
             state += tr(", connexion directe…");
-        if (const PeerConnection *c = m_active.value(m.onion); c && c->peerVersion() < Protocol::Version)
+        if (const int version = m_node->peerVersion(m.onion); connected && version < Protocol::Version)
             state += tr(" — ancienne version de P2P Chat (ne voit pas %1)")
-                         .arg(Protocol::missingFeatures(c->peerVersion()).join(", "));
-        if (!m_active.contains(m.onion) && m_lastError.contains(m.onion))
-            state += " — " + m_lastError.value(m.onion);
-        if (!m_active.contains(m.onion) && !m_attempts.contains(m.onion)
-            && m_backoff.value(m.onion).nextTry > QDateTime::currentMSecsSinceEpoch())
+                         .arg(Protocol::missingFeatures(version).join(", "));
+        if (!connected && !m_node->lastError(m.onion).isEmpty())
+            state += " — " + m_node->lastError(m.onion);
+        if (!connected && !attempting && m_node->nextTry(m.onion) > QDateTime::currentMSecsSinceEpoch())
             state += tr(" (nouvel essai à %1)")
-                         .arg(QDateTime::fromMSecsSinceEpoch(m_backoff.value(m.onion).nextTry).toString("HH:mm:ss"));
+                         .arg(QDateTime::fromMSecsSinceEpoch(m_node->nextTry(m.onion)).toString("HH:mm:ss"));
         const QString name = m_group.isVerified(m.onion) ? tr("%1 ✔").arg(m.nick) : m.nick;
         tips << QStringLiteral("%1 : %2").arg(name, state).toHtmlEscaped();
     }
     m_subtitle->setToolTip(tips.isEmpty() ? QString() : "<p>" + tips.join("<br>") + "</p>");
 
-    const bool online = !m_active.isEmpty();
-    const bool canWrite = inGroup && !list.isEmpty() && !m_myOnion.isEmpty();
+    const bool online = m_node->hasConnections();
+    const bool canWrite = m_node->canSend();
     m_input->setEnabled(canWrite);
     m_sendButton->setEnabled(canWrite);
     m_attachButton->setEnabled(canWrite);
@@ -738,16 +740,18 @@ void MainWindow::updateStatus()
         m_input->setFocus();
 }
 
-void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Trust trust, bool save)
+void MainWindow::appendMessage(const QJsonObject &msg, bool mine, GroupNode::Trust nodeTrust)
 {
+    const ChatEntry::Trust trust = nodeTrust == GroupNode::Trust::Verified   ? ChatEntry::Verified
+                                   : nodeTrust == GroupNode::Trust::Unsigned ? ChatEntry::Unsigned
+                                                                             : ChatEntry::Invalid;
     const qint64 ms = qint64(msg.value("ts").toDouble());
     const QDateTime ts = ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms) : QDateTime::currentDateTime();
     // Image : seulement si elle est bien signée par l'auteur et décodable sans risque
     QByteArray imageData;
     QImage image;
     if (trust == ChatEntry::Verified && msg.contains("img")) {
-        const QByteArray key = mine ? m_group.identityKey() : m_group.pinnedKey(msg.value("a").toString());
-        imageData = Protocol::Message::verifiedImage(msg, key);
+        imageData = m_node->verifiedImage(msg, mine);
         image = Attachment::decode(imageData);
     }
     const QString text = Protocol::Message::caption(msg, !image.isNull());
@@ -770,7 +774,7 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
     e.mentionsMe = !mine && (Mentions::mentions(found, m_group.nickname()) || repliesToMe(msg));
     if (trust == ChatEntry::Verified) { // identifiants et citations : seulement pour les messages authentiques
         e.id = id;
-        e.replyTo = replyTo(msg, mine);
+        e.replyTo = m_node->verifiedReplyTo(msg, mine);
         if (!image.isNull()) {
             e.image = Attachment::thumbnail(image);
             e.imageData = imageData;
@@ -779,24 +783,26 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
     }
     e.reactions = reactionSummary(e.id); // réactions arrivées avant le message (synchronisation)
     m_chat->addMessage(e);
-    if (!id.isEmpty() && trust == ChatEntry::Verified) { // seuls les messages authentiques sont resynchronisés
-        m_store.insert(id, History::stored(msg, mine));
-        m_seenIds.insert(id);
-    }
-    if (save)
-        appendToHistoryFile(msg, mine);
 }
 
-void MainWindow::appendToHistoryFile(const QJsonObject &record, bool mine)
+void MainWindow::onMessagesReceived(const QList<QJsonObject> &messages, bool catchUp)
 {
-    // Enregistré tel qu'il a été signé : l'historique reste vérifiable
-    QFile file(m_historyPath);
-    const bool created = !file.exists();
-    if (file.open(QIODevice::Append)) {
-        if (created)
-            file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
-        file.write(History::toLine(record, mine));
+    int mentioned = 0;
+    qint64 firstTs = 0;
+    for (const QJsonObject &m : messages) {
+        mentioned += (mentionsMe(m) || repliesToMe(m)) ? 1 : 0;
+        const qint64 ts = Protocol::Message::timestamp(m);
+        firstTs = firstTs ? qMin(firstTs, ts) : ts;
     }
+    const int count = int(messages.size());
+    if (count == 1 || !catchUp)
+        notifyUnread(count, notificationTitle(messages.last()), notificationBody(messages.last()), firstTs,
+                     mentioned > 0);
+    else
+        notifyUnread(count, tr("P2P Chat"),
+                     tr("%n message(s) reçu(s) pendant votre absence", nullptr, count)
+                         + (mentioned ? tr(", dont %n pour vous", nullptr, mentioned) : QString()),
+                     firstTs, mentioned > 0);
 }
 
 void MainWindow::appendSystem(const QString &text)
@@ -817,17 +823,10 @@ bool MainWindow::mentionsMe(const QJsonObject &msg) const
     return Mentions::mentions(Mentions::find(msg.value("x").toString(), mentionNames()), m_group.nickname());
 }
 
-QString MainWindow::replyTo(const QJsonObject &msg, bool mine) const
-{
-    // Comme verifyMessage : au chargement de l'historique, notre adresse onion n'est pas encore connue
-    const QByteArray key = mine ? m_group.identityKey() : m_group.pinnedKey(msg.value("a").toString());
-    return Protocol::Message::verifiedReplyTo(msg, key);
-}
-
 bool MainWindow::repliesToMe(const QJsonObject &msg) const
 {
-    const QString quoted = replyTo(msg, false); // appelé pour les messages des autres
-    return !quoted.isEmpty() && m_store.value(quoted).value("mine").toBool();
+    const QString quoted = m_node->verifiedReplyTo(msg, false); // appelé pour les messages des autres
+    return !quoted.isEmpty() && m_node->isMine(quoted);
 }
 
 QString MainWindow::notificationTitle(const QJsonObject &msg) const
@@ -842,7 +841,7 @@ QString MainWindow::notificationTitle(const QJsonObject &msg) const
 
 void MainWindow::startReply(const QString &id, const QString &author, const QString &text)
 {
-    const bool mine = m_store.value(id).value("mine").toBool();
+    const bool mine = m_node->isMine(id);
     m_replyTo = id;
     m_replyLabel->setText(tr("Réponse à <b>%1</b><br><span style='color:#5f6368'>%2</span>")
                               .arg((mine ? tr("vous-même") : author).toHtmlEscaped(),
@@ -857,31 +856,6 @@ void MainWindow::cancelReply()
     m_replyBar->setVisible(false);
 }
 
-void MainWindow::loadHistory()
-{
-    QFile file(m_historyPath);
-    if (!file.open(QIODevice::ReadOnly))
-        return;
-    const QList<History::Row> rows = History::parse(file.readAll(), m_group.clearedBefore());
-    const qsizetype firstShown = qMax<qsizetype>(0, rows.size() - History::DisplayedRows);
-    for (qsizetype i = 0; i < rows.size(); ++i) {
-        const History::Row &row = rows[i];
-        if (Reactions::isReaction(row.msg)) {
-            if (verifyReaction(row.msg, row.mine))
-                acceptReaction(row.msg, row.mine, false);
-            continue;
-        }
-        const ChatEntry::Trust trust = row.legacy ? ChatEntry::Unsigned : verifyMessage(row.msg, row.mine);
-        if (i >= firstShown) {
-            appendMessage(row.msg, row.mine, trust, false);
-        } else if (trust == ChatEntry::Verified && !Protocol::Message::id(row.msg).isEmpty()) {
-            // Les plus anciens (non affichés) restent disponibles pour la synchronisation
-            m_store.insert(Protocol::Message::id(row.msg), History::stored(row.msg, row.mine));
-        }
-    }
-    m_chat->scrollToBottom();
-}
-
 void MainWindow::clearConversation()
 {
     if (QMessageBox::question(this, tr("Vider la conversation"),
@@ -893,10 +867,7 @@ void MainWindow::clearConversation()
     m_chat->clearAll();
     cancelReply();
     cancelImage();
-    QFile::remove(m_historyPath);
-    m_store.clear();
-    m_reactions.clear();
-    m_group.setClearedBefore(QDateTime::currentMSecsSinceEpoch());
+    m_node->clearHistory();
     updateStatus();
 }
 
@@ -917,28 +888,23 @@ void MainWindow::changeEvent(QEvent *event)
 void MainWindow::startTor()
 {
     delete m_tor;
-    m_myOnion.clear();
+    m_tor = nullptr;
+    m_node->setOffline();
     m_torError.clear();
     m_torStatus.clear();
 
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/tor";
-    m_tor = new TorService(dir, m_server->serverPort(), this);
+    m_tor = new TorService(dir, m_node->port(), this);
     connect(m_tor, &TorService::progress, this, [this](int pct, const QString &summary) {
         m_torStatus = QStringLiteral("%1 % (%2)").arg(pct).arg(summary);
         updateStatus();
     });
     connect(m_tor, &TorService::ready, this, [this](const QString &onion) {
-        m_myOnion = onion;
+        m_node->setOnline(onion);
         if (m_inviteWanted) {
             m_inviteWanted = false;
             showInvitation();
         }
-        // Juste après le démarrage, Tor peut encore compléter ses informations d'annuaire
-        m_backoff.clear();
-        m_fastRetryUntil = QDateTime::currentMSecsSinceEpoch() + FastRetryMs;
-        QTimer::singleShot(5000, this, &MainWindow::connectToMembers);
-        m_retryTimer.start();
-        updateStatus();
     });
     connect(m_tor, &TorService::failed, this, &MainWindow::onTorFailed);
     m_tor->start();
@@ -947,10 +913,8 @@ void MainWindow::startTor()
 
 void MainWindow::onTorFailed(const QString &error)
 {
-    m_myOnion.clear();
     m_torError = error;
-    m_retryTimer.stop();
-    closeAll();
+    m_node->setOffline();
     updateStatus();
 
     QMessageBox box(QMessageBox::Warning, tr("P2P Chat"),
@@ -975,9 +939,8 @@ void MainWindow::onTorFailed(const QString &error)
 
 void MainWindow::invite()
 {
-    if (!m_group.inGroup())
-        m_group.setSecret(Crypto::randomBytes(16));
-    if (m_myOnion.isEmpty()) {
+    m_node->createGroup();
+    if (m_node->ownOnion().isEmpty()) {
         m_inviteWanted = true;
         appendSystem(tr("Le code s'affichera dès que Tor aura démarré…"));
         updateStatus();
@@ -990,7 +953,7 @@ void MainWindow::invite()
 void MainWindow::showInvitation()
 {
     const QString code =
-        Invitation{m_group.secret(), m_myOnion, m_group.nickname(), m_group.identityKey()}.toCode();
+        Invitation{m_group.secret(), m_node->ownOnion(), m_group.nickname(), m_group.identityKey()}.toCode();
 
     QDialog dlg(this);
     dlg.setWindowTitle(tr("Code d'invitation"));
@@ -1051,101 +1014,37 @@ void MainWindow::join()
         QMessageBox::warning(this, tr("Rejoindre"), tr("Ce code n'est pas valide (incomplet ?)."));
         return;
     }
-    if (inv->onion == m_myOnion) {
+    if (inv->onion == m_node->ownOnion()) {
         QMessageBox::warning(this, tr("Rejoindre"), tr("C'est votre propre code !"));
         return;
     }
-    if (m_group.inGroup() && m_group.secret() != inv->secret) {
-        if (QMessageBox::question(this, tr("Rejoindre"),
-                                  tr("<p>Vous faites déjà partie d'une autre conversation. "
-                                     "La quitter pour rejoindre celle de %1 ?</p>").arg(inv->nickname.toHtmlEscaped()))
-            != QMessageBox::Yes)
-            return;
-        closeAll();
-        m_group.setMembers({});
-    }
-    if (!pinKey(inv->onion, inv->identityKey)) {
+    if (m_group.inGroup() && m_group.secret() != inv->secret
+        && QMessageBox::question(this, tr("Rejoindre"),
+                                 tr("<p>Vous faites déjà partie d'une autre conversation. "
+                                    "La quitter pour rejoindre celle de %1 ?</p>").arg(inv->nickname.toHtmlEscaped()))
+               != QMessageBox::Yes)
+        return;
+    switch (m_node->join(*inv)) {
+    case GroupNode::JoinResult::OwnCode:
+        QMessageBox::warning(this, tr("Rejoindre"), tr("C'est votre propre code !"));
+        return;
+    case GroupNode::JoinResult::KeyMismatch:
         QMessageBox::warning(this, tr("Rejoindre"),
                              tr("<p>Ce code présente une clé d'identité différente de celle déjà connue pour %1.<br>"
                                 "Par sécurité, il est refusé.</p>").arg(inv->nickname.toHtmlEscaped()));
         return;
+    case GroupNode::JoinResult::Joined:
+        appendSystem(tr("Invitation de %1 enregistrée.").arg(inv->nickname));
+        break;
     }
-    m_group.setSecret(inv->secret);
-    mergeMember(inv->onion, inv->nickname);
-    appendSystem(tr("Invitation de %1 enregistrée.").arg(inv->nickname));
-    connectToMembers();
-    updateStatus();
 }
 
-// ---------------------------------------------------------------- Membres
-
-bool MainWindow::mergeMember(const QString &onion, const QString &nick)
-{
-    return m_group.mergeMember(onion, nick, m_myOnion);
-}
-
-bool MainWindow::pinKey(const QString &onion, const QByteArray &key)
-{
-    return m_group.pinKey(onion, key, QDateTime::currentMSecsSinceEpoch());
-}
+// ---------------------------------------------------------------- Membres et connexions
 
 QString MainWindow::memberNick(const QString &onion) const
 {
     const QString nick = m_group.nickOf(onion);
     return nick.isEmpty() ? tr("Un membre") : nick;
-}
-
-QJsonObject MainWindow::membersMessage() const
-{
-    using Protocol::toB64;
-    QJsonArray arr;
-    arr.append(QJsonObject{{"o", m_myOnion}, {"n", m_group.nickname()}, {"k", toB64(m_group.identityKey())}});
-    for (const Member &m : m_group.members())
-        arr.append(QJsonObject{{"o", m.onion}, {"n", m.nick}, {"k", toB64(m_group.pinnedKey(m.onion))}});
-    return {{"t", "members"}, {"m", arr}};
-}
-
-ChatEntry::Trust MainWindow::verifyMessage(const QJsonObject &msg, bool mine) const
-{
-    if (!msg.contains("s"))
-        return ChatEntry::Unsigned;
-    const QByteArray key = mine ? m_group.identityKey() : m_group.pinnedKey(msg.value("a").toString());
-    return Protocol::Message::verify(msg, key) ? ChatEntry::Verified : ChatEntry::Invalid;
-}
-
-// ---------------------------------------------------------------- Connexions
-
-PeerConnection *MainWindow::newConnection(QTcpSocket *socket, bool outgoing)
-{
-    auto *c = new PeerConnection(socket, outgoing, m_group.secret(), m_group.nickname(), m_myOnion,
-                                 m_group.identitySeed(), this);
-    connect(c, &PeerConnection::ready, this, [this, c] { setActive(c); });
-    connect(c, &PeerConnection::received, this, [this, c](const QJsonObject &o) { onReceived(c, o); });
-    connect(c, &PeerConnection::closed, this, [this, c](const QString &reason) { onClosed(c, reason); });
-    return c;
-}
-
-void MainWindow::onNewConnection()
-{
-    while (QTcpSocket *s = m_server->nextPendingConnection()) {
-        if (!m_group.inGroup() || m_myOnion.isEmpty() || m_pending.size() >= MaxPending) {
-            s->abort();
-            s->deleteLater();
-            continue;
-        }
-        m_pending.insert(newConnection(s, false));
-    }
-}
-
-void MainWindow::connectToMembers()
-{
-    if (m_myOnion.isEmpty() || !m_group.inGroup())
-        return;
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    for (const Member &m : m_group.members())
-        if (!m_active.contains(m.onion) && !m_attempts.contains(m.onion) && m_backoff.value(m.onion).due(now))
-            dial(m.onion);
-    updateStatus();
 }
 
 void MainWindow::reconnectNow()
@@ -1154,214 +1053,10 @@ void MainWindow::reconnectNow()
         startTor();
         return;
     }
-    // Les tentatives en cours peuvent rester bloquées jusqu'au délai de poignée de main (45 s)
-    const QList<PeerConnection *> stuck = m_attempts.values();
-    for (PeerConnection *c : stuck)
-        c->close(); // retire la tentative de m_attempts (signal closed synchrone)
-    m_backoff.clear();
-    m_retryTimer.start(); // repart pour un cycle complet
-    connectToMembers();
+    m_node->reconnectNow();
 }
 
-void MainWindow::dial(const QString &onion)
-{
-    auto *s = new QTcpSocket;
-    s->setProxy(QNetworkProxy(QNetworkProxy::Socks5Proxy, "127.0.0.1", m_tor->socksPort()));
-    m_attempts.insert(onion, newConnection(s, true));
-    s->connectToHost(onion, TorService::OnionPort); // résolu par Tor, pas localement
-}
-
-void MainWindow::onClosed(PeerConnection *c, const QString &reason)
-{
-    c->deleteLater();
-    m_pending.remove(c);
-    const QString attemptKey = m_attempts.key(c);
-    if (!attemptKey.isEmpty()) {
-        m_attempts.remove(attemptKey);
-        m_lastError.insert(attemptKey, reason);
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
-        m_backoff[attemptKey].failed(now, now < m_fastRetryUntil);
-    }
-    const QString activeKey = m_active.key(c);
-    if (!activeKey.isEmpty()) {
-        m_active.remove(activeKey);
-        m_lastError.insert(activeKey, reason);
-        m_backoff.remove(activeKey); // il était là il y a un instant : on le rappelle tout de suite
-        terminalPeerLost(activeKey);
-        m_peerPresence.remove(activeKey); // ceux qu'il voyait ne sont plus joignables par lui
-        m_typing.remove(activeKey);
-        m_presenceTimer.start();
-        checkQuietDrops();
-        announceDropLater(activeKey, reason);
-        QTimer::singleShot(5000, this, &MainWindow::connectToMembers);
-    }
-    updateStatus();
-}
-
-void MainWindow::announceDropLater(const QString &onion, const QString &reason)
-{
-    // La déconnexion n'est annoncée que si le membre ne revient pas dans le délai de grâce
-    const quint64 token = ++m_dropToken;
-    m_dropped.insert(onion, {reason, token});
-    QTimer::singleShot(PresenceGraceMs, this, [this, onion, token] {
-        const auto it = m_dropped.constFind(onion);
-        if (it == m_dropped.cend() || it->token != token)
-            return;
-        const QString why = it->reason;
-        m_dropped.erase(it);
-        if (m_active.contains(onion))
-            return;
-        // Toujours joignable par un autre membre : annoncé seulement quand il ne l'est plus
-        if (relayedOnline().contains(onion))
-            m_quietDrops.insert(onion, why);
-        else
-            m_chat->addPresence(memberNick(onion), false, why);
-    });
-}
-
-void MainWindow::setActive(PeerConnection *c)
-{
-    m_pending.remove(c);
-    const QString dialed = m_attempts.key(c);
-    if (!dialed.isEmpty())
-        m_attempts.remove(dialed);
-
-    const QString onion = c->peerOnion();
-    if (!isValidOnion(onion) || onion == m_myOnion) {
-        c->close();
-        return;
-    }
-    // En sortie, Tor garantit qu'on a joint l'adresse appelée : le pair doit annoncer celle-là
-    if (!dialed.isEmpty() && dialed != onion) {
-        c->close();
-        return;
-    }
-    // La signature du hello prouve la possession de la clé ; elle doit être celle connue pour ce membre
-    if (!pinKey(onion, c->peerIdentityKey())) {
-        if (!m_identityWarned.contains(onion)) {
-            m_identityWarned.insert(onion);
-            appendSystem(tr("⚠ Connexion refusée : « %1 » ne présente pas la clé d'identité connue pour ce membre.")
-                             .arg(c->peerNickname()));
-        }
-        c->close();
-        return;
-    }
-
-    // Revenu pendant le délai de grâce : la coupure passe inaperçue
-    const bool graceReturn = m_dropped.remove(onion) > 0;
-    const bool quietReturn = m_quietDrops.remove(onion) > 0;
-    const bool wasOnline = m_active.contains(onion) || graceReturn || quietReturn;
-    if (PeerConnection *old = m_active.value(onion); old && old != c) {
-        // Appels croisés : les deux côtés gardent la même connexion
-        auto initiator = [this](PeerConnection *p) { return p->isOutgoing() ? m_myOnion : p->peerOnion(); };
-        if (ConnectionPolicy::keepExisting(initiator(old), initiator(c))) {
-            c->close();
-            return;
-        }
-        m_active.insert(onion, c); // avant close() : le signal closed de l'ancienne ne compte pas
-        old->close();
-    }
-    m_active.insert(onion, c);
-    m_lastError.remove(onion);
-    m_backoff.remove(onion);
-
-    const bool isNew = mergeMember(onion, c->peerNickname());
-    if (isNew)
-        appendSystem(tr("%1 a rejoint la conversation.").arg(c->peerNickname()));
-    else if (!wasOnline)
-        m_chat->addPresence(c->peerNickname(), true);
-
-    // Échange des listes de membres : chacun découvre ceux qu'il ne connaît pas encore
-    c->send(membersMessage());
-    if (isNew)
-        broadcast(membersMessage(), c);
-    c->send(inventoryMessage()); // après la liste des membres : les clés des auteurs sont connues
-#ifdef P2P_TERMINAL
-    if (m_term && m_term->peerOnion() == onion)
-        m_term->setLinkUp(); // reprise de la console partagée
-#endif
-    c->send(presenceMessage());
-    if (!wasOnline) {
-        m_presenceTimer.start(); // les autres apprennent qu'on le voit
-        // Une connexion vient d'aboutir : Tor et le réseau fonctionnent, inutile de faire attendre les autres
-        if (!m_backoff.isEmpty()) {
-            m_backoff.clear();
-            connectToMembers();
-            return; // connectToMembers met l'état à jour
-        }
-    }
-    updateStatus();
-}
-
-// ---------------------------------------------------------------- Synchronisation
-
-qint64 MainWindow::syncCutoff() const
-{
-    return History::syncCutoff(QDateTime::currentMSecsSinceEpoch(), m_group.clearedBefore());
-}
-
-QJsonObject MainWindow::inventoryMessage() const
-{
-    return {{"t", "inv"}, {"ids", History::inventory(m_store, syncCutoff())}};
-}
-
-void MainWindow::sendBatches(PeerConnection *c, const QList<QJsonObject> &messages)
-{
-    const qint64 cutoff = History::cutoffFor(syncCutoff(), m_group.firstSeen(c->peerOnion()));
-    QList<QJsonObject> toSend = messages;
-    if (c->peerVersion() < Reactions::Version) // il ne saurait pas quoi en faire
-        toSend.erase(std::remove_if(toSend.begin(), toSend.end(), &Reactions::isReaction), toSend.end());
-    for (const QJsonArray &batch : History::batches(toSend, cutoff))
-        c->send({{"t", "sync"}, {"m", batch}});
-}
-
-void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
-{
-    QList<QJsonObject> accepted;
-    const qint64 cutoff = syncCutoff();
-    int received = 0, mentioned = 0;
-    qint64 firstTs = 0;
-    QString lastTitle, lastText;
-    for (const QJsonValue &v : messages) {
-        const QJsonObject m = v.toObject();
-        const QString id = Protocol::Message::id(m);
-        if (id.isEmpty() || m_store.contains(id) || Protocol::Message::timestamp(m) < cutoff)
-            continue;
-        const bool mine = !m_myOnion.isEmpty() && m.value("a").toString() == m_myOnion;
-        if (Reactions::isReaction(m)) {
-            if (verifyReaction(m, mine) && acceptReaction(m, mine, true))
-                accepted.append(m);
-            continue;
-        }
-        // Chaque message est vérifié avec la clé de son auteur : un membre ne peut rien inventer
-        if (verifyMessage(m, mine) != ChatEntry::Verified) {
-            qWarning().noquote() << "[synchro] message rejeté, signature invalide :" << id;
-            continue;
-        }
-        appendMessage(m, mine, ChatEntry::Verified);
-        accepted.append(m);
-        if (!mine) {
-            ++received;
-            mentioned += (mentionsMe(m) || repliesToMe(m)) ? 1 : 0;
-            const qint64 ts = Protocol::Message::timestamp(m);
-            firstTs = firstTs ? qMin(firstTs, ts) : ts;
-            lastTitle = notificationTitle(m);
-            lastText = notificationBody(m);
-        }
-    }
-    // Relais aux autres membres connectés, qui ont pu manquer ces messages eux aussi
-    if (!accepted.isEmpty())
-        for (PeerConnection *p : std::as_const(m_active))
-            if (p != from)
-                sendBatches(p, accepted);
-    if (received == 1)
-        notifyUnread(1, lastTitle, lastText, firstTs, mentioned > 0);
-    else if (received > 1)
-        notifyUnread(received, tr("P2P Chat"),
-                     tr("%n message(s) reçu(s) pendant votre absence", nullptr, received)
-                         + (mentioned ? tr(", dont %n pour vous", nullptr, mentioned) : QString()),
-                     firstTs, mentioned > 0);
-}
+// ---------------------------------------------------------------- Notifications
 
 void MainWindow::notifyUnread(int count, const QString &title, const QString &text, qint64 firstTs, bool forMe)
 {
@@ -1422,210 +1117,17 @@ void MainWindow::buildNotificationMenu(QMenu *menu)
     }
 }
 
-// ---------------------------------------------------------------- Messages reçus
-
-void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
-{
-    const QString type = o.value("t").toString();
-    if (type.startsWith(QLatin1String("term-")))
-        onTerminalMessage(c, o);
-    else if (type == "members")
-        onMembers(c, o);
-    else if (type == "presence")
-        onPresence(c, o);
-    else if (type == "inv")
-        sendBatches(c, History::missing(m_store, o.value("ids").toArray()));
-    else if (type == "sync")
-        receiveSync(c, o.value("m").toArray());
-    else if (type == "react") {
-        const QString id = Protocol::Message::id(o);
-        if (id.isEmpty() || m_store.contains(id) || !verifyReaction(o, false))
-            return;
-        acceptReaction(o, false, true);
-        broadcastReaction(o, c); // relais, comme les messages
-    } else if (type == "typing")
-        onPeerTyping(c);
-    else if (type == "msg")
-        onChatMessage(c, o);
-}
-
-void MainWindow::onMembers(PeerConnection *c, const QJsonObject &o)
-{
-    bool changed = false;
-    for (const QJsonValue &v : o.value("m").toArray()) {
-        const QJsonObject m = v.toObject();
-        const QString onion = m["o"].toString();
-        if (onion == m_myOnion)
-            continue;
-        // Un membre présenté sans clé, ou avec une clé différente de celle connue, est ignoré
-        if (!pinKey(onion, Protocol::fromB64(m["k"]))) {
-            qWarning().noquote() << "[identité] clé refusée pour" << onion.left(8);
-            continue;
-        }
-        if (mergeMember(onion, m["n"].toString())) {
-            changed = true;
-            appendSystem(tr("%1 fait partie de la conversation.").arg(m["n"].toString()));
-        }
-    }
-    if (changed) {
-        broadcast(membersMessage(), c);
-        connectToMembers();
-    }
-    updateStatus(); // un pseudo a pu changer
-}
-
-void MainWindow::onPresence(PeerConnection *c, const QJsonObject &o)
-{
-    const QString from = m_active.key(c);
-    if (from.isEmpty())
-        return; // connexion remplacée entre-temps
-    QSet<QString> seen;
-    for (const QJsonValue &v : o.value("on").toArray()) {
-        const QString onion = v.toString();
-        if (onion != from && m_group.isMember(onion))
-            seen.insert(onion);
-    }
-    const QSet<QString> before = m_peerPresence.value(from);
-    m_peerPresence.insert(from, seen);
-    // Un membre vient d'apparaître chez un autre : il est en ligne, on l'appelle sans attendre
-    bool redial = false;
-    for (const QString &onion : std::as_const(seen))
-        if (!before.contains(onion) && !m_active.contains(onion) && !m_attempts.contains(onion)) {
-            m_backoff.remove(onion);
-            redial = true;
-        }
-    checkQuietDrops();
-    if (redial)
-        connectToMembers();
-    else
-        updateStatus();
-}
-
-void MainWindow::onChatMessage(PeerConnection *c, const QJsonObject &o)
-{
-    const QString id = Protocol::Message::id(o);
-    if (id.isEmpty() || m_seenIds.contains(id) || m_store.contains(id))
-        return;
-    if (m_seenIds.size() > MaxSeenIds)
-        m_seenIds.clear();
-    m_seenIds.insert(id);
-
-    const QString author = o.value("n").toString().left(Protocol::MaxNickLength);
-    if (verifyMessage(o, false) != ChatEntry::Verified) {
-        appendSystem(tr("⚠ Message attribué à « %1 » rejeté : signature invalide.").arg(author));
-        return;
-    }
-    appendMessage(o, false, ChatEntry::Verified);
-
-    // L'auteur vient d'écrire (message relayé) : il est en ligne, inutile d'attendre pour le rappeler
-    const QString authorOnion = o.value("a").toString();
-    if (m_typing.remove(authorOnion) > 0) // il a fini d'écrire
-        updateStatus();
-    if (!m_active.contains(authorOnion) && m_backoff.remove(authorOnion) > 0)
-        connectToMembers();
-
-    // Relais : au cas où un membre ne serait pas encore relié directement à l'auteur
-    broadcast(o, c);
-
-    notifyUnread(1, notificationTitle(o), notificationBody(o), Protocol::Message::timestamp(o),
-                 mentionsMe(o) || repliesToMe(o));
-}
-
-void MainWindow::broadcast(const QJsonObject &obj, PeerConnection *except)
-{
-    for (PeerConnection *p : std::as_const(m_active))
-        if (p != except)
-            p->send(obj);
-}
-
-void MainWindow::closeAll()
-{
-    QList<PeerConnection *> all = m_active.values() + m_attempts.values() + m_pending.values();
-    m_active.clear();
-    m_attempts.clear();
-    m_pending.clear();
-    m_dropped.clear();
-    m_backoff.clear();
-    m_peerPresence.clear();
-    m_quietDrops.clear();
-    for (const PeerConnection *c : std::as_const(all))
-        if (c->isReady())
-            terminalPeerLost(c->peerOnion());
-#ifdef P2P_TERMINAL
-    if (m_term) // plus aucune connexion (Tor arrêté, groupe quitté) : inutile d'attendre
-        m_term->end(tr("connexions fermées"), false);
-#endif
-    for (PeerConnection *c : all)
-        c->close();
-}
-
-void MainWindow::onWake(qint64 gapMs)
-{
-    qInfo().noquote() << "[réseau] reprise après une pause de" << gapMs / 1000 << "s";
-    if (m_myOnion.isEmpty())
-        return;
-    // Pendant la pause, nos pings ne sont pas partis : les correspondants nous ont fermé la porte,
-    // mais on ne s'en apercevrait qu'au bout du délai d'inactivité. On repart tout de suite.
-    if (gapMs > SleepKillsLinksMs) {
-        const QList<PeerConnection *> dead = m_active.values();
-        for (PeerConnection *c : dead)
-            c->close();
-    }
-    retrySoon();
-}
-
-void MainWindow::retrySoon()
-{
-    if (m_myOnion.isEmpty())
-        return; // Tor pas prêt : il rappellera tout le monde lui-même
-    m_fastRetryUntil = QDateTime::currentMSecsSinceEpoch() + FastRetryMs;
-    reconnectNow();
-}
-
-QJsonObject MainWindow::presenceMessage() const
-{
-    QJsonArray on;
-    for (auto it = m_active.cbegin(); it != m_active.cend(); ++it)
-        on.append(it.key());
-    return {{"t", "presence"}, {"on", on}};
-}
-
-QHash<QString, QString> MainWindow::relayedOnline() const
-{
-    const QList<QString> active = m_active.keys();
-    return ConnectionPolicy::relayedOnline(m_peerPresence, QSet<QString>(active.cbegin(), active.cend()), m_myOnion);
-}
-
-void MainWindow::checkQuietDrops()
-{
-    if (m_quietDrops.isEmpty())
-        return;
-    const QHash<QString, QString> relayed = relayedOnline();
-    for (auto it = m_quietDrops.begin(); it != m_quietDrops.end();) {
-        if (!m_active.contains(it.key()) && !relayed.contains(it.key())) {
-            m_chat->addPresence(memberNick(it.key()), false, it.value());
-            it = m_quietDrops.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}
+// ---------------------------------------------------------------- Envoi
 
 void MainWindow::sendCurrent()
 {
     if (m_mentions->isPopupVisible())
         return; // Entrée choisit un pseudo dans la liste
     const QString text = m_input->text().trimmed();
-    if ((text.isEmpty() && m_pendingImage.isEmpty()) || !m_group.inGroup() || m_group.members().isEmpty()
-        || m_myOnion.isEmpty())
-        return; // sans personne en ligne, le message partira à la prochaine synchronisation
-    const QJsonObject msg = Protocol::Message::create(m_group.identitySeed(), m_myOnion, m_group.nickname(), text,
-                                                      QDateTime::currentMSecsSinceEpoch(), {m_replyTo, m_pendingImage});
-    m_seenIds.insert(Protocol::Message::id(msg));
+    // Sans personne en ligne, le message partira à la prochaine synchronisation
+    if (m_node->sendMessage(text, {m_replyTo, m_pendingImage}).isEmpty())
+        return;
     m_chat->clearUnreadMarker(); // on a répondu : les messages précédents sont lus
-    m_lastTypingSent = 0;        // prochaine frappe : signalée tout de suite
-    broadcast(msg);
-    appendMessage(msg, true, ChatEntry::Verified);
     m_input->clear();
     cancelReply();
     cancelImage();
@@ -1733,7 +1235,7 @@ void MainWindow::changeNickname()
     if (!ok || n.isEmpty())
         return;
     m_group.setNickname(n);
-    broadcast(membersMessage()); // les autres mettent à jour notre pseudo
+    m_node->announceNickname();
 }
 
 void MainWindow::resetAll()
@@ -1745,9 +1247,7 @@ void MainWindow::resetAll()
                                  "mais seront refusés.)"))
         != QMessageBox::Yes)
         return;
-    closeAll();
-    m_group.leaveGroup();
-    m_lastError.clear();
+    m_node->leaveGroup();
     appendSystem(tr("Vous avez quitté le groupe."));
     updateStatus();
 }
@@ -1781,13 +1281,13 @@ void MainWindow::verifyMember()
 
 void MainWindow::showSafetyNumber(const QString &onion)
 {
-    if (m_myOnion.isEmpty()) {
+    if (m_node->ownOnion().isEmpty()) {
         QMessageBox::information(this, tr("Vérifier l'identité"),
                                  tr("Le code s'affichera une fois connecté au réseau Tor."));
         return;
     }
     const QString number =
-        SafetyNumber::compute(m_myOnion, m_group.identityKey(), onion, m_group.pinnedKey(onion));
+        SafetyNumber::compute(m_node->ownOnion(), m_group.identityKey(), onion, m_group.pinnedKey(onion));
     if (number.isEmpty())
         return;
     const QString nick = memberNick(onion);
@@ -1839,86 +1339,33 @@ void MainWindow::showSafetyNumber(const QString &onion)
 
 // ---------------------------------------------------------------- Réactions
 
-void MainWindow::react(const QString &id, const QString &emoji)
-{
-    if (id.isEmpty() || m_myOnion.isEmpty() || !m_group.inGroup() || !Reactions::Allowed.contains(emoji))
-        return;
-    const bool on = !m_reactions.mineOn(id, emoji); // la nôtre est déjà là : on la retire
-    const QJsonObject r = Reactions::create(m_group.identitySeed(), m_myOnion, id, emoji, on,
-                                            QDateTime::currentMSecsSinceEpoch());
-    acceptReaction(r, true, true);
-    broadcastReaction(r);
-}
-
-bool MainWindow::verifyReaction(const QJsonObject &r, bool mine) const
-{
-    const QByteArray key = mine ? m_group.identityKey() : m_group.pinnedKey(r.value("a").toString());
-    return Reactions::verify(r, key);
-}
-
-bool MainWindow::acceptReaction(const QJsonObject &r, bool mine, bool save)
-{
-    const QString id = Protocol::Message::id(r);
-    if (id.isEmpty() || m_store.contains(id))
-        return false;
-    m_store.insert(id, History::stored(r, mine)); // synchronisée comme les messages
-    m_seenIds.insert(id);
-    if (m_reactions.apply(r, mine))
-        m_chat->setReactions(Reactions::target(r), reactionSummary(Reactions::target(r)));
-    if (save)
-        appendToHistoryFile(r, mine);
-    return true;
-}
-
 QList<ChatEntry::Reaction> MainWindow::reactionSummary(const QString &id) const
 {
     QList<ChatEntry::Reaction> out;
     if (id.isEmpty())
         return out;
-    for (const Reactions::Summary &s : m_reactions.summary(id)) {
+    for (const Reactions::Summary &s : m_node->reactionSummary(id)) {
         QStringList names;
         for (const QString &onion : s.authors)
-            names << (onion.isEmpty() || onion == m_myOnion ? tr("Vous") : memberNick(onion));
+            names << (onion.isEmpty() || onion == m_node->ownOnion() ? tr("Vous") : memberNick(onion));
         out.append({s.emoji, int(s.authors.size()), s.mine, names.join(", ")});
     }
     return out;
-}
-
-void MainWindow::broadcastReaction(const QJsonObject &r, PeerConnection *except)
-{
-    for (PeerConnection *p : std::as_const(m_active))
-        if (p != except && p->peerVersion() >= Reactions::Version)
-            p->send(r);
 }
 
 // ---------------------------------------------------------------- Écriture en cours, recherche, liens
 
 void MainWindow::onTyping()
 {
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (m_input->text().trimmed().isEmpty() || now - m_lastTypingSent < TypingSendMs)
-        return;
-    m_lastTypingSent = now;
-    // Seulement aux membres reliés directement : ni signé, ni relayé, ni conservé
-    broadcast({{"t", "typing"}});
-}
-
-void MainWindow::onPeerTyping(PeerConnection *c)
-{
-    const QString from = m_active.key(c);
-    if (from.isEmpty())
-        return;
-    m_typing.insert(from, QDateTime::currentMSecsSinceEpoch() + TypingShownMs);
-    if (!m_typingTimer.isActive())
-        m_typingTimer.start();
-    updateStatus();
+    if (!m_input->text().trimmed().isEmpty())
+        m_node->typing();
 }
 
 QString MainWindow::typingText() const
 {
     QStringList names;
-    for (auto it = m_typing.cbegin(); it != m_typing.cend(); ++it)
-        names << memberNick(it.key());
+    for (const QString &onion : m_node->typingMembers())
+        names << memberNick(onion);
     names.sort(Qt::CaseInsensitive);
     if (names.isEmpty())
         return {};
@@ -1969,12 +1416,6 @@ void MainWindow::openLink(const QString &url)
 
 // ---------------------------------------------------------------- Console partagée
 
-void MainWindow::sendTo(const QString &onion, const QJsonObject &obj)
-{
-    if (PeerConnection *c = m_active.value(onion))
-        c->send(obj);
-}
-
 #ifdef P2P_TERMINAL
 
 void MainWindow::shareTerminal()
@@ -1985,7 +1426,7 @@ void MainWindow::shareTerminal()
     }
     QList<Member> online;
     for (const Member &m : m_group.members())
-        if (m_active.contains(m.onion))
+        if (m_node->isConnected(m.onion))
             online << m;
     if (online.isEmpty()) {
         QMessageBox::information(this, tr("Partager ma console"), tr("Personne n'est en ligne pour le moment."));
@@ -2018,19 +1459,19 @@ void MainWindow::shareTerminal()
         return;
 
     const QString onion = who->currentData().toString();
-    if (!m_active.contains(onion)) {
+    if (!m_node->isConnected(onion)) {
         QMessageBox::information(this, tr("Partager ma console"), tr("%1 n'est plus en ligne.").arg(memberNick(onion)));
         return;
     }
     const QString sid = QString::fromLatin1(Crypto::randomBytes(12).toHex());
     m_termOffer = {sid, onion, control->isChecked()};
-    sendTo(onion, {{"t", "term-offer"}, {"sid", sid}, {"ctl", m_termOffer.control}});
+    m_node->sendTo(onion, {{"t", "term-offer"}, {"sid", sid}, {"ctl", m_termOffer.control}});
     appendSystem(tr("Proposition de partage de console envoyée à %1…").arg(memberNick(onion)));
 
     QTimer::singleShot(120000, this, [this, sid] {
         if (m_termOffer.sid != sid)
             return;
-        sendTo(m_termOffer.onion, {{"t", "term-end"}, {"sid", sid}});
+        m_node->sendTo(m_termOffer.onion, {{"t", "term-end"}, {"sid", sid}});
         appendSystem(tr("%1 n'a pas répondu à la proposition de partage de console.").arg(memberNick(m_termOffer.onion)));
         m_termOffer = {};
     });
@@ -2042,7 +1483,7 @@ void MainWindow::stopTerminal()
         m_term->end(m_term->role() == TerminalSession::Host ? tr("vous avez arrêté le partage")
                                                             : tr("vous avez quitté la console"));
     } else if (!m_termOffer.sid.isEmpty()) {
-        sendTo(m_termOffer.onion, {{"t", "term-end"}, {"sid", m_termOffer.sid}});
+        m_node->sendTo(m_termOffer.onion, {{"t", "term-end"}, {"sid", m_termOffer.sid}});
         appendSystem(tr("Proposition de partage de console annulée."));
         m_termOffer = {};
     }
@@ -2052,11 +1493,9 @@ bool MainWindow::startTerminal(bool host, const QString &sid, const QString &oni
 {
     auto *t = new TerminalSession(host ? TerminalSession::Host : TerminalSession::Guest, sid, onion,
                                   memberNick(onion), control, this);
-    t->setBacklogProbe([this, onion] {
-        const PeerConnection *c = m_active.value(onion);
-        return c ? c->pendingBytes() : qint64(0);
-    });
-    connect(t, &TerminalSession::sendToPeer, this, [this, onion](const QJsonObject &o) { sendTo(onion, o); });
+    t->setBacklogProbe([this, onion] { return m_node->pendingBytes(onion); });
+    connect(t, &TerminalSession::sendToPeer, this,
+            [this, onion](const QJsonObject &o) { m_node->sendTo(onion, o); });
     connect(t, &TerminalSession::finished, this, [this, t](const QString &reason) {
         if (m_term == t)
             m_term = nullptr;
@@ -2072,17 +1511,16 @@ bool MainWindow::startTerminal(bool host, const QString &sid, const QString &oni
     return true;
 }
 
-void MainWindow::onTerminalMessage(PeerConnection *c, const QJsonObject &o)
+void MainWindow::onTerminalMessage(const QString &from, const QJsonObject &o)
 {
     const QString type = o.value("t").toString();
     const QString sid = o.value("sid").toString();
-    const QString from = c->peerOnion();
     if (sid.isEmpty())
         return;
 
     if (type == "term-offer") {
         if (m_term || m_termPrompt || !m_termOffer.sid.isEmpty()) {
-            c->send({{"t", "term-refuse"}, {"sid", sid}, {"busy", true}});
+            m_node->sendTo(from, {{"t", "term-refuse"}, {"sid", sid}, {"busy", true}});
             return;
         }
         const bool control = o.value("ctl").toBool();
@@ -2105,16 +1543,16 @@ void MainWindow::onTerminalMessage(PeerConnection *c, const QJsonObject &o)
             if (offer.sid.isEmpty())
                 return; // annulée entre-temps par l'autre membre
             if (box->clickedButton() != accept) {
-                sendTo(offer.onion, {{"t", "term-refuse"}, {"sid", offer.sid}});
+                m_node->sendTo(offer.onion, {{"t", "term-refuse"}, {"sid", offer.sid}});
                 appendSystem(tr("Vous avez refusé la console de %1.").arg(memberNick(offer.onion)));
                 return;
             }
-            if (!m_active.contains(offer.onion) || m_term) {
+            if (!m_node->isConnected(offer.onion) || m_term) {
                 appendSystem(tr("%1 n'est plus en ligne : console non ouverte.").arg(memberNick(offer.onion)));
                 return;
             }
             if (startTerminal(false, offer.sid, offer.onion, offer.control))
-                sendTo(offer.onion, {{"t", "term-accept"}, {"sid", offer.sid}});
+                m_node->sendTo(offer.onion, {{"t", "term-accept"}, {"sid", offer.sid}});
         });
         box->open();
         if (!isVisible() || !isActiveWindow()) {
@@ -2159,7 +1597,7 @@ void MainWindow::onTerminalMessage(PeerConnection *c, const QJsonObject &o)
     }
     // Reprise d'une session qui n'existe plus chez nous (terminée pendant la coupure)
     if (type == "term-resume")
-        c->send({{"t", "term-end"}, {"sid", sid}});
+        m_node->sendTo(from, {{"t", "term-end"}, {"sid", sid}});
 }
 
 void MainWindow::terminalPeerLost(const QString &onion)
@@ -2184,10 +1622,10 @@ void MainWindow::stopTerminal() {}
 bool MainWindow::startTerminal(bool, const QString &, const QString &, bool) { return false; }
 void MainWindow::terminalPeerLost(const QString &) {}
 
-void MainWindow::onTerminalMessage(PeerConnection *c, const QJsonObject &o)
+void MainWindow::onTerminalMessage(const QString &from, const QJsonObject &o)
 {
     if (o.value("t").toString() == "term-offer")
-        c->send({{"t", "term-refuse"}, {"sid", o.value("sid").toString()}});
+        m_node->sendTo(from, {{"t", "term-refuse"}, {"sid", o.value("sid").toString()}});
 }
 
 #endif
