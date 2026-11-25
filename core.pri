@@ -17,7 +17,8 @@ SOURCES += \
     $$PWD/mentions.cpp \
     $$PWD/peerconnection.cpp \
     $$PWD/protocol.cpp \
-    $$PWD/reactions.cpp
+    $$PWD/reactions.cpp \
+    $$PWD/safetynumber.cpp
 
 HEADERS += \
     $$PWD/attachment.h \
@@ -32,7 +33,8 @@ HEADERS += \
     $$PWD/mentions.h \
     $$PWD/peerconnection.h \
     $$PWD/protocol.h \
-    $$PWD/reactions.h
+    $$PWD/reactions.h \
+    $$PWD/safetynumber.h
 
 # OpenSSL (libcrypto) : X25519, Ed25519, HKDF, ChaCha20-Poly1305
 macx {

@@ -160,6 +160,9 @@ private:
     void sendTo(const QString &onion, const QJsonObject &obj);
 
     void changeNickname();
+    // Code de sécurité (cf. safetynumber.h) : choix du membre, puis comparaison de vive voix
+    void verifyMember();
+    void showSafetyNumber(const QString &onion);
     void resetAll();
 
     QSettings m_settings;

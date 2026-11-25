@@ -12,6 +12,7 @@ SUBDIRS += \
     tst_notifications \
     tst_protocol \
     tst_reactions \
+    tst_safetynumber \
     tst_groupstore \
     tst_history \
     tst_connectionpolicy \

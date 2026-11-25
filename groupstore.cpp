@@ -158,6 +158,22 @@ bool GroupStore::pinKey(const QString &onion, const QByteArray &key, qint64 nowM
     return true;
 }
 
+bool GroupStore::isVerified(const QString &onion) const
+{
+    const QByteArray key = pinnedKey(onion);
+    return !key.isEmpty() && Protocol::fromB64(readObject(m_settings, "verified").value(onion)) == key;
+}
+
+void GroupStore::setVerified(const QString &onion, bool verified)
+{
+    QJsonObject v = readObject(m_settings, "verified");
+    if (verified && !pinnedKey(onion).isEmpty())
+        v.insert(onion, Protocol::toB64(pinnedKey(onion))); // la clé vérifiée, pas seulement le membre
+    else
+        v.remove(onion);
+    writeObject(m_settings, "verified", v);
+}
+
 qint64 GroupStore::firstSeen(const QString &onion) const
 {
     return qint64(readObject(m_settings, "firstSeen").value(onion).toDouble());

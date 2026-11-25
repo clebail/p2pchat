@@ -12,7 +12,8 @@ struct Member
 
 // État persistant du groupe et de l'identité de ce poste, rangé dans les réglages :
 //   nickname, identity/seed, group/{secret, members, shareHistoryUntil},
-//   keyring (onion -> clé Ed25519), firstSeen (onion -> ms), history/clearedBefore
+//   keyring (onion -> clé Ed25519), firstSeen (onion -> ms), verified (onion -> clé vérifiée),
+//   history/clearedBefore
 class GroupStore
 {
 public:
@@ -49,6 +50,10 @@ public:
     QByteArray pinnedKey(const QString &onion) const;
     bool pinKey(const QString &onion, const QByteArray &key, qint64 nowMs); // false si une autre clé est connue
     qint64 firstSeen(const QString &onion) const; // 0 : avant cette fonctionnalité, ou historique partagé
+
+    // Identité vérifiée de vive voix (code de sécurité comparé) : valable pour la clé mémorisée
+    bool isVerified(const QString &onion) const;
+    void setVerified(const QString &onion, bool verified);
 
     // Partage de l'historique avec les personnes qui rejoignent avant cette date
     qint64 shareHistoryUntil() const;

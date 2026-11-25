@@ -315,6 +315,17 @@ bool ChatModel::setReactions(const QString &id, const QList<ChatEntry::Reaction>
     return true;
 }
 
+void ChatModel::setAuthorVerified(const QString &onion, bool verified)
+{
+    for (int i = 0; i < m_entries.size(); ++i) {
+        ChatEntry &e = m_entries[i];
+        if (!onion.isEmpty() && e.authorOnion == onion && e.authorVerified != verified) {
+            e.authorVerified = verified;
+            emit dataChanged(index(i), index(i));
+        }
+    }
+}
+
 int ChatModel::markerRow() const
 {
     for (int i = int(m_entries.size()) - 1; i >= 0; --i)
@@ -699,6 +710,11 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
         p->setFont(smallFont());
         p->setPen(Muted);
         p->drawText(QRect(bubbleLeft + 6, y, r.width(), g.nameH), Qt::AlignLeft | Qt::AlignTop, e.author);
+        if (e.authorVerified) { // identité vérifiée de vive voix
+            const int x = bubbleLeft + 6 + QFontMetrics(smallFont()).horizontalAdvance(e.author + ' ');
+            p->setPen(QColor("#188038"));
+            p->drawText(QRect(x, y, r.width(), g.nameH), Qt::AlignLeft | Qt::AlignTop, QStringLiteral("✔"));
+        }
         y += g.nameH;
     }
 

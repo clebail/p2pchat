@@ -448,6 +448,29 @@ private slots:
         view.grab(); // dessin du code et des délimiteurs masqués
     }
 
+    void verifiedAuthor()
+    {
+        ChatView view;
+        const QDateTime t0 = QDateTime::currentDateTime();
+        ChatEntry fromAlice = message("bonjour", t0);
+        fromAlice.authorOnion = "alice";
+        view.addMessage(fromAlice);
+        ChatEntry fromBob = message("salut", t0.addSecs(1));
+        fromBob.author = "Bob";
+        fromBob.authorOnion = "bob";
+        view.addMessage(fromBob);
+        QSignalSpy changed(view.chatModel(), &ChatModel::dataChanged);
+        view.setAuthorVerified("alice", true);
+        QVERIFY(view.chatModel()->entry(0).authorVerified);
+        QVERIFY(!view.chatModel()->entry(1).authorVerified);
+        QCOMPARE(changed.count(), 1);
+        view.setAuthorVerified("alice", true); // déjà vérifié : rien à redessiner
+        QCOMPARE(changed.count(), 1);
+        view.setAuthorVerified(QString(), true); // nos messages n'ont pas d'onion
+        QVERIFY(!view.chatModel()->entry(1).authorVerified);
+        view.grab();
+    }
+
     void avatarColorIsStable()
     {
         QCOMPARE(ChatView::colorFor("Alice"), ChatView::colorFor("Alice"));

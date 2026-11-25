@@ -30,6 +30,8 @@ struct ChatEntry
     enum Trust { Verified, Unsigned, Invalid }; // signature de l'auteur (historique)
     Kind kind = Message;
     QString author;
+    QString authorOnion;         // vide pour nos messages et les lignes système
+    bool authorVerified = false; // identité vérifiée par code de sécurité : ✔ à côté du nom
     QString text;
     QDateTime ts;
     bool mine = false;
@@ -78,6 +80,7 @@ public:
     int rowOf(const QString &id) const; // -1 si absent
     int markerRow() const;              // -1 si pas de séparateur « Nouveaux messages »
     bool setReactions(const QString &id, const QList<ChatEntry::Reaction> &reactions); // false si absent
+    void setAuthorVerified(const QString &onion, bool verified);
     void removeRow(int row);
     // Recherche : lignes des messages contenant term (sans tenir compte de la casse ni des accents)
     QList<int> search(const QString &term) const;
@@ -145,6 +148,7 @@ public:
     bool showMessage(const QString &id);
     void showRow(int row);
     void setReactions(const QString &id, const QList<ChatEntry::Reaction> &reactions);
+    void setAuthorVerified(const QString &onion, bool verified) { m_model->setAuthorVerified(onion, verified); }
     bool isFlashed(const QModelIndex &index) const { return m_flash.isValid() && m_flash == index; }
     QString flashedId() const; // identifiant du message mis en évidence (vide si aucun)
 

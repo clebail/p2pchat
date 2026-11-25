@@ -148,6 +148,26 @@ private slots:
         QCOMPARE(m_store->firstSeen(onion('b')), qint64(0));
     }
 
+    void verification()
+    {
+        const QString a = onion('a');
+        QVERIFY(!m_store->isVerified(a));
+        m_store->setVerified(a, true); // clé inconnue : rien à vérifier
+        QVERIFY(!m_store->isVerified(a));
+        QVERIFY(m_store->pinKey(a, QByteArray(32, '1'), 1));
+        m_store->setVerified(a, true);
+        reopen();
+        QVERIFY(m_store->isVerified(a));
+        QVERIFY(!m_store->isVerified(onion('b')));
+        m_store->setVerified(a, false);
+        QVERIFY(!m_store->isVerified(a));
+
+        // La vérification porte sur la clé : si le trousseau changeait, elle ne vaudrait plus
+        m_store->setVerified(a, true);
+        m_settings->setValue("keyring", QJsonDocument(QJsonObject{{a, "AAAA"}}).toJson()); // autre clé
+        QVERIFY(!m_store->isVerified(a));
+    }
+
     void sharedHistoryMakesFirstSeenZero()
     {
         m_store->setShareHistoryUntil(1000);

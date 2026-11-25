@@ -11,6 +11,7 @@
 #include "notifier.h"
 #include "peerconnection.h"
 #include "protocol.h"
+#include "safetynumber.h"
 #include "torservice.h"
 #ifdef P2P_TERMINAL
 #  include "terminalsession.h"
@@ -32,6 +33,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QJsonArray>
@@ -441,6 +443,7 @@ void MainWindow::buildUi()
     QMenu *notifications = menu->addMenu(tr("Notifications"));
     connect(notifications, &QMenu::aboutToShow, this, [this, notifications] { buildNotificationMenu(notifications); });
     buildNotificationMenu(notifications); // le sous-menu doit avoir un contenu pour s'afficher
+    menu->addAction(tr("Vérifier l'identité d'un membre…"), this, &MainWindow::verifyMember);
     menu->addAction(tr("Changer de pseudo…"), this, &MainWindow::changeNickname);
     menu->addAction(tr("Vider la conversation"), this, &MainWindow::clearConversation);
     menu->addSeparator();
@@ -720,7 +723,8 @@ void MainWindow::updateStatus()
             && m_backoff.value(m.onion).nextTry > QDateTime::currentMSecsSinceEpoch())
             state += tr(" (nouvel essai à %1)")
                          .arg(QDateTime::fromMSecsSinceEpoch(m_backoff.value(m.onion).nextTry).toString("HH:mm:ss"));
-        tips << QStringLiteral("%1 : %2").arg(m.nick, state).toHtmlEscaped();
+        const QString name = m_group.isVerified(m.onion) ? tr("%1 ✔").arg(m.nick) : m.nick;
+        tips << QStringLiteral("%1 : %2").arg(name, state).toHtmlEscaped();
     }
     m_subtitle->setToolTip(tips.isEmpty() ? QString() : "<p>" + tips.join("<br>") + "</p>");
 
@@ -754,6 +758,10 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
     const QString id = Protocol::Message::id(msg);
     ChatEntry e;
     e.author = msg.value("n").toString().left(Protocol::MaxNickLength);
+    if (!mine && trust == ChatEntry::Verified) { // le ✔ ne vaut que pour un message bien signé
+        e.authorOnion = msg.value("a").toString();
+        e.authorVerified = m_group.isVerified(e.authorOnion);
+    }
     e.text = text;
     e.ts = ts;
     e.mine = mine;
@@ -1737,6 +1745,91 @@ void MainWindow::resetAll()
     m_lastError.clear();
     appendSystem(tr("Vous avez quitté le groupe."));
     updateStatus();
+}
+
+// ---------------------------------------------------------------- Code de sécurité
+
+void MainWindow::verifyMember()
+{
+    // Membres dont on connaît la clé (rencontrés au moins une fois, ou présentés par un autre)
+    QList<Member> known;
+    for (const Member &m : m_group.members())
+        if (!m_group.pinnedKey(m.onion).isEmpty())
+            known << m;
+    if (known.isEmpty()) {
+        QMessageBox::information(this, tr("Vérifier l'identité"),
+                                 tr("Aucun membre à vérifier pour le moment : il faut s'être connecté au moins une fois."));
+        return;
+    }
+    if (known.size() == 1) {
+        showSafetyNumber(known.first().onion);
+        return;
+    }
+    QStringList names;
+    for (const Member &m : std::as_const(known))
+        names << (m_group.isVerified(m.onion) ? tr("%1 ✔").arg(m.nick) : m.nick);
+    bool ok = false;
+    const QString choice = QInputDialog::getItem(this, tr("Vérifier l'identité"), tr("Membre :"), names, 0, false, &ok);
+    if (ok)
+        showSafetyNumber(known.at(int(names.indexOf(choice))).onion);
+}
+
+void MainWindow::showSafetyNumber(const QString &onion)
+{
+    if (m_myOnion.isEmpty()) {
+        QMessageBox::information(this, tr("Vérifier l'identité"),
+                                 tr("Le code s'affichera une fois connecté au réseau Tor."));
+        return;
+    }
+    const QString number =
+        SafetyNumber::compute(m_myOnion, m_group.identityKey(), onion, m_group.pinnedKey(onion));
+    if (number.isEmpty())
+        return;
+    const QString nick = memberNick(onion);
+    const bool verified = m_group.isVerified(onion);
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Code de sécurité avec %1").arg(nick));
+    auto *lay = new QVBoxLayout(&dlg);
+    auto *intro = new QLabel(tr("<p>Comparez ce code avec celui qu'affiche <b>%1</b> sur son poste "
+                                "(⋮ → <i>Vérifier l'identité d'un membre…</i>), de vive voix : au téléphone ou "
+                                "en personne, pas par ce chat.</p>"
+                                "<p>S'ils sont identiques, personne ne s'est interposé entre vous lors de "
+                                "l'invitation : vos messages lui parviennent bien, à elle seule.</p>")
+                                 .arg(nick.toHtmlEscaped()),
+                             &dlg);
+    intro->setWordWrap(true);
+    lay->addWidget(intro);
+    // Deux lignes de trois groupes, plus faciles à lire à voix haute
+    auto *code = new QLabel(number.section(' ', 0, 2) + QLatin1Char('\n') + number.section(' ', 3, 5), &dlg);
+    code->setAlignment(Qt::AlignCenter);
+    code->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    mono.setPointSizeF(mono.pointSizeF() * 1.8);
+    mono.setLetterSpacing(QFont::AbsoluteSpacing, 2);
+    code->setFont(mono);
+    code->setStyleSheet("QLabel { background: #f0f4f9; border-radius: 12px; padding: 16px; color: #1f1f1f; }");
+    lay->addWidget(code);
+    auto *state = new QLabel(verified ? tr("<span style='color:#188038'>✔ Vous avez vérifié l'identité de %1.</span>")
+                                            .arg(nick.toHtmlEscaped())
+                                      : tr("<span style='color:#5f6368'>Identité pas encore vérifiée.</span>"),
+                             &dlg);
+    lay->addWidget(state);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
+    QPushButton *toggle = buttons->addButton(verified ? tr("Retirer la vérification") : tr("Les codes sont identiques"),
+                                             QDialogButtonBox::ActionRole);
+    connect(toggle, &QPushButton::clicked, &dlg, [this, onion, verified, &dlg] {
+        m_group.setVerified(onion, !verified);
+        m_chat->setAuthorVerified(onion, !verified);
+        if (!verified)
+            appendSystem(tr("Vous avez vérifié l'identité de %1 ✔").arg(memberNick(onion)));
+        updateStatus();
+        dlg.accept();
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    lay->addWidget(buttons);
+    dlg.exec();
 }
 
 // ---------------------------------------------------------------- Réactions

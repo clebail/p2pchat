@@ -211,6 +211,13 @@ trousseau), l'historique et sa synchronisation, les règles de reconnexion, la p
 
 ## Sécurité
 
+**Vérifier l'identité d'un membre** (⋮ → *Vérifier l'identité d'un membre…*). La clé d'un membre est mémorisée
+à la première rencontre : si quelqu'un avait modifié le code d'invitation en route, rien ne le signalerait. Le
+code de sécurité (30 chiffres, empreinte des deux identités) est le même sur les deux postes : comparez-le de
+vive voix, au téléphone ou en personne. S'il est identique, cliquez *Les codes sont identiques* : le membre est
+marqué ✔ (à côté de son nom dans la conversation et dans l'état des membres).
+
+
 - **Transport** : service onion Tor. Le trafic est chiffré de bout en bout, aucun relais ne connaît à la
   fois l'expéditeur et le destinataire, et les membres ne voient pas l'adresse IP des autres.
 - **Canal** : à chaque connexion, échange de clés **X25519** éphémère, puis **HKDF-SHA256** salé avec le
@@ -252,6 +259,7 @@ trousseau), l'historique et sa synchronisation, les règles de reconnexion, la p
 | `markup.*` | Repérage de `code` et des blocs ``` dans le texte |
 | `notifications.*` | Réglage des notifications (lesquelles, pause) |
 | `composer.*` | Zone de saisie sur plusieurs lignes (Entrée / Maj+Entrée, hauteur, collage d'images) |
+| `safetynumber.*` | Code de sécurité entre deux membres |
 | `links.*` | Détection des liens dans le texte des messages |
 | `mentions.*`, `mentioncompleter.*` | Détection des « @pseudo », autocomplétion dans la zone de saisie |
 | `groupstore.*` | État persistant : pseudo, identité, secret, membres, trousseau des clés |
