@@ -39,6 +39,30 @@ private slots:
         QTest::newRow("bloc non fermé") << "```pas fini `ok`" << "ok / ``";
     }
 
+    void emojiRuns_data()
+    {
+        QTest::addColumn<QString>("text");
+        QTest::addColumn<QStringList>("expected");
+        QTest::newRow("aucun") << "bonjour à tous" << QStringList();
+        QTest::newRow("un") << QStringLiteral("ok 👍 merci") << QStringList{QStringLiteral("👍")};
+        QTest::newRow("suite") << QStringLiteral("bravo 🎉🎉!") << QStringList{QStringLiteral("🎉🎉")};
+        QTest::newRow("cœur avec sélecteur") << QStringLiteral("je ❤️ ça") << QStringList{QStringLiteral("❤️")};
+        QTest::newRow("famille (ZWJ)") << QStringLiteral("👨‍👩‍👧 !") << QStringList{QStringLiteral("👨‍👩‍👧")};
+        QTest::newRow("teinte de peau") << QStringLiteral("👍🏽") << QStringList{QStringLiteral("👍🏽")};
+        QTest::newRow("drapeau") << QStringLiteral("🇫🇷 et 🇧🇪") << QStringList{QStringLiteral("🇫🇷"), QStringLiteral("🇧🇪")};
+        QTest::newRow("liant seul") << QStringLiteral("a\u200Db") << QStringList();
+    }
+
+    void emojiRuns()
+    {
+        QFETCH(QString, text);
+        QFETCH(QStringList, expected);
+        QStringList found;
+        for (const auto &run : Markup::emojiRuns(text))
+            found << text.mid(run.first, run.second);
+        QCOMPARE(found, expected);
+    }
+
     void parse()
     {
         QFETCH(QString, text);

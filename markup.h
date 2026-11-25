@@ -24,4 +24,11 @@ struct Result
 
 Result parse(const QString &text);
 
+// Suites d'émojis (avec leurs liants : ZWJ, sélecteur de variante, teinte de peau…), en positions UTF-16.
+// Sous Linux, fontconfig préfère parfois une police monochrome (Symbola, DejaVu) : on les dessine avec
+// la police d'émojis en couleur.
+QList<QPair<int, int>> emojiRuns(const QString &text);
+// Police d'émojis en couleur installée (vide si aucune)
+QString emojiFontFamily();
+
 } // namespace Markup

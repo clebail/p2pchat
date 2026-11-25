@@ -1,5 +1,7 @@
 #include "markup.h"
 
+#include <QFontDatabase>
+
 Markup::Result Markup::parse(const QString &text)
 {
     static const QString Fence = QStringLiteral("```");
@@ -41,4 +43,61 @@ Markup::Result Markup::parse(const QString &text)
         ++i;
     }
     return result;
+}
+
+namespace {
+
+bool isEmoji(char32_t c)
+{
+    return (c >= 0x1F000 && c <= 0x1FAFF)    // pictogrammes, émoticônes, drapeaux, teintes de peau
+           || (c >= 0x2600 && c <= 0x27BF)   // symboles divers, dingbats (❤ ✔ ☀)
+           || (c >= 0x2B00 && c <= 0x2BFF)   // ⭐ ⬆
+           || (c >= 0x2300 && c <= 0x23FF)   // ⌚ ⏰
+           || (c >= 0xE0020 && c <= 0xE007F); // étiquettes (drapeaux régionaux)
+}
+
+bool isJoiner(char32_t c)
+{
+    return c == 0x200D || c == 0xFE0F || c == 0x20E3; // ZWJ, présentation émoji, touche (1️⃣)
+}
+
+} // namespace
+
+QList<QPair<int, int>> Markup::emojiRuns(const QString &text)
+{
+    QList<QPair<int, int>> runs;
+    int start = -1;
+    for (int i = 0; i < text.size();) {
+        char32_t c = text.at(i).unicode();
+        int len = 1;
+        if (text.at(i).isHighSurrogate() && i + 1 < text.size() && text.at(i + 1).isLowSurrogate()) {
+            c = QChar::surrogateToUcs4(text.at(i), text.at(i + 1));
+            len = 2;
+        }
+        const bool inRun = isEmoji(c) || (start >= 0 && isJoiner(c));
+        if (inRun && start < 0)
+            start = i;
+        else if (!inRun && start >= 0) {
+            runs.append({start, i - start});
+            start = -1;
+        }
+        i += len;
+    }
+    if (start >= 0)
+        runs.append({start, int(text.size()) - start});
+    return runs;
+}
+
+QString Markup::emojiFontFamily()
+{
+    static const QString family = [] {
+        const QStringList installed = QFontDatabase().families();
+        for (const QString &f : {QStringLiteral("Noto Color Emoji"), QStringLiteral("Apple Color Emoji"),
+                                 QStringLiteral("Segoe UI Emoji"), QStringLiteral("Twemoji"),
+                                 QStringLiteral("JoyPixels"), QStringLiteral("Twitter Color Emoji")})
+            if (installed.contains(f))
+                return f;
+        return QString();
+    }();
+    return family;
 }

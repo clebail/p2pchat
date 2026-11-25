@@ -60,9 +60,32 @@ QFont reactionFont()
     return f;
 }
 
-QString reactionLabel(const ChatEntry::Reaction &r)
+// Même taille, police d'émojis en couleur seule : sous Linux, fontconfig choisit sinon parfois une police
+// monochrome (Symbola). Jamais pour du texte ordinaire : elle a aussi des chiffres et des espaces, très larges.
+QFont emojiFont(const QFont &base)
 {
-    return r.count > 1 ? QStringLiteral("%1 %2").arg(r.emoji).arg(r.count) : r.emoji;
+    QFont f = base;
+    if (!Markup::emojiFontFamily().isEmpty())
+        f.setFamilies({Markup::emojiFontFamily()});
+    return f;
+}
+
+// Pastille : l'émoji (police en couleur) puis le nombre (police ordinaire)
+QString reactionCount(const ChatEntry::Reaction &r)
+{
+    return r.count > 1 ? QStringLiteral(" %1").arg(r.count) : QString();
+}
+
+int reactionPillHeight()
+{
+    const qreal text = qMax(QFontMetricsF(reactionFont()).height(), QFontMetricsF(emojiFont(reactionFont())).height());
+    return int(std::ceil(text)) + 6;
+}
+
+qreal reactionTextWidth(const ChatEntry::Reaction &r)
+{
+    return QFontMetricsF(emojiFont(reactionFont())).horizontalAdvance(r.emoji)
+           + QFontMetricsF(reactionFont()).horizontalAdvance(reactionCount(r));
 }
 
 QFont messageFont()
@@ -111,6 +134,16 @@ void prepareMessageLayout(QTextLayout &tl, const ChatEntry &e, const QString &se
     tl.setText(QString(e.text).replace(QLatin1Char('\n'), QChar(QChar::LineSeparator)));
     tl.setFont(messageFont());
     QVector<QTextLayout::FormatRange> formats;
+    // Émojis : police en couleur (cf. Markup::emojiRuns)
+    if (!Markup::emojiFontFamily().isEmpty()) {
+        for (const auto &run : Markup::emojiRuns(e.text)) {
+            QTextLayout::FormatRange r;
+            r.start = run.first;
+            r.length = run.second;
+            r.format.setFontFamilies({Markup::emojiFontFamily()});
+            formats.append(r);
+        }
+    }
     // Code : police à chasse fixe sur fond gris (en premier : le reste peut s'y superposer)
     const QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
     for (const Markup::Code &c : e.markup.code) {
@@ -483,7 +516,7 @@ ChatDelegate::Geometry ChatDelegate::compute(const QModelIndex &index, int width
     g.bubbleW = bubbleW;
     g.bubbleH = y;
     g.nameH = (!e.mine && g.first) ? small.height() + 4 : 0;
-    g.reactH = e.reactions.isEmpty() ? 0 : ReactGap + QFontMetrics(reactionFont()).height() + 6;
+    g.reactH = e.reactions.isEmpty() ? 0 : ReactGap + reactionPillHeight();
     g.timeH = (g.last || e.trust != ChatEntry::Verified) ? small.height() + 4 : 0;
     g.height = g.top + g.nameH + g.bubbleH + g.reactH + g.timeH;
     return g;
@@ -509,17 +542,16 @@ QRectF ChatDelegate::imageRect(const Geometry &g, const QRectF &bubble) const
 QList<QRectF> ChatDelegate::reactionRects(const ChatEntry &e, const QRectF &bubble) const
 {
     // Alignées sur le bord de la bulle du côté de l'auteur
-    const QFontMetrics fm(reactionFont());
     QList<QRectF> rects;
     qreal total = 0;
     QList<qreal> widths;
     for (const ChatEntry::Reaction &r : e.reactions) {
-        widths << fm.horizontalAdvance(reactionLabel(r)) + 2 * ReactPadH;
+        widths << reactionTextWidth(r) + 2 * ReactPadH;
         total += widths.last() + (widths.size() > 1 ? ReactSpacing : 0);
     }
     qreal x = e.mine ? bubble.right() - total : bubble.left() + 4;
     for (qreal w : std::as_const(widths)) {
-        rects << QRectF(x, bubble.bottom() + ReactGap, w, fm.height() + 6);
+        rects << QRectF(x, bubble.bottom() + ReactGap, w, reactionPillHeight());
         x += w + ReactSpacing;
     }
     return rects;
@@ -743,7 +775,13 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
             p->setBrush(r.mine ? QColor("#d3e3fd") : QColor("#ffffff"));
             p->drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
             p->setPen(r.mine ? QColor("#041e49") : OtherText);
-            p->drawText(pill, Qt::AlignCenter, reactionLabel(r));
+            const qreal left = pill.center().x() - reactionTextWidth(r) / 2;
+            const qreal emojiW = QFontMetricsF(emojiFont(reactionFont())).horizontalAdvance(r.emoji);
+            p->setFont(emojiFont(reactionFont()));
+            p->drawText(QRectF(left, pill.top(), emojiW + 1, pill.height()), Qt::AlignVCenter | Qt::AlignLeft, r.emoji);
+            p->setFont(reactionFont());
+            p->drawText(QRectF(left + emojiW, pill.top(), pill.right() - left - emojiW, pill.height()),
+                        Qt::AlignVCenter | Qt::AlignLeft, reactionCount(r));
         }
         p->setBrush(Qt::NoBrush);
     }
@@ -1082,6 +1120,7 @@ void ChatView::contextMenuEvent(QContextMenuEvent *event)
             const bool mine = std::any_of(e.reactions.cbegin(), e.reactions.cend(),
                                           [&](const ChatEntry::Reaction &r) { return r.emoji == emoji && r.mine; });
             QAction *a = react->addAction(emoji, this, [this, id, emoji] { emit reactionToggled(id, emoji); });
+            a->setFont(emojiFont(react->font())); // libellé : l'émoji seul
             a->setCheckable(true);
             a->setChecked(mine); // cochée : la nôtre, la choisir la retire
         }

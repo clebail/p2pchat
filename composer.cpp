@@ -1,11 +1,13 @@
 #include "composer.h"
 
 #include "attachment.h"
+#include "markup.h"
 
 #include <QAbstractTextDocumentLayout>
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QScrollBar>
+#include <QSyntaxHighlighter>
 #include <QTextBlock>
 #include <QUrl>
 
@@ -24,6 +26,22 @@ bool hasImage(const QMimeData *mime)
                        [](const QUrl &u) { return u.isLocalFile() && Attachment::isImageFile(u.toLocalFile()); });
 }
 
+// Émojis tapés ou collés : police en couleur (cf. Markup::emojiRuns), comme dans les bulles
+class EmojiHighlighter : public QSyntaxHighlighter
+{
+public:
+    using QSyntaxHighlighter::QSyntaxHighlighter;
+
+protected:
+    void highlightBlock(const QString &text) override
+    {
+        QTextCharFormat format;
+        format.setFontFamilies({Markup::emojiFontFamily()});
+        for (const auto &run : Markup::emojiRuns(text))
+            setFormat(run.first, run.second, format);
+    }
+};
+
 } // namespace
 
 Composer::Composer(QWidget *parent) : QPlainTextEdit(parent)
@@ -35,6 +53,8 @@ Composer::Composer(QWidget *parent) : QPlainTextEdit(parent)
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     document()->setDocumentMargin(2);
+    if (!Markup::emojiFontFamily().isEmpty())
+        new EmojiHighlighter(document());
     connect(this, &QPlainTextEdit::textChanged, this, &Composer::onTextChanged);
     updateHeight();
 }
