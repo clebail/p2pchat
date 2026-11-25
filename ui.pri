@@ -1,4 +1,4 @@
-# Composants d'interface de la conversation, sans la fenêtre principale ni Tor :
+# Composants d'interface de la conversation (vue, saisie, Conversation), sans la fenêtre principale ni Tor :
 # utilisés par l'application et par les tests graphiques (tests/)
 QT += widgets
 INCLUDEPATH += $$PWD
@@ -10,6 +10,7 @@ SOURCES += \
     $$PWD/chatstyle.cpp \
     $$PWD/chatview.cpp \
     $$PWD/composer.cpp \
+    $$PWD/conversation.cpp \
     $$PWD/mentioncompleter.cpp
 
 HEADERS += \
@@ -18,5 +19,6 @@ HEADERS += \
     $$PWD/chatstyle.h \
     $$PWD/chatview.h \
     $$PWD/composer.h \
+    $$PWD/conversation.h \
     $$PWD/hoverbar.h \
     $$PWD/mentioncompleter.h

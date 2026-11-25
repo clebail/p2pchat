@@ -1,6 +1,7 @@
 #pragma once
 #include "attachment.h"
 #include "chatview.h"
+#include "conversation.h"
 #include "conversations.h"
 #include "groupnode.h"
 #include "groupstore.h"
@@ -51,6 +52,7 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+    ~MainWindow() override;
     // Affiche la fenêtre (depuis la zone de notification, une notification ou une autre instance lancée)
     void showAndRaise();
 
@@ -63,58 +65,24 @@ protected:
     void dropEvent(QDropEvent *event) override;
 
 private:
-    // Une conversation : son état, son groupe, sa vue
-    struct Conversation
-    {
-        QString id;
-        std::unique_ptr<GroupStore> store;
-        GroupNode *node = nullptr;
-        ChatView *chat = nullptr;
-        TerminalSharing *sharing = nullptr;
-        QListWidgetItem *item = nullptr; // dans la colonne de gauche
-        int unread = 0;
-        QString preview; // dernier message, pour la colonne
-        QString draft;   // texte en cours d'écriture quand on change de conversation
-    };
+    // Conversations (cf. conversation.h) : une affichée à la fois
     Conversation *openConversation(const QString &id); // existante (réglages, historique) ou nouvelle
     Conversation *newConversation();
     void closeConversation(Conversation *c); // la supprime : réglages, historique, fichiers
     Conversation *conversationById(const QString &id) const;
     void showConversation(Conversation *c);
-    // m_group, m_node, m_chat, m_sharing : ceux de la conversation en contexte, en principe celle affichée ;
-    // le temps de traiter un signal d'une autre, c'est elle (cf. inContext)
-    void setContext(Conversation *c);
-    template<typename F> void inContext(Conversation *c, F &&f)
-    {
-        Conversation *previous = m_ctx;
-        setContext(c);
-        f();
-        setContext(previous);
-    }
-    bool isShown() const { return m_ctx == m_shown; }
-    bool isBlank(const Conversation *c) const; // ni groupe ni historique : page d'accueil
-    QString displayName(const Conversation *c) const;
     void updateConversationItem(Conversation *c);
+    void onConversationChanged(Conversation *c);
     void startConversation(); // ⋮ → Nouvelle conversation
     void renameConversation();
     void deleteConversation();
+    void appendSystem(const QString &text) { m_shown->appendSystem(text); }
 
     // Interface
     void buildUi();
     QWidget *buildSidebar(QWidget *parent);
     void setSidebarVisible(bool visible);
-    void updateStatus();
-    void connectNode(Conversation *c); // signaux du groupe -> interface
-    void connectChat(Conversation *c);
-    // msg : message signé tel qu'échangé sur le réseau (id, a, n, x, ts, s)
-    void appendMessage(const QJsonObject &msg, bool mine, GroupNode::Trust trust);
-    void onMessagesReceived(const QList<QJsonObject> &messages, bool catchUp); // notifications
-    void appendSystem(const QString &text);
-    // Pseudos reconnus dans les mentions « @… » (membres, nous-même et « tous »)
-    QStringList mentionNames() const;
-    bool mentionsMe(const QJsonObject &msg) const;
-    bool repliesToMe(const QJsonObject &msg) const; // réponse à l'un de nos messages
-    QString notificationTitle(const QJsonObject &msg) const;
+    void updateStatus(); // en-tête et zone de saisie, pour la conversation affichée
     // Réponse avec citation : bandeau au-dessus de la zone de saisie
     void startReply(const QString &id, const QString &author, const QString &text);
     void cancelReply();
@@ -124,21 +92,13 @@ private:
     bool attachFromMime(const QMimeData *mime); // false : rien d'utilisable
     void attachPrepared(const Attachment::Prepared &prepared);
     void cancelImage();
-    QString notificationBody(const QJsonObject &msg) const;
 
     // Fichiers joints (cf. filestore.h)
-    static ChatEntry::File::State fileEntryState(int groupNodeKind);
-    void updateFileEntry(const QString &fileId);
-    void onFileRequested(const QString &fileId, ChatView::FileAction action);
     void openFile(const QString &fileId);   // avertissement avant un programme ou un script
     void saveFileAs(const QString &fileId);
 
     // « Alice écrit… » : signal envoyé aux membres connectés, au plus toutes les 3 s pendant la frappe
     void onTyping();
-    QString typingText() const; // vide si personne n'écrit
-
-    // Réactions d'un message, pour l'affichage (noms des membres)
-    QList<ChatEntry::Reaction> reactionSummary(const QString &id) const;
 
     // Recherche dans la conversation (Ctrl+F)
     void openSearch();
@@ -162,14 +122,14 @@ private:
     // Invitation directe (version 12) : nouvelle conversation avec des membres de celle affichée
     void chooseConversationMembers();
     void startConversationWith(const QStringList &onions, const QString &name);
-    void askDirectInvitation(const QString &nick, const Invitation &invitation, const QString &name);
+    void askDirectInvitation(Conversation *from, const QString &nick, const Invitation &invitation,
+                             const QString &name);
 
-    QString memberNick(const QString &onion) const; // « Un membre » si inconnu
-    // Message reçu alors que la fenêtre n'est pas au premier plan
-    // firstTs : heure du plus ancien de ces messages (séparateur « Nouveaux messages ») ;
-    // forMe : nous sommes mentionnés ou on nous répond (cf. réglage des notifications)
-    void notifyUnread(int count, const QString &title, const QString &text, qint64 firstTs, bool forMe);
-    bool notificationsAllowed(bool forMe) const;
+    QString memberNick(const QString &onion) const { return m_shown->memberNick(onion); }
+    // Messages reçus dans c : non-lus si elle est cachée ou la fenêtre en arrière-plan, puis notification
+    // (cf. Conversation::messagesArrived)
+    void onMessagesArrived(Conversation *c, int count, const QString &title, const QString &text, qint64 firstTs,
+                           bool forMe);
     void buildNotificationMenu(QMenu *menu);
 
     void reconnectNow(); // Tor en panne : relancé ; sinon, le groupe rappelle tout le monde
@@ -178,7 +138,7 @@ private:
     // Console partagée (Linux, macOS) : négociation dans TerminalSharing, ici les questions posées
     void setupTerminalSharing(Conversation *c);
     void shareTerminal();
-    void askTerminalOffer(const QString &onion, const QString &nick, bool control);
+    void askTerminalOffer(Conversation *c, const QString &nick, bool control);
 
     void changeNickname();
     // Code de sécurité (cf. safetynumber.h) : choix du membre, puis comparaison de vive voix
@@ -195,7 +155,10 @@ private:
     QSettings m_settings;
     Conversations m_conversations{m_settings, dataDir()};
     std::vector<std::unique_ptr<Conversation>> m_convs; // dans l'ordre de la colonne
-    Conversation *m_shown = nullptr, *m_ctx = nullptr;
+    QHash<Conversation *, QListWidgetItem *> m_items;   // ligne de chacune dans la colonne
+    QHash<Conversation *, TerminalSharing *> m_sharings; // console partagée de chacune
+    // Conversation affichée, et raccourcis vers son état, son groupe, sa vue et sa console
+    Conversation *m_shown = nullptr;
     GroupStore *m_group = nullptr;
     GroupNode *m_node = nullptr;
     Switchboard *m_board = nullptr;

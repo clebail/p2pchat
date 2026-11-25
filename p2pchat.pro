@@ -9,8 +9,8 @@ include(core.pri)
 # Composants de la conversation (liste, bulles, saisie), partagés avec les tests
 include(ui.pri)
 
-SOURCES += main.cpp mainwindow.cpp torservice.cpp
-HEADERS += mainwindow.h notifier.h torservice.h
+SOURCES += main.cpp mainwindow.cpp mainwindow_dialogs.cpp appstyle.cpp torservice.cpp
+HEADERS += mainwindow.h appstyle.h notifier.h torservice.h
 
 RESOURCES += resources.qrc
 

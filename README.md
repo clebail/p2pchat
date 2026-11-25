@@ -314,7 +314,10 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 | `connectionpolicy.*` | Espacement des appels, appels croisés, présence relayée |
 | `core.pri` | Liste des fichiers ci-dessus (sans interface), partagée par l'application et les tests |
 | `groupnode.*` | Le groupe, sans interface : maillage, reconnexion, présence, synchronisation, messages, réactions, historique |
-| `mainwindow.*` | Fenêtre : conversation, invitations, Tor, notifications, console partagée |
+| `mainwindow.*` | Fenêtre : colonne des conversations, zone de saisie, Tor, notifications |
+| `mainwindow_dialogs.cpp` | Dialogues de la fenêtre : invitation, membres et gouvernance, code de sécurité, console partagée |
+| `conversation.*` | Une conversation affichable : son groupe et sa vue, ce que la fenêtre en montre (nom, aperçu, état, non-lus, notifications) |
+| `appstyle.*` | Feuille de style et icônes dessinées de la fenêtre |
 | `notifier.*`, `notifier_mac.mm` | Notifications natives (D-Bus sous Linux, UserNotifications sous macOS) |
 | `chatmodel.*` | Contenu de la conversation : messages, lignes système et de présence, citations, réactions, recherche |
 | `chatdelegate.*` | Dessin des bulles (citation, image, texte, réactions) et de ce qui y est cliquable |

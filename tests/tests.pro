@@ -21,7 +21,8 @@ SUBDIRS += \
     tst_history \
     tst_connectionpolicy \
     tst_peerconnection \
-    tst_chatmodel
+    tst_chatmodel \
+    tst_conversation
 
 # Console partagée : Linux et macOS seulement
 unix: SUBDIRS += tst_terminalsharing
