@@ -3,7 +3,7 @@
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QCompleter>
-#include <QLineEdit>
+#include "composer.h"
 #include <QtTest>
 
 #include <memory>
@@ -14,7 +14,7 @@ class TestMentionCompleter : public QObject
     Q_OBJECT
 
 private:
-    std::unique_ptr<QLineEdit> m_edit;
+    std::unique_ptr<Composer> m_edit;
     MentionCompleter *m_completer = nullptr;
 
     QAbstractItemView *popup() const { return m_edit->findChild<QCompleter *>()->popup(); }
@@ -22,7 +22,7 @@ private:
 private slots:
     void init()
     {
-        m_edit = std::make_unique<QLineEdit>();
+        m_edit = std::make_unique<Composer>();
         m_completer = new MentionCompleter(m_edit.get());
         m_completer->setNames({"Alice", "Albert", "Bob", "tous"});
         m_edit->show();

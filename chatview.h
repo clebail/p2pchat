@@ -1,5 +1,6 @@
 #pragma once
 #include "links.h"
+#include "markup.h"
 
 #include <QAbstractListModel>
 #include <QPersistentModelIndex>
@@ -42,6 +43,16 @@ struct ChatEntry
     QString replyAuthor, replyText;
     bool replyFound = false;
     QList<Links::Span> links; // liens cliquables (calculés à l'ajout)
+    Markup::Result markup;    // `code` et blocs ```…``` (calculés à l'ajout)
+    // Réactions, sous la bulle : émoji, nombre, si nous en sommes, et qui (infobulle)
+    struct Reaction
+    {
+        QString emoji;
+        int count = 0;
+        bool mine = false;
+        QString who;
+    };
+    QList<Reaction> reactions;
     // Image jointe : version réduite pour l'affichage, et fichier d'origine (JPEG ou PNG reçu)
     QImage image;
     QByteArray imageData;
@@ -66,6 +77,7 @@ public:
     void toggleExpanded(int row);
     int rowOf(const QString &id) const; // -1 si absent
     int markerRow() const;              // -1 si pas de séparateur « Nouveaux messages »
+    bool setReactions(const QString &id, const QList<ChatEntry::Reaction> &reactions); // false si absent
     void removeRow(int row);
     // Recherche : lignes des messages contenant term (sans tenir compte de la casse ni des accents)
     QList<int> search(const QString &term) const;
@@ -91,6 +103,7 @@ signals:
     void quoteClicked(const QString &id); // clic sur la citation d'une réponse
     void imageClicked(int row);           // clic sur une image
     void linkClicked(const QString &url); // clic sur un lien
+    void reactionClicked(int row, const QString &emoji);
 
 private:
     struct Geometry;
@@ -98,14 +111,17 @@ private:
     QRectF bubbleRect(const ChatEntry &e, const Geometry &g, const QRect &r) const;
     QRectF quoteRect(const Geometry &g, const QRectF &bubble) const;
     QRectF imageRect(const Geometry &g, const QRectF &bubble) const;
+    QList<QRectF> reactionRects(const ChatEntry &e, const QRectF &bubble) const;
     QListView *m_view;
 
 public:
     // Élément cliquable sous le pointeur (pos dans la vue) : citation, image ou lien
     struct Hit
     {
-        enum Kind { None, Quote, Image, Link } kind = None;
-        QString url;
+        enum Kind { None, Quote, Image, Link, Reaction } kind = None;
+        QString url;   // Link
+        QString emoji; // Reaction
+        QString who;   // Reaction : qui a réagi
     };
     Hit hitTest(const QModelIndex &index, const QRect &rect, const QPoint &pos) const;
 };
@@ -128,6 +144,7 @@ public:
     // Fait défiler jusqu'au message et le met brièvement en évidence ; false s'il n'est pas dans la liste
     bool showMessage(const QString &id);
     void showRow(int row);
+    void setReactions(const QString &id, const QList<ChatEntry::Reaction> &reactions);
     bool isFlashed(const QModelIndex &index) const { return m_flash.isValid() && m_flash == index; }
     QString flashedId() const; // identifiant du message mis en évidence (vide si aucun)
 
@@ -157,12 +174,15 @@ signals:
     // Menu contextuel « Répondre » sur un message
     void replyRequested(const QString &id, const QString &author, const QString &text);
     void linkClicked(const QString &url);
+    // Clic sur une pastille de réaction, ou « Réagir » dans le menu contextuel : ajoute ou retire la nôtre
+    void reactionToggled(const QString &id, const QString &emoji);
     void searchResultChanged(int current, int total); // current : 1 = plus récent ; 0 si aucun résultat
 
 protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    bool viewportEvent(QEvent *event) override; // infobulle des réactions
 
 private:
     void appendEntry(const ChatEntry &e);

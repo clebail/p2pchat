@@ -1,0 +1,126 @@
+#include "composer.h"
+
+#include <QApplication>
+#include <QClipboard>
+#include <QMimeData>
+#include <QSignalSpy>
+#include <QtTest>
+
+#include <memory>
+
+class TestComposer : public QObject
+{
+    Q_OBJECT
+
+private:
+    std::unique_ptr<Composer> m_edit;
+
+private slots:
+    void init()
+    {
+        m_edit = std::make_unique<Composer>();
+        m_edit->resize(300, 40);
+        m_edit->show();
+        QVERIFY(QTest::qWaitForWindowExposed(m_edit.get()));
+        m_edit->setFocus();
+    }
+
+    void cleanup() { m_edit.reset(); }
+
+    void enterSendsShiftEnterBreaksLine()
+    {
+        QSignalSpy send(m_edit.get(), &Composer::returnPressed);
+        QTest::keyClicks(m_edit.get(), "ligne 1");
+        QTest::keyClick(m_edit.get(), Qt::Key_Return, Qt::ShiftModifier);
+        QTest::keyClicks(m_edit.get(), "ligne 2");
+        QCOMPARE(send.count(), 0);
+        QCOMPARE(m_edit->text(), QString("ligne 1\nligne 2")); // un vrai saut de ligne
+        QTest::keyClick(m_edit.get(), Qt::Key_Return);
+        QTest::keyClick(m_edit.get(), Qt::Key_Enter); // pavé numérique
+        QCOMPARE(send.count(), 2);
+        QCOMPARE(m_edit->text(), QString("ligne 1\nligne 2")); // Entrée n'ajoute rien
+    }
+
+    void tabIsNeverInserted()
+    {
+        QTest::keyClicks(m_edit.get(), "a");
+        QTest::keyClick(m_edit.get(), Qt::Key_Tab);
+        QCOMPARE(m_edit->text(), QString("a"));
+    }
+
+    void heightFollowsText()
+    {
+        const int one = m_edit->height();
+        QCOMPARE(m_edit->visibleLines(), 1);
+        for (int i = 0; i < 3; ++i)
+            QTest::keyClick(m_edit.get(), Qt::Key_Return, Qt::ShiftModifier);
+        QCOMPARE(m_edit->visibleLines(), 4);
+        QVERIFY(m_edit->height() > one);
+        for (int i = 0; i < 10; ++i)
+            QTest::keyClick(m_edit.get(), Qt::Key_Return, Qt::ShiftModifier);
+        QCOMPARE(m_edit->visibleLines(), Composer::MaxLines); // plafonnée, ascenseur au-delà
+        const int max = m_edit->height();
+        m_edit->clear();
+        QCOMPARE(m_edit->visibleLines(), 1);
+        QVERIFY(m_edit->height() < max);
+    }
+
+    void textEditedOnlyForUserChanges()
+    {
+        QSignalSpy edited(m_edit.get(), &Composer::textEdited);
+        m_edit->setText("posé par le programme");
+        QCOMPARE(edited.count(), 0);
+        QCOMPARE(m_edit->cursorPosition(), m_edit->text().size()); // curseur à la fin
+        QTest::keyClicks(m_edit.get(), "x");
+        QCOMPARE(edited.count(), 1);
+        QCOMPARE(edited.last().first().toString(), QString("posé par le programmex"));
+        m_edit->setCursorPosition(4);
+        QCOMPARE(m_edit->cursorPosition(), 4);
+    }
+
+    void maxLength()
+    {
+        m_edit->setMaxLength(10);
+        QMimeData mime;
+        mime.setText(QString(50, 'a'));
+        QApplication::clipboard()->setMimeData(new QMimeData);
+        QApplication::clipboard()->setText(QString(50, 'a'));
+        m_edit->paste();
+        QCOMPARE(m_edit->text().size(), 10);
+    }
+
+    void pastedTextIsPlain()
+    {
+        auto *mime = new QMimeData;
+        mime->setHtml("<b>gras</b>");
+        mime->setText("gras");
+        QApplication::clipboard()->setMimeData(mime);
+        m_edit->paste();
+        QCOMPARE(m_edit->text(), QString("gras"));
+    }
+
+    void imageIsHandedOver()
+    {
+        QSignalSpy image(m_edit.get(), &Composer::imageInserted);
+        QImage img(10, 10, QImage::Format_RGB32);
+        img.fill(Qt::red);
+        auto *mime = new QMimeData;
+        mime->setImageData(img);
+        QApplication::clipboard()->setMimeData(mime);
+        QVERIFY(m_edit->canPaste());
+        m_edit->paste();
+        QCOMPARE(image.count(), 1);
+        QVERIFY(m_edit->text().isEmpty()); // rien d'inséré dans le texte
+    }
+};
+
+int main(int argc, char *argv[])
+{
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM"))
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+    QApplication app(argc, argv);
+    TestComposer test;
+    return QTest::qExec(&test, argc, argv);
+}
+
+#include "tst_composer.moc"

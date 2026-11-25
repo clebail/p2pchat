@@ -12,9 +12,12 @@ SOURCES += \
     $$PWD/history.cpp \
     $$PWD/invitation.cpp \
     $$PWD/links.cpp \
+    $$PWD/markup.cpp \
+    $$PWD/notifications.cpp \
     $$PWD/mentions.cpp \
     $$PWD/peerconnection.cpp \
-    $$PWD/protocol.cpp
+    $$PWD/protocol.cpp \
+    $$PWD/reactions.cpp
 
 HEADERS += \
     $$PWD/attachment.h \
@@ -24,9 +27,12 @@ HEADERS += \
     $$PWD/history.h \
     $$PWD/invitation.h \
     $$PWD/links.h \
+    $$PWD/markup.h \
+    $$PWD/notifications.h \
     $$PWD/mentions.h \
     $$PWD/peerconnection.h \
-    $$PWD/protocol.h
+    $$PWD/protocol.h \
+    $$PWD/reactions.h
 
 # OpenSSL (libcrypto) : X25519, Ed25519, HKDF, ChaCha20-Poly1305
 macx {

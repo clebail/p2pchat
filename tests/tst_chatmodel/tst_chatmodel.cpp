@@ -378,6 +378,76 @@ private slots:
         QCOMPARE(link.first().first().toString(), QString("https://exemple.fr/page"));
     }
 
+    void reactions()
+    {
+        ChatView view;
+        view.resize(480, 400);
+        ChatEntry m = message("À voter !", QDateTime::currentDateTime());
+        m.id = "m";
+        view.addMessage(m);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        const QModelIndex idx = view.chatModel()->index(0);
+        const int before = view.visualRect(idx).height();
+
+        view.setReactions("m", {{QStringLiteral("👍"), 2, true, "Vous, Bob"}, {QStringLiteral("🎉"), 1, false, "Bob"}});
+        QCOMPARE(view.chatModel()->entry(0).reactions.size(), 2);
+        QTRY_VERIFY(view.visualRect(idx).height() > before); // les pastilles prennent de la place
+
+        // Clic sur la pastille 🎉 : bascule notre réaction ; l'infobulle dit qui a réagi
+        auto *delegate = qobject_cast<ChatDelegate *>(view.itemDelegate());
+        QSignalSpy toggled(&view, &ChatView::reactionToggled);
+        QStyleOptionViewItem opt;
+        opt.rect = view.visualRect(idx);
+        QStringList seen;
+        for (int y = opt.rect.top(); y < opt.rect.bottom(); y += 2)
+            for (int x = opt.rect.left(); x < opt.rect.right(); x += 3) {
+                const ChatDelegate::Hit hit = delegate->hitTest(idx, opt.rect, QPoint(x, y));
+                if (hit.kind == ChatDelegate::Hit::Reaction && !seen.contains(hit.emoji)) {
+                    seen << hit.emoji;
+                    QCOMPARE(hit.who, hit.emoji == QStringLiteral("👍") ? QString("Vous, Bob") : QString("Bob"));
+                    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), Qt::LeftButton, Qt::NoButton,
+                                        Qt::NoModifier);
+                    delegate->editorEvent(&release, view.model(), opt, idx);
+                }
+            }
+        QCOMPARE(seen, QStringList({QStringLiteral("👍"), QStringLiteral("🎉")}));
+        QCOMPARE(toggled.count(), 2);
+        QCOMPARE(toggled.at(1), QVariantList({"m", QStringLiteral("🎉")}));
+
+        view.setReactions("inconnu", {{QStringLiteral("👍"), 1, false, "x"}}); // sans effet
+        view.setReactions("m", {});
+        QTRY_COMPARE(view.visualRect(idx).height(), before);
+        view.grab();
+    }
+
+    void multilineMessageIsTaller()
+    {
+        ChatView view;
+        view.resize(480, 400);
+        // Même jour, assez espacés pour ne pas être regroupés : seules les lignes de texte diffèrent
+        const QDateTime t0(QDate::currentDate(), QTime(9, 0));
+        view.addMessage(message("premier", t0));
+        view.addMessage(message("une ligne", t0.addSecs(3600)));
+        view.addMessage(message("trois\nlignes\nici", t0.addSecs(7200)));
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        const int one = view.visualRect(view.chatModel()->index(1)).height();
+        const int three = view.visualRect(view.chatModel()->index(2)).height();
+        QVERIFY2(three > one + 20, qPrintable(QString("%1 / %2").arg(one).arg(three)));
+    }
+
+    void codeMarkup()
+    {
+        ChatView view;
+        view.addMessage(message("lance `make` puis ```\nsudo reboot\n```", QDateTime::currentDateTime()));
+        const ChatEntry &e = view.chatModel()->entry(0);
+        QCOMPARE(e.markup.code.size(), 2);
+        QVERIFY(e.markup.code.at(1).block);
+        QCOMPARE(e.text.mid(e.markup.code.at(0).start, e.markup.code.at(0).length), QString("make"));
+        view.grab(); // dessin du code et des délimiteurs masqués
+    }
+
     void avatarColorIsStable()
     {
         QCOMPARE(ChatView::colorFor("Alice"), ChatView::colorFor("Alice"));

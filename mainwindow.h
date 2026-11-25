@@ -3,6 +3,7 @@
 #include "connectionpolicy.h"
 #include "groupstore.h"
 #include "history.h"
+#include "reactions.h"
 
 #include <QDateTime>
 #include <QHash>
@@ -17,6 +18,7 @@
 class PeerConnection;
 class QAction;
 class QLabel;
+class QMenu;
 class QMessageBox;
 class QLineEdit;
 class QPushButton;
@@ -24,6 +26,7 @@ class QTcpServer;
 class QTcpSocket;
 class QStackedWidget;
 class QSystemTrayIcon;
+class Composer;
 class MentionCompleter;
 class QDragEnterEvent;
 class QDropEvent;
@@ -44,10 +47,9 @@ public:
 protected:
     void changeEvent(QEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
-    // Glisser-déposer d'une image n'importe où sur la fenêtre, et collage dans la zone de saisie
+    // Glisser-déposer d'une image n'importe où sur la fenêtre (la zone de saisie gère le sien et le collage)
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
-    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     // Interface
@@ -77,6 +79,13 @@ private:
     void onPeerTyping(PeerConnection *c);
     QString typingText() const; // vide si personne n'écrit
 
+    // Réactions (cf. reactions.h)
+    void react(const QString &id, const QString &emoji); // ajoute ou retire la nôtre
+    bool acceptReaction(const QJsonObject &r, bool mine, bool save); // false : déjà connue
+    bool verifyReaction(const QJsonObject &r, bool mine) const;
+    QList<ChatEntry::Reaction> reactionSummary(const QString &id) const;
+    void broadcastReaction(const QJsonObject &r, PeerConnection *except = nullptr);
+
     // Recherche dans la conversation (Ctrl+F)
     void openSearch();
     void closeSearch();
@@ -84,6 +93,7 @@ private:
     // Lien cliqué : ouvert dans le navigateur, hors Tor (confirmation la première fois)
     void openLink(const QString &url);
     void loadHistory();
+    void appendToHistoryFile(const QJsonObject &record, bool mine);
     void clearConversation();
     void setupTray();
     void showAndRaise();
@@ -111,8 +121,11 @@ private:
     void receiveSync(PeerConnection *from, const QJsonArray &messages);
     qint64 syncCutoff() const;
     // Message reçu alors que la fenêtre n'est pas au premier plan
-    // firstTs : heure du plus ancien de ces messages (séparateur « Nouveaux messages »)
-    void notifyUnread(int count, const QString &title, const QString &text, qint64 firstTs);
+    // firstTs : heure du plus ancien de ces messages (séparateur « Nouveaux messages ») ;
+    // forMe : nous sommes mentionnés ou on nous répond (cf. réglage des notifications)
+    void notifyUnread(int count, const QString &title, const QString &text, qint64 firstTs, bool forMe);
+    bool notificationsAllowed(bool forMe) const;
+    void buildNotificationMenu(QMenu *menu);
 
     // Connexions
     void onNewConnection();
@@ -180,7 +193,8 @@ private:
     qint64 m_lastTick = 0;
     QSet<QString> m_seenIds;                     // anti-doublon des messages relayés
     QSet<QString> m_identityWarned;              // avertissements d'identité déjà affichés
-    History::Store m_store;                      // historique signé : id -> message
+    History::Store m_store;                      // historique signé : id -> message ou réaction
+    Reactions::State m_reactions;
     QTimer m_retryTimer;
     QTimer m_syncTimer; // inventaire de contrôle périodique
     int m_unread = 0;
@@ -198,7 +212,7 @@ private:
 
     ChatView *m_chat = nullptr;
     QStackedWidget *m_pages = nullptr; // accueil (pas de groupe) / conversation
-    QLineEdit *m_input = nullptr;
+    Composer *m_input = nullptr;
     MentionCompleter *m_mentions = nullptr;
     QWidget *m_replyBar = nullptr;
     QLabel *m_replyLabel = nullptr;

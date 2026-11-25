@@ -8,9 +8,9 @@ namespace Protocol {
 
 constexpr int MaxNickLength = 40;
 
-// Version annoncée dans le hello. 4 : identité Ed25519 ; 5 : citations (réponses) ;
-// Les versions antérieures à MinVersion sont refusées.
-constexpr int Version = 6; // 6 : images
+// Version annoncée dans le hello. 4 : identité Ed25519 ; 5 : citations (réponses) ; 6 : images ;
+// 7 : réactions (cf. reactions.h). Les versions antérieures à MinVersion sont refusées.
+constexpr int Version = 7;
 constexpr int MinVersion = 4;
 
 // Adresse de service onion v3 : 56 caractères base32 + ".onion"

@@ -2,10 +2,12 @@
 
 #include "attachment.h"
 #include "chatview.h"
+#include "composer.h"
 #include "crypto.h"
 #include "invitation.h"
 #include "mentioncompleter.h"
 #include "mentions.h"
+#include "notifications.h"
 #include "notifier.h"
 #include "peerconnection.h"
 #include "protocol.h"
@@ -36,6 +38,7 @@
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
+#include <QActionGroup>
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
@@ -279,9 +282,9 @@ QWidget#replyBar { background: #f0f4f9; border-left: 3px solid #0b57d0; border-r
 QLabel#replyLabel { color: #444746; font-size: 13px; }
 QToolButton#replyClose { border: none; border-radius: 12px; color: #444746; font-size: 15px; }
 QToolButton#replyClose:hover { background: #dde3ea; }
-QLineEdit#composer { background: #f0f4f9; color: #1f1f1f; border: none; border-radius: 24px;
-                     padding: 0 20px; font-size: 15px; min-height: 48px; }
-QLineEdit#composer:disabled { color: #9aa0a6; }
+QPlainTextEdit#composer { background: #f0f4f9; color: #1f1f1f; border: none; border-radius: 24px;
+                          padding: 10px 14px; font-size: 15px; }
+QPlainTextEdit#composer:disabled { color: #9aa0a6; }
 QToolButton#sendButton { background: #0b57d0; border: none; border-radius: 24px; }
 QToolButton#sendButton:hover { background: #0842a0; }
 QToolButton#sendButton:disabled { background: #c4c7c5; }
@@ -435,6 +438,9 @@ void MainWindow::buildUi()
     });
 #endif
     menu->addSeparator();
+    QMenu *notifications = menu->addMenu(tr("Notifications"));
+    connect(notifications, &QMenu::aboutToShow, this, [this, notifications] { buildNotificationMenu(notifications); });
+    buildNotificationMenu(notifications); // le sous-menu doit avoir un contenu pour s'afficher
     menu->addAction(tr("Changer de pseudo…"), this, &MainWindow::changeNickname);
     menu->addAction(tr("Vider la conversation"), this, &MainWindow::clearConversation);
     menu->addSeparator();
@@ -600,12 +606,14 @@ void MainWindow::buildUi()
     auto *row = new QHBoxLayout(composerBar);
     row->setContentsMargins(12, 8, 12, 12);
     row->setSpacing(8);
-    m_input = new QLineEdit(composerBar);
+    m_input = new Composer(composerBar);
     m_input->setObjectName("composer");
     m_input->setMaxLength(4000);
+    m_input->setMinimumHeight(48);
     m_input->setPlaceholderText(tr("Message"));
+    m_input->setToolTip(tr("Entrée : envoyer · Maj+Entrée : aller à la ligne · `code`, ```bloc```"));
     m_mentions = new MentionCompleter(m_input);
-    m_input->installEventFilter(this); // collage et dépôt d'images
+    connect(m_input, &Composer::imageInserted, this, &MainWindow::attachFromMime); // collage, dépôt
     m_attachButton = new QToolButton(composerBar);
     m_attachButton->setObjectName("attachButton");
     m_attachButton->setIcon(imageIcon());
@@ -621,25 +629,26 @@ void MainWindow::buildUi()
     m_sendButton->setFixedSize(48, 48);
     m_sendButton->setCursor(Qt::PointingHandCursor);
     m_sendButton->setToolTip(tr("Envoyer"));
-    row->addWidget(m_attachButton);
+    row->addWidget(m_attachButton, 0, Qt::AlignBottom); // la zone de saisie grandit vers le haut
     row->addWidget(m_input, 1);
-    row->addWidget(m_sendButton);
+    row->addWidget(m_sendButton, 0, Qt::AlignBottom);
     setAcceptDrops(true);
     layout->addWidget(composerBar);
     setCentralWidget(central);
 
-    connect(m_input, &QLineEdit::returnPressed, this, &MainWindow::sendCurrent);
+    connect(m_input, &Composer::returnPressed, this, &MainWindow::sendCurrent);
     // Échap annule la réponse en cours (la liste des mentions, si elle est ouverte, se ferme d'abord)
     auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), m_input, nullptr, nullptr, Qt::WidgetShortcut);
     connect(escape, &QShortcut::activated, this, &MainWindow::cancelReply);
     connect(m_chat, &ChatView::replyRequested, this, &MainWindow::startReply);
     connect(m_chat, &ChatView::linkClicked, this, &MainWindow::openLink);
+    connect(m_chat, &ChatView::reactionToggled, this, &MainWindow::react);
     connect(m_chat, &ChatView::searchResultChanged, this, [this](int current, int total) {
         m_searchCount->setText(m_searchEdit->text().trimmed().isEmpty() ? QString()
                                : total == 0                             ? tr("Aucun résultat")
                                                                         : tr("%1 / %2").arg(current).arg(total));
     });
-    connect(m_input, &QLineEdit::textEdited, this, &MainWindow::onTyping);
+    connect(m_input, &Composer::textEdited, this, &MainWindow::onTyping);
     connect(m_sendButton, &QToolButton::clicked, this, &MainWindow::sendCurrent);
 }
 
@@ -759,20 +768,25 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
             e.imageData = imageData;
         }
     }
+    e.reactions = reactionSummary(e.id); // réactions arrivées avant le message (synchronisation)
     m_chat->addMessage(e);
     if (!id.isEmpty() && trust == ChatEntry::Verified) { // seuls les messages authentiques sont resynchronisés
         m_store.insert(id, History::stored(msg, mine));
         m_seenIds.insert(id);
     }
-    if (!save)
-        return;
-    // On enregistre le message tel qu'il a été signé : l'historique reste vérifiable
+    if (save)
+        appendToHistoryFile(msg, mine);
+}
+
+void MainWindow::appendToHistoryFile(const QJsonObject &record, bool mine)
+{
+    // Enregistré tel qu'il a été signé : l'historique reste vérifiable
     QFile file(m_historyPath);
     const bool created = !file.exists();
     if (file.open(QIODevice::Append)) {
         if (created)
             file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
-        file.write(History::toLine(msg, mine));
+        file.write(History::toLine(record, mine));
     }
 }
 
@@ -843,6 +857,11 @@ void MainWindow::loadHistory()
     const qsizetype firstShown = qMax<qsizetype>(0, rows.size() - History::DisplayedRows);
     for (qsizetype i = 0; i < rows.size(); ++i) {
         const History::Row &row = rows[i];
+        if (Reactions::isReaction(row.msg)) {
+            if (verifyReaction(row.msg, row.mine))
+                acceptReaction(row.msg, row.mine, false);
+            continue;
+        }
         const ChatEntry::Trust trust = row.legacy ? ChatEntry::Unsigned : verifyMessage(row.msg, row.mine);
         if (i >= firstShown) {
             appendMessage(row.msg, row.mine, trust, false);
@@ -867,6 +886,7 @@ void MainWindow::clearConversation()
     cancelImage();
     QFile::remove(m_historyPath);
     m_store.clear();
+    m_reactions.clear();
     m_group.setClearedBefore(QDateTime::currentMSecsSinceEpoch());
     updateStatus();
 }
@@ -1279,7 +1299,10 @@ QJsonObject MainWindow::inventoryMessage() const
 void MainWindow::sendBatches(PeerConnection *c, const QList<QJsonObject> &messages)
 {
     const qint64 cutoff = History::cutoffFor(syncCutoff(), m_group.firstSeen(c->peerOnion()));
-    for (const QJsonArray &batch : History::batches(messages, cutoff))
+    QList<QJsonObject> toSend = messages;
+    if (c->peerVersion() < Reactions::Version) // il ne saurait pas quoi en faire
+        toSend.erase(std::remove_if(toSend.begin(), toSend.end(), &Reactions::isReaction), toSend.end());
+    for (const QJsonArray &batch : History::batches(toSend, cutoff))
         c->send({{"t", "sync"}, {"m", batch}});
 }
 
@@ -1296,6 +1319,11 @@ void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
         if (id.isEmpty() || m_store.contains(id) || Protocol::Message::timestamp(m) < cutoff)
             continue;
         const bool mine = !m_myOnion.isEmpty() && m.value("a").toString() == m_myOnion;
+        if (Reactions::isReaction(m)) {
+            if (verifyReaction(m, mine) && acceptReaction(m, mine, true))
+                accepted.append(m);
+            continue;
+        }
         // Chaque message est vérifié avec la clé de son auteur : un membre ne peut rien inventer
         if (verifyMessage(m, mine) != ChatEntry::Verified) {
             qWarning().noquote() << "[synchro] message rejeté, signature invalide :" << id;
@@ -1318,22 +1346,71 @@ void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
             if (p != from)
                 sendBatches(p, accepted);
     if (received == 1)
-        notifyUnread(1, lastTitle, lastText, firstTs);
+        notifyUnread(1, lastTitle, lastText, firstTs, mentioned > 0);
     else if (received > 1)
         notifyUnread(received, tr("P2P Chat"),
                      tr("%n message(s) reçu(s) pendant votre absence", nullptr, received)
                          + (mentioned ? tr(", dont %n pour vous", nullptr, mentioned) : QString()),
-                     firstTs);
+                     firstTs, mentioned > 0);
 }
 
-void MainWindow::notifyUnread(int count, const QString &title, const QString &text, qint64 firstTs)
+void MainWindow::notifyUnread(int count, const QString &title, const QString &text, qint64 firstTs, bool forMe)
 {
     if (isVisible() && isActiveWindow())
         return;
     m_chat->markUnread(QDateTime::fromMSecsSinceEpoch(firstTs));
-    m_unread += count;
+    m_unread += count; // compteur et pastille : toujours à jour
     updateUnread();
+    if (!notificationsAllowed(forMe))
+        return;
     m_notifier->notify(title, text);
+    if (isVisible())
+        QApplication::alert(this);
+}
+
+bool MainWindow::notificationsAllowed(bool forMe) const
+{
+    return Notifications::shouldNotify(Notifications::modeFromString(m_settings.value("notify/mode").toString()),
+                                       m_settings.value("notify/pausedUntil").toLongLong(),
+                                       QDateTime::currentMSecsSinceEpoch(), forMe);
+}
+
+void MainWindow::buildNotificationMenu(QMenu *menu)
+{
+    using namespace Notifications;
+    // Reconstruit à chaque ouverture : la pause affichée dépend de l'heure
+    menu->clear();
+    qDeleteAll(menu->findChildren<QActionGroup *>()); // groupes de l'ouverture précédente
+    const Mode mode = modeFromString(m_settings.value("notify/mode").toString());
+    auto *group = new QActionGroup(menu);
+    const QList<QPair<Mode, QString>> modes{{All, tr("Tous les messages")},
+                                           {ForMe, tr("Mentions et réponses seulement")},
+                                           {Silent, tr("Aucune")}};
+    for (const auto &m : modes) {
+        QAction *a = menu->addAction(m.second, this, [this, value = m.first] {
+            m_settings.setValue("notify/mode", modeToString(value));
+        });
+        a->setCheckable(true);
+        a->setChecked(mode == m.first);
+        group->addAction(a);
+    }
+    menu->addSeparator();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 paused = m_settings.value("notify/pausedUntil").toLongLong();
+    if (paused > now) {
+        const QDateTime until = QDateTime::fromMSecsSinceEpoch(paused);
+        menu->addAction(tr("Reprendre (en pause jusqu'à %1)")
+                            .arg(until.date() == QDate::currentDate() ? until.toString("HH:mm")
+                                                                      : tr("demain %1").arg(until.toString("HH:mm"))),
+                        this, [this] { m_settings.remove("notify/pausedUntil"); });
+    } else {
+        menu->addAction(tr("Ne pas déranger pendant 1 h"), this, [this] {
+            m_settings.setValue("notify/pausedUntil", QDateTime::currentDateTime().addSecs(3600).toMSecsSinceEpoch());
+        });
+        menu->addAction(tr("Ne pas déranger jusqu'à demain 8 h"), this, [this] {
+            m_settings.setValue("notify/pausedUntil", tomorrowMorning(QDateTime::currentDateTime()).toMSecsSinceEpoch());
+        });
+    }
 }
 
 // ---------------------------------------------------------------- Messages reçus
@@ -1351,7 +1428,13 @@ void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
         sendBatches(c, History::missing(m_store, o.value("ids").toArray()));
     else if (type == "sync")
         receiveSync(c, o.value("m").toArray());
-    else if (type == "typing")
+    else if (type == "react") {
+        const QString id = Protocol::Message::id(o);
+        if (id.isEmpty() || m_store.contains(id) || !verifyReaction(o, false))
+            return;
+        acceptReaction(o, false, true);
+        broadcastReaction(o, c); // relais, comme les messages
+    } else if (type == "typing")
         onPeerTyping(c);
     else if (type == "msg")
         onChatMessage(c, o);
@@ -1435,9 +1518,8 @@ void MainWindow::onChatMessage(PeerConnection *c, const QJsonObject &o)
     // Relais : au cas où un membre ne serait pas encore relié directement à l'auteur
     broadcast(o, c);
 
-    notifyUnread(1, notificationTitle(o), notificationBody(o), Protocol::Message::timestamp(o));
-    if (isVisible() && !isActiveWindow())
-        QApplication::alert(this);
+    notifyUnread(1, notificationTitle(o), notificationBody(o), Protocol::Message::timestamp(o),
+                 mentionsMe(o) || repliesToMe(o));
 }
 
 void MainWindow::broadcast(const QJsonObject &obj, PeerConnection *except)
@@ -1627,34 +1709,6 @@ void MainWindow::dropEvent(QDropEvent *event)
         event->acceptProposedAction();
 }
 
-bool MainWindow::eventFilter(QObject *watched, QEvent *event)
-{
-    if (watched == m_input) {
-        // La zone de saisie accepte les dépôts de texte : une image déposée dessus serait collée comme
-        // un chemin de fichier. On la traite comme un dépôt sur la fenêtre.
-        if (event->type() == QEvent::DragEnter) {
-            auto *drag = static_cast<QDragEnterEvent *>(event);
-            dragEnterEvent(drag);
-            if (drag->isAccepted())
-                return true;
-        } else if (event->type() == QEvent::Drop) {
-            auto *drop = static_cast<QDropEvent *>(event);
-            if (attachFromMime(drop->mimeData())) {
-                drop->acceptProposedAction();
-                return true;
-            }
-        } else if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->matches(QKeySequence::Paste)) {
-            const QMimeData *clip = QGuiApplication::clipboard()->mimeData();
-            const QList<QUrl> urls = clip ? clip->urls() : QList<QUrl>();
-            const bool hasImageFile = std::any_of(urls.cbegin(), urls.cend(), [](const QUrl &u) {
-                return u.isLocalFile() && Attachment::isImageFile(u.toLocalFile());
-            });
-            if (clip && (clip->hasImage() || hasImageFile) && attachFromMime(clip))
-                return true;
-        }
-    }
-    return QMainWindow::eventFilter(watched, event);
-}
 
 // ---------------------------------------------------------------- Réglages
 
@@ -1683,6 +1737,60 @@ void MainWindow::resetAll()
     m_lastError.clear();
     appendSystem(tr("Vous avez quitté le groupe."));
     updateStatus();
+}
+
+// ---------------------------------------------------------------- Réactions
+
+void MainWindow::react(const QString &id, const QString &emoji)
+{
+    if (id.isEmpty() || m_myOnion.isEmpty() || !m_group.inGroup() || !Reactions::Allowed.contains(emoji))
+        return;
+    const bool on = !m_reactions.mineOn(id, emoji); // la nôtre est déjà là : on la retire
+    const QJsonObject r = Reactions::create(m_group.identitySeed(), m_myOnion, id, emoji, on,
+                                            QDateTime::currentMSecsSinceEpoch());
+    acceptReaction(r, true, true);
+    broadcastReaction(r);
+}
+
+bool MainWindow::verifyReaction(const QJsonObject &r, bool mine) const
+{
+    const QByteArray key = mine ? m_group.identityKey() : m_group.pinnedKey(r.value("a").toString());
+    return Reactions::verify(r, key);
+}
+
+bool MainWindow::acceptReaction(const QJsonObject &r, bool mine, bool save)
+{
+    const QString id = Protocol::Message::id(r);
+    if (id.isEmpty() || m_store.contains(id))
+        return false;
+    m_store.insert(id, History::stored(r, mine)); // synchronisée comme les messages
+    m_seenIds.insert(id);
+    if (m_reactions.apply(r, mine))
+        m_chat->setReactions(Reactions::target(r), reactionSummary(Reactions::target(r)));
+    if (save)
+        appendToHistoryFile(r, mine);
+    return true;
+}
+
+QList<ChatEntry::Reaction> MainWindow::reactionSummary(const QString &id) const
+{
+    QList<ChatEntry::Reaction> out;
+    if (id.isEmpty())
+        return out;
+    for (const Reactions::Summary &s : m_reactions.summary(id)) {
+        QStringList names;
+        for (const QString &onion : s.authors)
+            names << (onion.isEmpty() || onion == m_myOnion ? tr("Vous") : memberNick(onion));
+        out.append({s.emoji, int(s.authors.size()), s.mine, names.join(", ")});
+    }
+    return out;
+}
+
+void MainWindow::broadcastReaction(const QJsonObject &r, PeerConnection *except)
+{
+    for (PeerConnection *p : std::as_const(m_active))
+        if (p != except && p->peerVersion() >= Reactions::Version)
+            p->send(r);
 }
 
 // ---------------------------------------------------------------- Écriture en cours, recherche, liens

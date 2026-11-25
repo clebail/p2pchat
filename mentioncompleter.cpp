@@ -1,25 +1,26 @@
 #include "mentioncompleter.h"
 
+#include "composer.h"
 #include "mentions.h"
 
 #include <QAbstractItemView>
 #include <QCompleter>
 #include <QKeyEvent>
-#include <QLineEdit>
 #include <QStringListModel>
 
-MentionCompleter::MentionCompleter(QLineEdit *edit)
+MentionCompleter::MentionCompleter(Composer *edit)
     : QObject(edit), m_edit(edit), m_completer(new QCompleter(this)), m_model(new QStringListModel(this))
 {
     // Le filtrage est fait par Mentions::candidates : le modèle ne contient que les propositions
     m_completer->setModel(m_model);
     m_completer->setWidget(edit);
+    edit->setCompletionPopup(m_completer->popup());
     m_completer->setCompletionMode(QCompleter::UnfilteredPopupCompletion);
     m_completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_completer->setMaxVisibleItems(8);
 
-    connect(edit, &QLineEdit::textEdited, this, &MentionCompleter::update);
-    connect(edit, &QLineEdit::cursorPositionChanged, this, [this] {
+    connect(edit, &Composer::textEdited, this, &MentionCompleter::update);
+    connect(edit, &Composer::cursorPositionChanged, this, [this] {
         if (isPopupVisible())
             update();
     });
@@ -83,8 +84,11 @@ void MentionCompleter::update()
     }
     m_model->setStringList(proposals);
     m_completer->setCompletionPrefix(QString());
-    const int width = qMin(m_edit->width(), 280);
-    m_completer->complete(QRect(0, 0, width, m_edit->height()));
+    // Sous la ligne du curseur (la zone peut faire plusieurs lignes)
+    QRect r = m_edit->cursorRect().translated(m_edit->viewport()->pos());
+    r.setLeft(0);
+    r.setWidth(qMin(m_edit->width(), 280));
+    m_completer->complete(r);
     m_completer->popup()->setCurrentIndex(m_completer->completionModel()->index(0, 0));
 }
 

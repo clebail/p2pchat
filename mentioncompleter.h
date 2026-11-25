@@ -3,7 +3,7 @@
 #include <QStringList>
 
 class QCompleter;
-class QLineEdit;
+class Composer;
 class QStringListModel;
 
 // Zone de saisie : taper « @ » propose les pseudos des membres (et « tous »).
@@ -14,7 +14,7 @@ class MentionCompleter : public QObject
 {
     Q_OBJECT
 public:
-    explicit MentionCompleter(QLineEdit *edit);
+    explicit MentionCompleter(Composer *edit);
     void setNames(const QStringList &names);
     bool isPopupVisible() const;
 
@@ -26,7 +26,7 @@ private:
     void update();
     void insert(const QString &name);
 
-    QLineEdit *m_edit;
+    Composer *m_edit;
     QCompleter *m_completer;
     QStringListModel *m_model;
     QStringList m_names;

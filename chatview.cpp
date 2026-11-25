@@ -7,12 +7,16 @@
 #include <QDialogButtonBox>
 #include <QFile>
 #include <QFileDialog>
+#include <QFontDatabase>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScreen>
 #include <QStandardPaths>
 #include <QToolButton>
+#include <QToolTip>
+
+#include "reactions.h"
 #include <QVBoxLayout>
 #include <QMouseEvent>
 #include <QHash>
@@ -46,6 +50,20 @@ constexpr int GroupGapSec = 5 * 60;
 constexpr int QuoteMargin = 8, QuoteGap = 6, QuotePadL = 11, QuotePadR = 8, QuotePadV = 5;
 // Image : marge dans la bulle, taille d'affichage maximale, arrondi
 constexpr int ImageMargin = 4, ImageMaxSide = 300, ImageRadius = 16;
+// Pastilles de réaction sous la bulle
+constexpr int ReactGap = 4, ReactPadH = 8, ReactSpacing = 4;
+
+QFont reactionFont()
+{
+    QFont f = QApplication::font();
+    f.setPointSizeF(f.pointSizeF() * 0.95);
+    return f;
+}
+
+QString reactionLabel(const ChatEntry::Reaction &r)
+{
+    return r.count > 1 ? QStringLiteral("%1 %2").arg(r.emoji).arg(r.count) : r.emoji;
+}
 
 QFont messageFont()
 {
@@ -88,9 +106,22 @@ qreal layoutText(QTextLayout &tl, int maxWidth, qreal *usedWidth)
 // Texte d'un message : mentions en gras et en couleur, liens soulignés, occurrences recherchées surlignées
 void prepareMessageLayout(QTextLayout &tl, const ChatEntry &e, const QString &searchTerm = {})
 {
-    tl.setText(e.text);
+    // QTextLayout ne passe pas à la ligne sur « \n » : séparateur de ligne Unicode, un caractère aussi
+    // (les positions des mentions, liens et recherches restent valables)
+    tl.setText(QString(e.text).replace(QLatin1Char('\n'), QChar(QChar::LineSeparator)));
     tl.setFont(messageFont());
     QVector<QTextLayout::FormatRange> formats;
+    // Code : police à chasse fixe sur fond gris (en premier : le reste peut s'y superposer)
+    const QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    for (const Markup::Code &c : e.markup.code) {
+        QTextLayout::FormatRange r;
+        r.start = c.start;
+        r.length = c.length;
+        r.format.setFontFamily(mono.family());
+        r.format.setFontFixedPitch(true);
+        r.format.setBackground(QColor(0, 0, 0, c.block ? 20 : 16));
+        formats.append(r);
+    }
     const QString term = ChatModel::fold(searchTerm);
     if (!term.isEmpty()) {
         const QString folded = ChatModel::fold(e.text);
@@ -108,6 +139,16 @@ void prepareMessageLayout(QTextLayout &tl, const ChatEntry &e, const QString &se
         r.length = l.length;
         r.format.setFontUnderline(true);
         r.format.setForeground(LinkText);
+        formats.append(r);
+    }
+    // Accents graves : masqués (transparents et minuscules), sans toucher au texte
+    for (const auto &d : e.markup.delimiters) {
+        QTextLayout::FormatRange r;
+        r.start = d.first;
+        r.length = d.second;
+        r.format.setFontPointSize(1);
+        r.format.setForeground(Qt::transparent);
+        r.format.setBackground(Qt::transparent);
         formats.append(r);
     }
     for (const auto &m : e.mentions) {
@@ -229,6 +270,16 @@ int ChatModel::rowOf(const QString &id) const
         if (m_entries.at(i).id == id)
             return i;
     return -1;
+}
+
+bool ChatModel::setReactions(const QString &id, const QList<ChatEntry::Reaction> &reactions)
+{
+    const int row = rowOf(id);
+    if (row < 0)
+        return false;
+    m_entries[row].reactions = reactions;
+    emit dataChanged(index(row), index(row));
+    return true;
 }
 
 int ChatModel::markerRow() const
@@ -353,6 +404,7 @@ struct ChatDelegate::Geometry
     int quoteH = 0;         // 0 : pas de citation
     QString quoteText;      // extrait, coupé à la largeur disponible
     int imageTop = 0, imageW = 0, imageH = 0; // imageH = 0 : pas d'image
+    int reactH = 0;                           // pastilles de réaction (0 : aucune)
     int height = 0;
 };
 
@@ -431,8 +483,9 @@ ChatDelegate::Geometry ChatDelegate::compute(const QModelIndex &index, int width
     g.bubbleW = bubbleW;
     g.bubbleH = y;
     g.nameH = (!e.mine && g.first) ? small.height() + 4 : 0;
+    g.reactH = e.reactions.isEmpty() ? 0 : ReactGap + QFontMetrics(reactionFont()).height() + 6;
     g.timeH = (g.last || e.trust != ChatEntry::Verified) ? small.height() + 4 : 0;
-    g.height = g.top + g.nameH + g.bubbleH + g.timeH;
+    g.height = g.top + g.nameH + g.bubbleH + g.reactH + g.timeH;
     return g;
 }
 
@@ -453,6 +506,25 @@ QRectF ChatDelegate::imageRect(const Geometry &g, const QRectF &bubble) const
     return QRectF(bubble.left() + ImageMargin, bubble.top() + g.imageTop, g.imageW, g.imageH);
 }
 
+QList<QRectF> ChatDelegate::reactionRects(const ChatEntry &e, const QRectF &bubble) const
+{
+    // Alignées sur le bord de la bulle du côté de l'auteur
+    const QFontMetrics fm(reactionFont());
+    QList<QRectF> rects;
+    qreal total = 0;
+    QList<qreal> widths;
+    for (const ChatEntry::Reaction &r : e.reactions) {
+        widths << fm.horizontalAdvance(reactionLabel(r)) + 2 * ReactPadH;
+        total += widths.last() + (widths.size() > 1 ? ReactSpacing : 0);
+    }
+    qreal x = e.mine ? bubble.right() - total : bubble.left() + 4;
+    for (qreal w : std::as_const(widths)) {
+        rects << QRectF(x, bubble.bottom() + ReactGap, w, fm.height() + 6);
+        x += w + ReactSpacing;
+    }
+    return rects;
+}
+
 QRectF ChatDelegate::quoteRect(const Geometry &g, const QRectF &bubble) const
 {
     return QRectF(bubble.left() + QuoteMargin, bubble.top() + QuoteMargin, bubble.width() - 2 * QuoteMargin, g.quoteH);
@@ -468,6 +540,14 @@ ChatDelegate::Hit ChatDelegate::hitTest(const QModelIndex &index, const QRect &r
         return hit;
     const Geometry g = compute(index, rect.width());
     const QRectF bubble = bubbleRect(e, g, rect);
+    const QList<QRectF> pills = reactionRects(e, bubble);
+    for (int i = 0; i < pills.size(); ++i)
+        if (pills.at(i).contains(pos)) {
+            hit.kind = Hit::Reaction;
+            hit.emoji = e.reactions.at(i).emoji;
+            hit.who = e.reactions.at(i).who;
+            return hit;
+        }
     if (g.quoteH && quoteRect(g, bubble).contains(pos)) {
         hit.kind = Hit::Quote;
         return hit;
@@ -517,6 +597,9 @@ bool ChatDelegate::editorEvent(QEvent *event, QAbstractItemModel *model, const Q
                 return true;
             case Hit::Link:
                 emit linkClicked(hit.url);
+                return true;
+            case Hit::Reaction:
+                emit reactionClicked(index.row(), hit.emoji);
                 return true;
             case Hit::None:
                 break;
@@ -649,6 +732,22 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
         p->drawText(av, Qt::AlignCenter, e.author.left(1).toUpper());
     }
 
+    // Réactions : pastilles, mises en avant quand nous en sommes
+    if (g.reactH) {
+        const QList<QRectF> pills = reactionRects(e, bubble);
+        p->setFont(reactionFont());
+        for (int i = 0; i < pills.size(); ++i) {
+            const ChatEntry::Reaction &r = e.reactions.at(i);
+            const QRectF pill = pills.at(i).adjusted(0.5, 0.5, -0.5, -0.5);
+            p->setPen(QPen(r.mine ? QColor("#0b57d0") : QColor("#e1e3e1"), 1));
+            p->setBrush(r.mine ? QColor("#d3e3fd") : QColor("#ffffff"));
+            p->drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
+            p->setPen(r.mine ? QColor("#041e49") : OtherText);
+            p->drawText(pill, Qt::AlignCenter, reactionLabel(r));
+        }
+        p->setBrush(Qt::NoBrush);
+    }
+
     // Heure sous le dernier message du groupe, et avertissement si la signature n'est pas vérifiée
     if (g.timeH) {
         p->setFont(smallFont(e.trust != ChatEntry::Verified));
@@ -662,7 +761,7 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
         } else {
             p->setPen(Muted);
         }
-        const QRect tr(int(bubble.left()) + 6, int(bubble.bottom()) + 3, g.bubbleW - 12, g.timeH);
+        const QRect tr(int(bubble.left()) + 6, int(bubble.bottom()) + g.reactH + 3, g.bubbleW - 12, g.timeH);
         p->drawText(e.mine ? tr.adjusted(-300, 0, 0, 0) : tr.adjusted(0, 0, 300, 0),
                     (e.mine ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignTop, label);
     }
@@ -679,6 +778,9 @@ ChatView::ChatView(QWidget *parent) : QListView(parent), m_model(new ChatModel(t
     connect(m_delegate, &ChatDelegate::quoteClicked, this, &ChatView::showMessage);
     connect(m_delegate, &ChatDelegate::imageClicked, this, &ChatView::openImage);
     connect(m_delegate, &ChatDelegate::linkClicked, this, &ChatView::linkClicked);
+    connect(m_delegate, &ChatDelegate::reactionClicked, this, [this](int row, const QString &emoji) {
+        emit reactionToggled(m_model->entry(row).id, emoji);
+    });
     viewport()->setMouseTracking(true); // main au-dessus des liens, citations et images
     m_flashTimer = new QTimer(this);
     m_flashTimer->setSingleShot(true);
@@ -755,6 +857,26 @@ void ChatView::updateDownButton()
     m_downButton->raise();
 }
 
+void ChatView::setReactions(const QString &id, const QList<ChatEntry::Reaction> &reactions)
+{
+    if (m_model->setReactions(id, reactions))
+        scheduleDelayedItemsLayout(); // la hauteur de la ligne change
+}
+
+bool ChatView::viewportEvent(QEvent *event)
+{
+    if (event->type() == QEvent::ToolTip) {
+        const auto *help = static_cast<QHelpEvent *>(event);
+        const QModelIndex idx = indexAt(help->pos());
+        const ChatDelegate::Hit hit = m_delegate->hitTest(idx, visualRect(idx), help->pos());
+        if (hit.kind == ChatDelegate::Hit::Reaction) {
+            QToolTip::showText(help->globalPos(), hit.who, viewport());
+            return true;
+        }
+    }
+    return QListView::viewportEvent(event);
+}
+
 bool ChatView::isDownButtonVisible() const
 {
     return !m_downButton->isHidden();
@@ -785,6 +907,7 @@ void ChatView::addMessage(const QString &author, const QString &text, const QDat
 void ChatView::addMessage(ChatEntry e)
 {
     e.kind = ChatEntry::Message;
+    e.markup = Markup::parse(e.text);
     e.links = Links::find(e.text);
     e.mentionsMe = e.mentionsMe && !e.mine;
     appendEntry(e);
@@ -954,6 +1077,14 @@ void ChatView::contextMenuEvent(QContextMenuEvent *event)
         const QString id = e.id, author = e.author;
         const QString text = e.text.isEmpty() && !e.image.isNull() ? tr("📷 Image") : e.text;
         menu.addAction(tr("Répondre"), this, [this, id, author, text] { emit replyRequested(id, author, text); });
+        QMenu *react = menu.addMenu(tr("Réagir"));
+        for (const QString &emoji : Reactions::Allowed) {
+            const bool mine = std::any_of(e.reactions.cbegin(), e.reactions.cend(),
+                                          [&](const ChatEntry::Reaction &r) { return r.emoji == emoji && r.mine; });
+            QAction *a = react->addAction(emoji, this, [this, id, emoji] { emit reactionToggled(id, emoji); });
+            a->setCheckable(true);
+            a->setChecked(mine); // cochée : la nôtre, la choisir la retire
+        }
     }
     const int row = idx.row();
     if (!e.image.isNull()) {

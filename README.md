@@ -48,6 +48,14 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 ### Interface
 
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
+- **Réactions** (👍 ❤️ 😂 😮 😢 🎉) : clic droit sur un message → *Réagir*, ou clic sur une pastille existante pour
+  ajouter ou retirer la vôtre ; survoler une pastille montre qui a réagi. Chaque réaction est signée par son
+  auteur, synchronisée et relayée comme les messages (pas envoyée aux versions précédentes, qui l'ignoreraient).
+- **Saisie sur plusieurs lignes** : Entrée envoie, Maj+Entrée va à la ligne ; la zone grandit jusqu'à 6 lignes.
+  `` `code` `` et les blocs ` ``` ` s'affichent en police à chasse fixe (les accents graves sont masqués, mais
+  gardés quand on copie le message).
+- **Notifications** (menu ⋮ → *Notifications*) : tous les messages, mentions et réponses seulement, ou aucune ;
+  « ne pas déranger » pendant 1 h ou jusqu'au lendemain 8 h. Le compteur de non-lus reste à jour.
 - **Nouveaux messages** : en revenant sur la fenêtre, un séparateur rouge marque le premier message reçu en votre
   absence, et la liste s'y place. Si vous avez remonté l'historique, un bouton « ↓ » en bas à droite indique le
   nombre de messages arrivés depuis et ramène en bas.
@@ -240,6 +248,10 @@ trousseau), l'historique et sa synchronisation, les règles de reconnexion, la p
 | `protocol.*` | Formats communs (adresse onion, base64), messages signés |
 | `invitation.*` | Encodage / décodage du code d'invitation |
 | `attachment.*` | Images jointes : chargement, réduction et compression, décodage sûr à la réception |
+| `reactions.*` | Réactions : enregistrements signés, état (le plus récent l'emporte) |
+| `markup.*` | Repérage de `code` et des blocs ``` dans le texte |
+| `notifications.*` | Réglage des notifications (lesquelles, pause) |
+| `composer.*` | Zone de saisie sur plusieurs lignes (Entrée / Maj+Entrée, hauteur, collage d'images) |
 | `links.*` | Détection des liens dans le texte des messages |
 | `mentions.*`, `mentioncompleter.*` | Détection des « @pseudo », autocomplétion dans la zone de saisie |
 | `groupstore.*` | État persistant : pseudo, identité, secret, membres, trousseau des clés |
