@@ -1,6 +1,7 @@
 #pragma once
 #include "connectionpolicy.h"
 #include "filestore.h"
+#include "governance.h"
 #include "groupstore.h"
 #include "history.h"
 #include "protocol.h"
@@ -102,6 +103,17 @@ public:
     void typing();                                       // au plus toutes les Timing::typingSendMs
     void sendTo(const QString &onion, const QJsonObject &obj); // console partagée
 
+    // ---- Gouvernance (cf. governance.h) : administrateurs, exclusions, renouvellement du secret
+    QString groupId() const;                     // vide : pas encore de gouvernance
+    bool isAdmin(const QString &onion = {}) const; // nous, par défaut
+    QStringList admins() const;
+    QStringList excludedMembers() const;
+    // Groupe d'une version précédente (sans gouvernance) : le premier qui exclut ou renouvelle devient
+    // administrateur. Ensuite, seuls les administrateurs le peuvent.
+    bool canGovern() const;
+    bool exclude(const QString &onion, QString *error = nullptr);
+    bool renewSecret(QString *error = nullptr);
+
     // ---- Fichiers (cf. filestore.h) : annonce signée, puis morceaux demandés à qui les a
     void setFilesDir(const QString &dir); // par défaut : « fichiers » à côté de l'historique
     Files::FileStore &files() { return *m_files; }
@@ -151,6 +163,11 @@ signals:
     void stateChanged();                                              // connexions, membres, erreurs
     void typingChanged();
     void fileChanged(const QString &fileId); // téléchargement commencé, progression, fin, en attente
+    // Gouvernance
+    void memberExcluded(const QString &onion, const QString &nick, const QString &byNick);
+    void excludedFromGroup(const QString &byNick); // nous : connexions fermées, groupe quitté
+    void secretRenewed(const QString &byNick);
+    void memberLeft(const QString &onion, const QString &nick);
     // Console partagée
     void peerReady(const QString &onion);
     void peerLost(const QString &onion);
@@ -186,6 +203,18 @@ private:
     QJsonObject inventoryMessage() const;
     void sendBatches(PeerConnection *c, const QList<QJsonObject> &messages);
     void receiveSync(PeerConnection *from, const QJsonArray &messages);
+
+    // Gouvernance
+    std::optional<Governance::Record> head() const;
+    void ensureGenesis();
+    bool newRecord(const QStringList &excluded, QString *error); // nouveau secret ; nous devons être administrateur
+    bool integrateRecords(const QJsonArray &records);            // true si la chaîne a avancé
+    void applyRecord(const Governance::Record &previousHead, const Governance::Record &record);
+    void sendGovernance(PeerConnection *c);                       // chaîne, puis secret si membre non exclu
+    void onGovernance(PeerConnection *c, const QJsonObject &o);
+    void onSecret(PeerConnection *c, const QJsonObject &o);
+    void onLeave(PeerConnection *c, const QJsonObject &o);
+    QByteArray keyOf(const QString &onion) const;
 
     // Fichiers
     void noteFileAnnounce(const QJsonObject &msg, bool mine);
@@ -230,6 +259,7 @@ private:
     qint64 m_fastRetryUntil = 0;
     QHash<QString, QSet<QString>> m_peerPresence; // membre connecté -> membres qu'il voit en ligne
     QHash<QString, QString> m_quietDrops;         // coupure directe non annoncée (joignable via un autre)
+    QList<Governance::Record> m_chain;            // gouvernance vérifiée
     QSet<QString> m_seenIds;                      // anti-doublon des messages relayés
     QSet<QString> m_identityWarned;               // avertissements d'identité déjà émis
     History::Store m_store;                       // historique signé : id -> message ou réaction

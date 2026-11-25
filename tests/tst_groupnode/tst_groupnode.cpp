@@ -1,9 +1,11 @@
 #include "crypto.h"
 #include "groupnode.h"
+#include "governance.h"
 #include "invitation.h"
 
 #include <QNetworkProxy>
 #include <QFile>
+#include <QJsonArray>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTcpSocket>
@@ -103,11 +105,19 @@ private:
                 [pp](const QString &, const QString &nick) { pp->system << "identité refusée " + nick; });
         connect(p.node.get(), &GroupNode::invalidMessage, this,
                 [pp](const QString &author) { pp->system << "message falsifié " + author; });
+        connect(p.node.get(), &GroupNode::memberExcluded, this,
+                [pp](const QString &, const QString &nick, const QString &by) { pp->system << "exclu " + nick + " par " + by; });
+        connect(p.node.get(), &GroupNode::excludedFromGroup, this,
+                [pp](const QString &by) { pp->system << "nous exclus par " + by; });
+        connect(p.node.get(), &GroupNode::secretRenewed, this,
+                [pp](const QString &by) { pp->system << "secret renouvelé par " + by; });
+        connect(p.node.get(), &GroupNode::memberLeft, this,
+                [pp](const QString &, const QString &nick) { pp->system << "parti " + nick; });
     }
 
     static Invitation invitation(Peer &p)
     {
-        return {p.store->secret(), p.onion, p.nick, p.store->identityKey(), {}};
+        return {p.store->secret(), p.onion, p.nick, p.store->identityKey(), p.node->groupId()};
     }
 
     static bool linked(Peer &a, Peer &b)
@@ -326,8 +336,8 @@ private slots:
         QTest::qWait(600);
         QVERIFY(!a.system.contains("hors ligne " + b.nick));
 
-        // Départ : annoncé, mais seulement après le délai de grâce
-        b.node->leaveGroup();
+        // Disparition : annoncée, mais seulement après le délai de grâce
+        b.node->setOffline();
         QTRY_VERIFY(!a.node->isConnected(b.onion));
         QVERIFY(!a.system.contains("hors ligne " + b.nick));
         QTRY_VERIFY(a.system.contains("hors ligne " + b.nick));
@@ -540,6 +550,161 @@ private slots:
         b.node->clearHistory(); // vider la conversation efface aussi les fichiers
         QVERIFY(!b.node->files().has(id));
         QCOMPARE(b.node->fileState(id).kind, GroupNode::FileState::Unknown);
+    }
+
+    // ---------------------------------------------------------------- Gouvernance
+
+    void founderIsAdmin()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        QVERIFY(!a.node->groupId().isEmpty());
+        QTRY_COMPARE(c.node->groupId(), a.node->groupId()); // reçu en passant par B
+        QVERIFY(a.node->isAdmin());
+        QVERIFY(c.node->isAdmin(a.onion));
+        QVERIFY(!b.node->isAdmin());
+        QVERIFY(a.node->canGovern());
+        QVERIFY(!b.node->canGovern());
+        QString error;
+        QVERIFY(!b.node->exclude(c.onion, &error)); // un simple membre ne peut pas
+        QVERIFY(error.contains("administrateur"));
+    }
+
+    void excludedMemberIsCutOff()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        QTRY_COMPARE(c.node->groupId(), a.node->groupId());
+        const QByteArray oldSecret = a.store->secret();
+        const Invitation oldCode = invitation(a);
+        QVERIFY(a.node->exclude(c.onion));
+        // C l'apprend (la chaîne le prouve), tout est fermé chez lui
+        QTRY_VERIFY(c.system.contains("nous exclus par " + a.nick));
+        QVERIFY(!c.store->inGroup());
+        QTRY_VERIFY(!b.node->isConnected(c.onion));
+        // B reçoit le nouveau secret et oublie C
+        QTRY_COMPARE(b.store->secret(), a.store->secret());
+        QVERIFY(a.store->secret() != oldSecret);
+        QVERIFY(b.system.contains("exclu " + c.nick + " par " + a.nick));
+        QVERIFY(!b.store->isMember(c.onion));
+        QVERIFY(a.node->excludedMembers().contains(c.onion));
+
+        // C tente de revenir avec son ancien code (ancien secret, encore accepté pour les absents) : refusé
+        c.added.clear();
+        QCOMPARE(c.node->join(oldCode), GroupNode::JoinResult::Joined);
+        c.node->setOnline(c.onion);
+        QTRY_VERIFY(c.system.count("nous exclus par " + a.nick) >= 2); // la chaîne lui est remontrée
+        QTest::qWait(300);
+        QVERIFY(!a.node->isConnected(c.onion) && !b.node->isConnected(c.onion));
+        // Et les messages ne lui parviennent plus
+        const QString id = Protocol::Message::id(a.node->sendMessage("sans C"));
+        QTRY_COMPARE(countId(b.added, id), 1);
+        QCOMPARE(countId(c.added, id), 0);
+    }
+
+    void absentMemberGetsNewSecret()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        QTRY_COMPARE(c.node->groupId(), a.node->groupId());
+        const Invitation oldCode = invitation(a);
+        b.node->setOffline();
+        QTRY_VERIFY(!a.node->isConnected(b.onion));
+        QVERIFY(a.node->renewSecret());
+        QTRY_COMPARE(c.store->secret(), a.store->secret());
+        QVERIFY(b.store->secret() != a.store->secret());
+
+        // B revient avec l'ancien secret : accepté (membre connu), et reçoit le nouveau
+        b.node->setOnline(b.onion);
+        QTRY_VERIFY(linked(a, b));
+        QTRY_COMPARE(b.store->secret(), a.store->secret());
+        QVERIFY(b.system.contains("secret renouvelé par " + a.nick));
+
+        // Un inconnu avec l'ancien code ne rentre plus ; avec un code récent, si
+        Peer &d = peer('d'), &e = peer('e');
+        QCOMPARE(d.node->join(oldCode), GroupNode::JoinResult::Joined);
+        d.node->setOnline(d.onion);
+        QTest::qWait(400);
+        QVERIFY(!a.node->isConnected(d.onion));
+        QVERIFY(!a.store->isMember(d.onion));
+        QCOMPARE(e.node->join(invitation(a)), GroupNode::JoinResult::Joined);
+        e.node->setOnline(e.onion);
+        QTRY_VERIFY(linked(a, e));
+        QTRY_COMPARE(e.node->groupId(), a.node->groupId());
+    }
+
+    void newSecretTravelsThroughRelays()
+    {
+        // A et C ne peuvent pas se joindre : le nouveau secret passe par B
+        m_cut.insert({QString(56, 'a') + ".onion", QString(56, 'c') + ".onion"});
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        a.node->createGroup();
+        a.node->setOnline(a.onion);
+        b.node->join(invitation(a));
+        b.node->setOnline(b.onion);
+        QTRY_VERIFY(linked(a, b));
+        c.node->join(invitation(b));
+        c.node->setOnline(c.onion);
+        QTRY_VERIFY(linked(b, c));
+        QTRY_COMPARE(c.node->groupId(), a.node->groupId());
+        QVERIFY(a.node->renewSecret());
+        QTRY_COMPARE(c.store->secret(), a.store->secret());
+        QTRY_COMPARE(b.store->secret(), a.store->secret());
+    }
+
+    void forgedGovernanceIsIgnored()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        QTRY_COMPARE(b.node->groupId(), a.node->groupId());
+        // B fabrique un enregistrement l'excluant A et se nommant administrateur
+        const auto genesis = Governance::parse(a.store->governanceRecords().first());
+        const QJsonObject coup = Governance::create(b.store->identitySeed(), b.onion, &*genesis, {b.onion},
+                                                    {a.onion}, "secret pirate !!", QDateTime::currentMSecsSinceEpoch());
+        QJsonArray records{genesis->json, coup};
+        b.node->sendTo(c.onion, {{"t", "gov"}, {"records", records}});
+        QTest::qWait(200);
+        QVERIFY(c.node->isAdmin(a.onion));
+        QVERIFY(!c.node->isAdmin(b.onion));
+        QVERIFY(c.node->excludedMembers().isEmpty());
+        QVERIFY(c.node->isConnected(a.onion));
+        // Ni un secret qui ne correspond pas à la chaîne
+        const QByteArray before = c.store->secret();
+        b.node->sendTo(c.onion, {{"t", "gov-secret"}, {"seq", 0}, {"k", Protocol::toB64("secret pirate !!")}});
+        QTest::qWait(100);
+        QCOMPARE(c.store->secret(), before);
+    }
+
+    void legacyGroupGetsGovernance()
+    {
+        // Groupe d'une version précédente : pas de fondateur, pas de gouvernance
+        Peer &a = peer('a'), &b = peer('b');
+        a.store->setSecret(Crypto::randomBytes(16));
+        a.node->setOnline(a.onion);
+        QVERIFY(a.node->groupId().isEmpty());
+        b.node->join(invitation(a));
+        b.node->setOnline(b.onion);
+        QTRY_VERIFY(linked(a, b));
+        QVERIFY(b.node->canGovern()); // le premier qui agit deviendra administrateur
+        QVERIFY(b.node->renewSecret());
+        QTRY_COMPARE(a.node->groupId(), b.node->groupId());
+        QVERIFY(a.node->isAdmin(b.onion));
+        QVERIFY(!a.node->canGovern()); // désormais, seul B le peut
+        QTRY_COMPARE(a.store->secret(), b.store->secret());
+    }
+
+    void voluntaryLeaveIsAnnounced()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        b.node->leaveGroup();
+        QTRY_VERIFY(a.system.contains("parti " + b.nick));
+        QTRY_VERIFY(c.system.contains("parti " + b.nick));
+        QVERIFY(!a.store->isMember(b.onion));
+        // La liste des membres d'un autre ne le réintroduit pas
+        c.node->announceNickname();
+        QTest::qWait(200);
+        QVERIFY(!a.store->isMember(b.onion));
     }
 
     void cannotSendWithoutNetworkOrGroup()

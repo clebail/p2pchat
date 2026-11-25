@@ -248,6 +248,13 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
   quelqu'un qui possède le code ne peut pas se faire passer pour un autre membre.
 - **Messages** : l'auteur signe chaque message (identifiant, adresse, pseudo, texte, heure). Un message
   modifié en route ou attribué à quelqu'un d'autre est rejeté.
+- **Exclusion et secret** : le créateur du groupe en est l'administrateur. Les décisions (exclusions,
+  nouveau secret) forment une chaîne d'enregistrements signés par un administrateur, que tous les membres
+  vérifient et se transmettent ; l'empreinte du premier identifie le groupe et figure dans les codes
+  d'invitation. Exclure un membre renouvelle le secret : le nouveau ne voyage que par les connexions
+  chiffrées, vers les membres restants. L'ancien reste accepté 30 jours, mais seulement pour les membres déjà
+  connus et non exclus, qui reçoivent alors le nouveau ; un ancien code d'invitation ne fait plus entrer
+  personne. Le membre exclu en est averti. Quitter le groupe est annoncé aux autres (annonce signée).
 - **Historique** : chaque ligne est enregistrée avec la signature de son auteur et revérifiée au chargement.
   « ⚠ signature invalide » signale une ligne modifiée ou inventée, et « ⚠ non signé » une ligne de l'ancien
   format. La suppression d'une ligne n'est pas détectée. L'historique n'est **pas chiffré** : il est protégé
@@ -256,7 +263,8 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
   sont lisibles par le seul utilisateur. Le serveur local n'écoute que sur `127.0.0.1`.
 - **Limites** :
   - le code d'invitation permet d'entrer dans le groupe : envoyez-le par un canal de confiance ;
-  - on ne peut pas exclure un seul membre : il faut que chacun quitte le groupe et en recrée un ;
+  - un membre exclu garde l'historique déjà reçu ; les membres d'une version antérieure à la 11 ne suivent
+    pas un renouvellement du secret et doivent être réinvités ;
   - les notifications affichent le texte des messages ;
   - **console partagée** : l'invité voit tout ce qui s'affiche dans la console et, avec le contrôle, exécute
     des commandes avec les droits de l'hôte. Ne donnez le contrôle qu'à quelqu'un de confiance. Seul le membre

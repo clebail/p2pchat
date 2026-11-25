@@ -72,6 +72,10 @@ GroupNode::GroupNode(GroupStore &group, const QString &historyPath, const Timing
     m_lastTick = now();
     m_wakeTimer.start();
 
+    for (const QJsonObject &r : m_group.governanceRecords()) // déjà vérifiés lors de leur arrivée
+        if (const auto parsed = Governance::parse(r))
+            m_chain << *parsed;
+
     setFilesDir(QFileInfo(historyPath).absolutePath() + "/fichiers");
     m_fileTimer.setInterval(m_timing.fileTickMs);
     connect(&m_fileTimer, &QTimer::timeout, this, &GroupNode::filesTick);
@@ -103,6 +107,7 @@ quint16 GroupNode::port() const
 void GroupNode::setOnline(const QString &ownOnion)
 {
     m_ownOnion = ownOnion;
+    ensureGenesis(); // groupe créé avant que le réseau soit prêt
     // Juste après le démarrage, Tor peut encore compléter ses informations d'annuaire
     m_backoff.clear();
     m_fastRetryUntil = now() + m_timing.fastRetryMs;
@@ -171,8 +176,12 @@ QJsonObject GroupNode::membersMessage() const
 
 void GroupNode::createGroup()
 {
-    if (!m_group.inGroup())
+    if (!m_group.inGroup()) {
         m_group.setSecret(Crypto::randomBytes(16));
+        m_group.setFounder(true);
+        m_chain.clear();
+    }
+    ensureGenesis();
     emit stateChanged();
 }
 
@@ -180,13 +189,21 @@ GroupNode::JoinResult GroupNode::join(const Invitation &inv)
 {
     if (inv.onion == m_ownOnion)
         return JoinResult::OwnCode;
-    if (m_group.inGroup() && m_group.secret() != inv.secret) { // autre groupe : quitté
+    const bool otherGroup = m_group.inGroup() && !m_group.acceptedSecrets(now()).contains(inv.secret);
+    if (const QByteArray known = m_group.pinnedKey(inv.onion); !known.isEmpty() && known != inv.identityKey)
+        return JoinResult::KeyMismatch; // vérifié avant de quitter quoi que ce soit
+    if (otherGroup) { // autre groupe : quitté (membres, secrets, gouvernance)
         closeAll();
-        m_group.setMembers({});
+        m_group.leaveGroup();
+        m_chain.clear();
     }
     if (!pinKey(inv.onion, inv.identityKey))
         return JoinResult::KeyMismatch;
-    m_group.setSecret(inv.secret);
+    if (!m_group.inGroup() || otherGroup) {
+        m_group.setSecret(inv.secret);
+        m_group.setExpectedGroupId(inv.groupId);
+    }
+    m_group.setDeparted(inv.onion, false);
     mergeMember(inv.onion, inv.nickname);
     connectToMembers();
     emit stateChanged();
@@ -195,8 +212,19 @@ GroupNode::JoinResult GroupNode::join(const Invitation &inv)
 
 void GroupNode::leaveGroup()
 {
+    // Départ annoncé (signé : personne ne peut le faire à notre place) aux membres connectés
+    if (!m_ownOnion.isEmpty()) {
+        const qint64 ts = now();
+        const QByteArray proof = Ed25519::sign(
+            m_group.identitySeed(), Crypto::pack({"p2pchat-leave-v1", m_ownOnion.toUtf8(), QByteArray::number(ts)}));
+        const QJsonObject leave{{"t", "gov-leave"}, {"a", m_ownOnion}, {"ts", double(ts)}, {"s", Protocol::toB64(proof)}};
+        for (PeerConnection *p : std::as_const(m_active))
+            if (p->peerVersion() >= Governance::Version)
+                p->send(leave);
+    }
     closeAll();
     m_group.leaveGroup();
+    m_chain.clear();
     m_lastError.clear();
     emit stateChanged();
 }
@@ -338,6 +366,7 @@ PeerConnection *GroupNode::newConnection(QTcpSocket *socket, bool outgoing)
     connect(c, &PeerConnection::binaryReceived, this,
             [this, c](quint8 type, const QByteArray &payload) { onBinary(c, type, payload); });
     c->setAdvertisedVersion(m_advertisedVersion);
+    c->setSecrets(m_group.acceptedSecrets(now())); // actuel, puis précédents (membres absents)
     connect(c, &PeerConnection::closed, this, [this, c](const QString &reason) { onClosed(c, reason); });
     return c;
 }
@@ -481,6 +510,18 @@ void GroupNode::setActive(PeerConnection *c)
         c->close();
         return;
     }
+    // Exclu : on lui montre la chaîne qui l'établit (il saura pourquoi), puis on ferme
+    if (const auto h = head(); h && h->isExcluded(onion)) {
+        if (c->peerVersion() >= Governance::Version)
+            sendGovernance(c);
+        c->close(); // après envoi (la fermeture vide le tampon)
+        return;
+    }
+    // Ancien secret : réservé aux membres déjà connus (un vieux code d'invitation ne fait plus entrer)
+    if (c->secretIndex() > 0 && m_group.pinnedKey(onion).isEmpty()) {
+        c->close();
+        return;
+    }
     // La signature du hello prouve la possession de la clé ; elle doit être celle connue pour ce membre
     if (!pinKey(onion, c->peerIdentityKey())) {
         if (!m_identityWarned.contains(onion)) {
@@ -515,8 +556,13 @@ void GroupNode::setActive(PeerConnection *c)
     else if (!wasOnline)
         emit presenceChanged(onion, c->peerNickname(), true, {});
 
-    // Échange des listes de membres : chacun découvre ceux qu'il ne connaît pas encore
+    m_group.setDeparted(onion, false); // revenu
+    // Échange des listes de membres : chacun découvre ceux qu'il ne connaît pas encore (et leurs clés)
     c->send(membersMessage());
+    // Puis la gouvernance, dont il peut alors vérifier les auteurs ; un membre revenu avec l'ancien
+    // secret reçoit le nouveau
+    if (c->peerVersion() >= Governance::Version)
+        sendGovernance(c);
     if (isNew)
         broadcast(membersMessage(), c);
     c->send(inventoryMessage()); // après la liste des membres : les clés des auteurs sont connues
@@ -678,6 +724,12 @@ void GroupNode::onReceived(PeerConnection *c, const QJsonObject &o)
             return;
         acceptReaction(o, false, true);
         broadcastReaction(o, c); // relais, comme les messages
+    } else if (type == "gov") {
+        onGovernance(c, o);
+    } else if (type == "gov-secret") {
+        onSecret(c, o);
+    } else if (type == "gov-leave") {
+        onLeave(c, o);
     } else if (type == "typing") {
         onPeerTyping(c);
     } else if (type == "file-have") {
@@ -706,6 +758,8 @@ void GroupNode::onMembers(PeerConnection *c, const QJsonObject &o)
             qWarning().noquote() << "[identité] clé refusée pour" << onion.left(8);
             continue;
         }
+        if (m_group.hasDeparted(onion) || (head() && head()->isExcluded(onion)))
+            continue; // parti ou exclu : pas réintroduit par la liste d'un autre
         if (mergeMember(onion, m["n"].toString())) {
             changed = true;
             emit memberAdded(onion, m["n"].toString(), false);
@@ -1144,4 +1198,233 @@ void GroupNode::filesTick()
         m_lastCleanup = t;
         m_files->cleanup(t);
     }
+}
+
+// ---------------------------------------------------------------- Gouvernance
+
+std::optional<Governance::Record> GroupNode::head() const
+{
+    return m_chain.isEmpty() ? std::nullopt : std::optional<Governance::Record>(m_chain.last());
+}
+
+QString GroupNode::groupId() const
+{
+    return m_chain.isEmpty() ? QString() : m_chain.first().hash();
+}
+
+bool GroupNode::isAdmin(const QString &onion) const
+{
+    const auto h = head();
+    return h && h->isAdmin(onion.isEmpty() ? m_ownOnion : onion);
+}
+
+QStringList GroupNode::admins() const
+{
+    const auto h = head();
+    return h ? h->admins : QStringList();
+}
+
+QStringList GroupNode::excludedMembers() const
+{
+    const auto h = head();
+    return h ? h->excluded : QStringList();
+}
+
+bool GroupNode::canGovern() const
+{
+    return m_group.inGroup() && !m_ownOnion.isEmpty() && (m_chain.isEmpty() || isAdmin());
+}
+
+QByteArray GroupNode::keyOf(const QString &onion) const
+{
+    return !m_ownOnion.isEmpty() && onion == m_ownOnion ? m_group.identityKey() : m_group.pinnedKey(onion);
+}
+
+void GroupNode::ensureGenesis()
+{
+    // Seulement pour un groupe que nous avons créé : un groupe d'une version précédente n'a pas de fondateur
+    if (!m_chain.isEmpty() || !m_group.isFounder() || !m_group.inGroup() || m_ownOnion.isEmpty())
+        return;
+    const QJsonObject g = Governance::create(m_group.identitySeed(), m_ownOnion, nullptr, {}, {}, m_group.secret(), now());
+    m_chain << *Governance::parse(g);
+    m_group.appendGovernanceRecord(g);
+}
+
+bool GroupNode::exclude(const QString &onion, QString *error)
+{
+    if (onion == m_ownOnion || !Protocol::isValidOnion(onion)) {
+        if (error)
+            *error = tr("membre inconnu");
+        return false;
+    }
+    QStringList excluded = excludedMembers();
+    if (!excluded.contains(onion))
+        excluded << onion;
+    return newRecord(excluded, error);
+}
+
+bool GroupNode::renewSecret(QString *error)
+{
+    return newRecord(excludedMembers(), error);
+}
+
+bool GroupNode::newRecord(const QStringList &excluded, QString *error)
+{
+    if (!canGovern()) {
+        if (error)
+            *error = m_ownOnion.isEmpty() ? tr("réseau pas encore prêt") : tr("seul un administrateur du groupe le peut");
+        return false;
+    }
+    // Groupe d'une version précédente : nous en devenons l'administrateur
+    if (m_chain.isEmpty()) {
+        const QJsonObject g =
+            Governance::create(m_group.identitySeed(), m_ownOnion, nullptr, {}, {}, m_group.secret(), now());
+        m_chain << *Governance::parse(g);
+        m_group.appendGovernanceRecord(g);
+    }
+    const Governance::Record previous = m_chain.last();
+    const QByteArray secret = Crypto::randomBytes(16);
+    QStringList admins = previous.admins;
+    for (const QString &e : excluded)
+        admins.removeAll(e);
+    const QJsonObject r =
+        Governance::create(m_group.identitySeed(), m_ownOnion, &previous, admins, excluded, secret, now());
+    m_chain << *Governance::parse(r);
+    m_group.appendGovernanceRecord(r);
+    // L'ancien secret reste accepté un moment : les absents reviendront avec, et recevront le nouveau
+    m_group.retireSecret(m_group.secret(), now() + Governance::SecretGraceMs);
+    m_group.setSecret(secret);
+    applyRecord(previous, m_chain.last());
+    for (PeerConnection *p : m_active.values())
+        if (p->peerVersion() >= Governance::Version)
+            sendGovernance(p);
+    emit secretRenewed(m_group.nickname());
+    emit stateChanged();
+    return true;
+}
+
+void GroupNode::sendGovernance(PeerConnection *c)
+{
+    if (m_chain.isEmpty())
+        return;
+    QJsonArray records;
+    for (const Governance::Record &r : std::as_const(m_chain))
+        records.append(r.json);
+    c->send({{"t", "gov"}, {"records", records}});
+    // Le secret en vigueur, seulement à un membre non exclu, et s'il a changé depuis la création
+    const QString peer = c->peerOnion();
+    if (m_chain.last().seq > 0 && !m_chain.last().isExcluded(peer)
+        && Governance::secretHash(m_group.secret()) == m_chain.last().secretHash)
+        c->send({{"t", "gov-secret"}, {"seq", m_chain.last().seq}, {"k", Protocol::toB64(m_group.secret())}});
+}
+
+bool GroupNode::integrateRecords(const QJsonArray &records)
+{
+    bool advanced = false;
+    for (const QJsonValue &v : records) {
+        const QJsonObject r = v.toObject();
+        const auto parsed = Governance::parse(r);
+        if (!parsed)
+            return advanced;
+        if (parsed->seq < m_chain.size()) {
+            if (m_chain.at(parsed->seq).hash() != parsed->hash()) {
+                qWarning().noquote() << "[gouvernance] chaîne divergente reçue : ignorée";
+                return advanced;
+            }
+            continue; // déjà connu
+        }
+        const auto h = head();
+        if (Governance::checkNext(h, r, keyOf(parsed->author), h ? QString() : m_group.expectedGroupId())
+            != Governance::Check::Ok) {
+            qWarning().noquote() << "[gouvernance] enregistrement refusé, seq" << parsed->seq;
+            return advanced;
+        }
+        m_chain << *parsed;
+        m_group.appendGovernanceRecord(r);
+        advanced = true;
+        if (h)
+            applyRecord(*h, *parsed);
+        if (!m_group.inGroup())
+            return advanced; // nous venons d'être exclus
+    }
+    return advanced;
+}
+
+void GroupNode::applyRecord(const Governance::Record &previous, const Governance::Record &record)
+{
+    const QString by = record.author == m_ownOnion ? m_group.nickname() : m_group.nickOf(record.author);
+    for (const QString &onion : record.excluded) {
+        if (previous.isExcluded(onion))
+            continue;
+        if (onion == m_ownOnion) { // c'est nous : plus aucune connexion, groupe quitté (historique gardé)
+            closeAll();
+            m_group.leaveGroup();
+            m_chain.clear();
+            emit excludedFromGroup(by);
+            emit stateChanged();
+            return;
+        }
+        const QString nick = m_group.nickOf(onion);
+        QList<Member> members = m_group.members();
+        members.erase(std::remove_if(members.begin(), members.end(), [&](const Member &m) { return m.onion == onion; }),
+                      members.end());
+        m_group.setMembers(members);
+        if (PeerConnection *c = m_active.value(onion)) {
+            if (c->peerVersion() >= Governance::Version)
+                sendGovernance(c); // la chaîne lui apprend son exclusion
+            c->close();
+        }
+        if (PeerConnection *c = m_attempts.value(onion))
+            c->close();
+        emit memberExcluded(onion, nick, by);
+    }
+}
+
+void GroupNode::onGovernance(PeerConnection *c, const QJsonObject &o)
+{
+    if (!integrateRecords(o.value("records").toArray()))
+        return;
+    if (!m_group.inGroup())
+        return; // exclus
+    // Transmis aux autres membres connectés (ceux qui ne sont reliés qu'à nous l'apprennent ainsi)
+    for (PeerConnection *p : m_active.values())
+        if (p != c && p->peerVersion() >= Governance::Version)
+            sendGovernance(p);
+    emit stateChanged();
+}
+
+void GroupNode::onSecret(PeerConnection *c, const QJsonObject &o)
+{
+    const auto h = head();
+    const QByteArray secret = Protocol::fromB64(o.value("k"));
+    if (!h || o.value("seq").toInt(-1) != h->seq || secret.size() < 16
+        || Governance::secretHash(secret) != h->secretHash || secret == m_group.secret())
+        return; // pas le secret en vigueur, ou déjà le nôtre
+    m_group.retireSecret(m_group.secret(), now() + Governance::SecretGraceMs);
+    m_group.setSecret(secret);
+    emit secretRenewed(h->author == m_ownOnion ? m_group.nickname() : m_group.nickOf(h->author));
+    // À notre tour de le transmettre aux membres connectés qui ne l'auraient pas
+    for (PeerConnection *p : m_active.values())
+        if (p != c && p->peerVersion() >= Governance::Version)
+            sendGovernance(p);
+}
+
+void GroupNode::onLeave(PeerConnection *c, const QJsonObject &o)
+{
+    const QString onion = o.value("a").toString();
+    const qint64 ts = qint64(o.value("ts").toDouble());
+    // Signé par le membre qui part : personne ne peut annoncer le départ d'un autre
+    if (onion != m_active.key(c)
+        || !Ed25519::verify(m_group.pinnedKey(onion),
+                            Crypto::pack({"p2pchat-leave-v1", onion.toUtf8(), QByteArray::number(ts)}),
+                            Protocol::fromB64(o.value("s"))))
+        return;
+    const QString nick = m_group.nickOf(onion);
+    m_group.setDeparted(onion, true);
+    QList<Member> members = m_group.members();
+    members.erase(std::remove_if(members.begin(), members.end(), [&](const Member &m) { return m.onion == onion; }),
+                  members.end());
+    m_group.setMembers(members);
+    emit memberLeft(onion, nick);
+    emit stateChanged();
 }

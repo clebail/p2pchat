@@ -44,6 +44,11 @@ public:
     void appendGovernanceRecord(const QJsonObject &record);
     QString expectedGroupId() const; // identifiant du groupe annoncé par le code d'invitation
     void setExpectedGroupId(const QString &id);
+    bool isFounder() const; // nous avons créé ce groupe (avec cette version) : premier administrateur
+    void setFounder(bool founder);
+    // Membres partis d'eux-mêmes : plus réintroduits par les listes de membres des autres
+    bool hasDeparted(const QString &onion) const;
+    void setDeparted(const QString &onion, bool departed);
 
     // Identité Ed25519 de ce poste (la graine de 32 octets est la clé privée)
     void ensureIdentity();

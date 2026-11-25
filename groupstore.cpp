@@ -103,6 +103,31 @@ void GroupStore::appendGovernanceRecord(const QJsonObject &record)
     m_settings.setValue("group/records", QJsonDocument(records).toJson(QJsonDocument::Compact));
 }
 
+bool GroupStore::isFounder() const
+{
+    return m_settings.value("group/founder").toBool();
+}
+
+void GroupStore::setFounder(bool founder)
+{
+    m_settings.setValue("group/founder", founder);
+}
+
+bool GroupStore::hasDeparted(const QString &onion) const
+{
+    return readObject(m_settings, "group/departed").contains(onion);
+}
+
+void GroupStore::setDeparted(const QString &onion, bool departed)
+{
+    QJsonObject d = readObject(m_settings, "group/departed");
+    if (departed)
+        d.insert(onion, true);
+    else
+        d.remove(onion);
+    writeObject(m_settings, "group/departed", d);
+}
+
 QString GroupStore::expectedGroupId() const
 {
     return m_settings.value("group/expectedId").toString();
