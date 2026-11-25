@@ -36,6 +36,14 @@ ChatView::ChatView(QWidget *parent) : QListView(parent), m_model(new ChatModel(t
     setItemDelegate(m_delegate);
     connect(m_delegate, &ChatDelegate::quoteClicked, this, &ChatView::showMessage);
     connect(m_delegate, &ChatDelegate::imageClicked, this, &ChatView::openImage);
+    qRegisterMetaType<ChatView::FileAction>(); // signal fileRequested : connexions différées, espions de test
+    connect(m_delegate, &ChatDelegate::fileClicked, this, [this](int row) {
+        const ChatEntry::File &f = m_model->entry(row).file;
+        if (f.state == ChatEntry::File::Complete)
+            emit fileRequested(f.id, FileAction::Open);
+        else if (f.state == ChatEntry::File::NotDownloaded)
+            emit fileRequested(f.id, FileAction::Download);
+    });
     connect(m_delegate, &ChatDelegate::linkClicked, this, &ChatView::linkClicked);
     connect(m_delegate, &ChatDelegate::reactionClicked, this, [this](int row, const QString &emoji) {
         emit reactionToggled(m_model->entry(row).id, emoji);
@@ -83,7 +91,7 @@ ChatView::ChatView(QWidget *parent) : QListView(parent), m_model(new ChatModel(t
     connect(m_hoverBar->replyButton(), &QToolButton::clicked, this, [this] {
         if (m_hoverIndex.isValid()) {
             const ChatEntry &e = m_model->entry(m_hoverIndex.row());
-            emit replyRequested(e.id, e.author, e.text.isEmpty() && !e.image.isNull() ? tr("📷 Image") : e.text);
+            emit replyRequested(e.id, e.author, quotedText(e));
         }
         m_hoverBar->hide();
     });
@@ -425,6 +433,17 @@ void ChatView::searchNext(bool older)
     emit searchResultChanged(int(rows.size()) - pos, int(rows.size()));
 }
 
+QString ChatView::quotedText(const ChatEntry &e)
+{
+    if (!e.text.isEmpty())
+        return e.text;
+    if (!e.image.isNull())
+        return tr("📷 Image");
+    if (!e.file.id.isEmpty())
+        return tr("📎 %1").arg(e.file.name);
+    return e.text;
+}
+
 QString ChatView::excerpt(const QString &text, int maxChars)
 {
     const QString line = text.simplified();
@@ -489,7 +508,7 @@ void ChatView::contextMenuEvent(QContextMenuEvent *event)
     // Seuls les messages authentiques ont un identifiant reconnu par les autres membres
     if (e.kind == ChatEntry::Message && !e.id.isEmpty() && e.trust == ChatEntry::Verified) {
         const QString id = e.id, author = e.author;
-        const QString text = e.text.isEmpty() && !e.image.isNull() ? tr("📷 Image") : e.text;
+        const QString text = quotedText(e);
         menu.addAction(tr("Répondre"), this, [this, id, author, text] { emit replyRequested(id, author, text); });
         QMenu *react = menu.addMenu(tr("Réagir"));
         for (const QString &emoji : Reactions::Allowed) {
@@ -502,6 +521,25 @@ void ChatView::contextMenuEvent(QContextMenuEvent *event)
         }
     }
     const int row = idx.row();
+    if (!e.file.id.isEmpty()) {
+        const QString fileId = e.file.id;
+        auto request = [this, fileId](FileAction action) { return [this, fileId, action] { emit fileRequested(fileId, action); }; };
+        switch (e.file.state) {
+        case ChatEntry::File::Complete:
+            menu.addAction(tr("Ouvrir"), this, request(FileAction::Open));
+            menu.addAction(tr("Enregistrer sous…"), this, request(FileAction::SaveAs));
+            break;
+        case ChatEntry::File::NotDownloaded:
+            menu.addAction(tr("Télécharger"), this, request(FileAction::Download));
+            break;
+        case ChatEntry::File::Downloading:
+        case ChatEntry::File::Waiting:
+            menu.addAction(tr("Annuler le téléchargement"), this, request(FileAction::Cancel));
+            break;
+        case ChatEntry::File::None:
+            break;
+        }
+    }
     if (!e.image.isNull()) {
         menu.addAction(tr("Ouvrir l'image"), this, [this, row] { openImage(row); });
         menu.addAction(tr("Enregistrer l'image…"), this, [this, row] { saveImage(row); });

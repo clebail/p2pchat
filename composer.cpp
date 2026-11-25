@@ -1,6 +1,5 @@
 #include "composer.h"
 
-#include "attachment.h"
 #include "markup.h"
 
 #include <QAbstractTextDocumentLayout>
@@ -9,13 +8,15 @@
 #include <QScrollBar>
 #include <QSyntaxHighlighter>
 #include <QTextBlock>
+#include <QFileInfo>
 #include <QUrl>
 
 #include <algorithm>
 
 namespace {
 
-bool hasImage(const QMimeData *mime)
+// Image (presse-papiers) ou fichier local, image ou non : joint au message plutôt qu'inséré comme texte
+bool hasAttachment(const QMimeData *mime)
 {
     if (!mime)
         return false;
@@ -23,7 +24,7 @@ bool hasImage(const QMimeData *mime)
         return true;
     const QList<QUrl> urls = mime->urls();
     return std::any_of(urls.cbegin(), urls.cend(),
-                       [](const QUrl &u) { return u.isLocalFile() && Attachment::isImageFile(u.toLocalFile()); });
+                       [](const QUrl &u) { return u.isLocalFile() && QFileInfo(u.toLocalFile()).isFile(); });
 }
 
 // Émojis tapés ou collés : police en couleur (cf. Markup::emojiRuns), comme dans les bulles
@@ -105,13 +106,13 @@ void Composer::keyPressEvent(QKeyEvent *event)
 
 bool Composer::canInsertFromMimeData(const QMimeData *source) const
 {
-    return hasImage(source) || QPlainTextEdit::canInsertFromMimeData(source);
+    return hasAttachment(source) || QPlainTextEdit::canInsertFromMimeData(source);
 }
 
 void Composer::insertFromMimeData(const QMimeData *source)
 {
-    if (hasImage(source)) {
-        emit imageInserted(source);
+    if (hasAttachment(source)) {
+        emit attachmentInserted(source);
         return;
     }
     if (source && source->hasText())

@@ -66,6 +66,13 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
   le résultat précédent (plus ancien), Maj+Entrée pour le suivant, Échap pour fermer.
 - **Liens** cliquables (http, https, www.). Ils s'ouvrent dans le navigateur, donc **hors Tor** : une confirmation
   le rappelle la première fois.
+- **Fichiers** (100 Mo au plus) : bouton 📎, glisser-déposer ou collage d'un fichier ; une image reste une
+  image. La bulle montre le type, le nom, la taille et l'état. Les fichiers de 2 Mo au plus sont téléchargés
+  automatiquement, les autres d'un clic sur « Télécharger » ; un téléchargement interrompu reprend tout seul.
+  N'importe quel membre qui a le fichier peut le fournir (chaque morceau est vérifié grâce à l'annonce signée
+  de l'auteur). Clic sur un fichier reçu : *Ouvrir* (avertissement avant un programme ou un script) ; clic
+  droit : *Enregistrer sous…*, *Annuler le téléchargement*. Fichiers conservés 30 jours, effacés avec la
+  conversation.
 - **Images** : bouton 🖼 à gauche de la zone de saisie, glisser-déposer d'un fichier ou d'une image n'importe où
   sur la fenêtre, ou collage (Ctrl+V) d'une capture d'écran. Un aperçu apparaît au-dessus de la zone de saisie
   (✕ pour retirer) ; on peut ajouter une légende avant d'envoyer. L'image est réduite (1600 px au plus) et

@@ -33,6 +33,8 @@ constexpr int QuoteMargin = 8, QuoteGap = 6, QuotePadL = 11, QuotePadR = 8, Quot
 constexpr int ImageMargin = 4, ImageMaxSide = 300, ImageRadius = 16;
 // Pastilles de réaction sous la bulle
 constexpr int ReactGap = 4, ReactPadH = 8, ReactSpacing = 4;
+// Fichier joint : carte dans la bulle
+constexpr int FileMargin = 6, FileCardH = 60, FileCardMinW = 220;
 
 #if defined(Q_OS_LINUX) || defined(Q_OS_FREEBSD)
 constexpr qreal EmojiBoost = 1.3; // émojis seuls un peu plus gros : Noto Color Emoji paraît petite

@@ -6,7 +6,7 @@ class QMimeData;
 // Zone de saisie des messages, sur plusieurs lignes :
 //  - Entrée envoie (returnPressed), Maj+Entrée va à la ligne ;
 //  - la hauteur suit le texte, de 1 à MaxLines lignes (ascenseur au-delà) ;
-//  - une image collée ou déposée n'est pas insérée : imageInserted la transmet ;
+//  - une image ou un fichier collé ou déposé n'est pas inséré : attachmentInserted le transmet ;
 //  - le texte collé l'est sans mise en forme.
 class Composer : public QPlainTextEdit
 {
@@ -33,7 +33,7 @@ public:
 signals:
     void returnPressed();
     void textEdited(const QString &text);    // modification faite par l'utilisateur (frappe, collage)
-    void imageInserted(const QMimeData *mime); // image collée ou déposée
+    void attachmentInserted(const QMimeData *mime); // image ou fichier collé ou déposé
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;

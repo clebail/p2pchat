@@ -34,6 +34,14 @@ public:
     void showRow(int row);
     void setReactions(const QString &id, const QList<ChatEntry::Reaction> &reactions);
     void setAuthorVerified(const QString &onion, bool verified) { m_model->setAuthorVerified(onion, verified); }
+    void setFileState(const QString &fileId, ChatEntry::File::State state, int received, int total)
+    {
+        m_model->setFileState(fileId, state, received, total);
+    }
+
+    // Fichier joint : clic sur la carte (Télécharger ou Ouvrir selon l'état) ou menu contextuel
+    enum class FileAction { Open, Download, Cancel, SaveAs };
+    Q_ENUM(FileAction)
     bool isFlashed(const QModelIndex &index) const { return m_flash.isValid() && m_flash == index; }
     QString flashedId() const; // identifiant du message mis en évidence (vide si aucun)
 
@@ -63,6 +71,8 @@ public:
     static QColor colorFor(const QString &name);
     // Extrait d'un message pour une citation : une ligne, espaces regroupés, coupé à maxChars
     static QString excerpt(const QString &text, int maxChars = 120);
+    // Texte d'un message pour le citer : « 📷 Image » ou « 📎 nom » s'il n'a pas de légende
+    static QString quotedText(const ChatEntry &e);
     // Image en grand, avec « Enregistrer… » et « Copier »
     void openImage(int row);
     void saveImage(int row);
@@ -71,6 +81,7 @@ signals:
     // Menu contextuel « Répondre » sur un message
     void replyRequested(const QString &id, const QString &author, const QString &text);
     void linkClicked(const QString &url);
+    void fileRequested(const QString &fileId, ChatView::FileAction action);
     // Clic sur une pastille de réaction, ou « Réagir » dans le menu contextuel : ajoute ou retire la nôtre
     void reactionToggled(const QString &id, const QString &emoji);
     void searchResultChanged(int current, int total); // current : 1 = plus récent ; 0 si aucun résultat

@@ -103,6 +103,19 @@ void ChatModel::setAuthorVerified(const QString &onion, bool verified)
     }
 }
 
+void ChatModel::setFileState(const QString &fileId, ChatEntry::File::State state, int received, int total)
+{
+    for (int i = 0; i < m_entries.size(); ++i) {
+        ChatEntry::File &f = m_entries[i].file;
+        if (fileId.isEmpty() || f.id != fileId)
+            continue;
+        f.state = state;
+        f.received = received;
+        f.total = total;
+        emit dataChanged(index(i), index(i));
+    }
+}
+
 int ChatModel::markerRow() const
 {
     for (int i = int(m_entries.size()) - 1; i >= 0; --i)
@@ -155,7 +168,10 @@ void ChatModel::resolveReply(ChatEntry &e) const
         return;
     const ChatEntry &quoted = m_entries.at(row);
     e.replyAuthor = quoted.mine ? QObject::tr("Vous") : quoted.author;
-    e.replyText = quoted.text.isEmpty() && !quoted.image.isNull() ? QObject::tr("📷 Image") : quoted.text;
+    e.replyText = !quoted.text.isEmpty()        ? quoted.text
+                  : !quoted.image.isNull()      ? QObject::tr("📷 Image")
+                  : !quoted.file.id.isEmpty()   ? QObject::tr("📎 %1").arg(quoted.file.name)
+                                                : quoted.text;
     e.replyFound = true;
 }
 

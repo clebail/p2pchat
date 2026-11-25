@@ -34,6 +34,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileIconProvider>
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -173,6 +174,8 @@ void MainWindow::connectNode()
     });
     connect(m_node, &GroupNode::stateChanged, this, &MainWindow::updateStatus);
     connect(m_node, &GroupNode::typingChanged, this, &MainWindow::updateStatus);
+    connect(m_node, &GroupNode::fileChanged, this, &MainWindow::updateFileEntry);
+    connect(m_chat, &ChatView::fileRequested, this, &MainWindow::onFileRequested);
     setupTerminalSharing();
 }
 
@@ -306,28 +309,27 @@ QScrollBar::handle:vertical { background: #c4c7c5; border-radius: 4px; min-heigh
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 )";
 
-// Icône « joindre une image » (cadre, montagne et soleil)
-QIcon imageIcon()
+// Icône « joindre » : trombone (Material « attach_file »), dessiné à 45°
+QIcon attachIcon()
 {
     QPixmap pm(48, 48);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing);
-    const QColor c("#444746");
-    p.setPen(QPen(c, 3.5));
+    p.translate(24, 24);
+    p.rotate(45);
+    p.setPen(QPen(QColor("#444746"), 3.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     p.setBrush(Qt::NoBrush);
-    p.drawRoundedRect(QRectF(7, 9, 34, 30), 5, 5);
-    p.setPen(Qt::NoPen);
-    p.setBrush(c);
-    p.drawEllipse(QPointF(31, 18), 3.5, 3.5);
-    QPainterPath m;
-    m.moveTo(11, 35);
-    m.lineTo(20, 23);
-    m.lineTo(26, 30);
-    m.lineTo(30, 26);
-    m.lineTo(37, 35);
-    m.closeSubpath();
-    p.drawPath(m);
+    // Trois branches emboîtées : extérieure, intérieure, centrale
+    QPainterPath clip;
+    clip.moveTo(6, 12);
+    clip.lineTo(6, -12);
+    clip.arcTo(QRectF(-6, -18, 12, 12), 0, 180);
+    clip.lineTo(-6, 14);
+    clip.arcTo(QRectF(-9, 8, 18, 14), 180, 180);
+    clip.lineTo(9, -6);
+    p.drawPath(clip);
+    p.drawLine(QPointF(0, -10), QPointF(0, 10));
     return QIcon(pm);
 }
 
@@ -605,15 +607,15 @@ void MainWindow::buildUi()
     m_input->setPlaceholderText(tr("Message"));
     m_input->setToolTip(tr("Entrée : envoyer · Maj+Entrée : aller à la ligne · `code`, ```bloc```"));
     m_mentions = new MentionCompleter(m_input);
-    connect(m_input, &Composer::imageInserted, this, &MainWindow::attachFromMime); // collage, dépôt
+    connect(m_input, &Composer::attachmentInserted, this, &MainWindow::attachFromMime); // collage, dépôt
     m_attachButton = new QToolButton(composerBar);
     m_attachButton->setObjectName("attachButton");
-    m_attachButton->setIcon(imageIcon());
+    m_attachButton->setIcon(attachIcon());
     m_attachButton->setIconSize(QSize(24, 24));
     m_attachButton->setFixedSize(48, 48);
     m_attachButton->setCursor(Qt::PointingHandCursor);
-    m_attachButton->setToolTip(tr("Joindre une image (ou la glisser dans la fenêtre, ou la coller)"));
-    connect(m_attachButton, &QToolButton::clicked, this, &MainWindow::chooseImage);
+    m_attachButton->setToolTip(tr("Joindre une image ou un fichier (ou le glisser dans la fenêtre, ou le coller)"));
+    connect(m_attachButton, &QToolButton::clicked, this, &MainWindow::chooseAttachment);
     m_sendButton = new QToolButton(composerBar);
     m_sendButton->setObjectName("sendButton");
     m_sendButton->setIcon(sendIcon());
@@ -742,7 +744,11 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, GroupNode::Tru
         imageData = m_node->verifiedImage(msg, mine);
         image = Attachment::decode(imageData);
     }
-    const QString text = Protocol::Message::caption(msg, !image.isNull());
+    // Fichier joint : seulement si sa fiche est bien signée par l'auteur
+    std::optional<Files::FileInfo> file;
+    if (trust == ChatEntry::Verified && msg.contains("f"))
+        file = m_node->verifiedFile(msg, mine);
+    const QString text = Protocol::Message::caption(msg, !image.isNull() || file.has_value());
     QList<QPair<int, int>> spans;
     const QList<Mentions::Span> found = Mentions::find(text, mentionNames());
     for (const Mentions::Span &m : found)
@@ -763,6 +769,16 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, GroupNode::Tru
     if (trust == ChatEntry::Verified) { // identifiants et citations : seulement pour les messages authentiques
         e.id = id;
         e.replyTo = m_node->verifiedReplyTo(msg, mine);
+        if (file) {
+            e.file.id = file->id();
+            e.file.name = file->name;
+            e.file.mime = file->mime;
+            e.file.size = file->size;
+            e.file.risky = Files::isRisky(file->name);
+            e.file.state = fileEntryState(m_node->fileState(e.file.id).kind);
+            e.file.received = m_node->fileState(e.file.id).received;
+            e.file.total = file->chunkCount();
+        }
         if (!image.isNull()) {
             e.image = Attachment::thumbnail(image);
             e.imageData = imageData;
@@ -1113,8 +1129,15 @@ void MainWindow::sendCurrent()
         return; // Entrée choisit un pseudo dans la liste
     const QString text = m_input->text().trimmed();
     // Sans personne en ligne, le message partira à la prochaine synchronisation
-    if (m_node->sendMessage(text, {m_replyTo, m_pendingImage, {}}).isEmpty())
+    if (!m_pendingFile.isEmpty()) {
+        QString error;
+        if (m_node->sendFile(m_pendingFile, text, m_replyTo, &error).isEmpty()) {
+            QMessageBox::warning(this, tr("Envoyer un fichier"), tr("Impossible d'envoyer ce fichier : %1.").arg(error));
+            return;
+        }
+    } else if (m_node->sendMessage(text, {m_replyTo, m_pendingImage, {}}).isEmpty()) {
         return;
+    }
     m_chat->clearUnreadMarker(); // on a répondu : les messages précédents sont lus
     m_input->clear();
     cancelReply();
@@ -1123,13 +1146,48 @@ void MainWindow::sendCurrent()
 
 // ---------------------------------------------------------------- Images
 
-void MainWindow::chooseImage()
+void MainWindow::chooseAttachment()
 {
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
-    const QString path =
-        QFileDialog::getOpenFileName(this, tr("Joindre une image"), dir, Attachment::fileDialogFilter());
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+    const QString path = QFileDialog::getOpenFileName(this, tr("Joindre une image ou un fichier"), dir,
+                                                      tr("Tous les fichiers (*)") + ";;" + Attachment::fileDialogFilter());
     if (!path.isEmpty())
-        attachPrepared(Attachment::prepareFile(path));
+        attachPath(path);
+}
+
+void MainWindow::attachPath(const QString &path)
+{
+    // Une image reste une image (réduite, affichée dans la bulle) ; tout le reste devient un fichier joint
+    if (Attachment::isImageFile(path)) {
+        const Attachment::Prepared prepared = Attachment::prepareFile(path);
+        if (!prepared.data.isEmpty()) {
+            attachPrepared(prepared);
+            return;
+        }
+    }
+    const QFileInfo info(path);
+    QString problem;
+    if (!info.isFile())
+        problem = tr("fichier introuvable");
+    else if (info.size() == 0)
+        problem = tr("fichier vide");
+    else if (info.size() > Files::MaxFileBytes)
+        problem = tr("fichier trop volumineux (%1, %2 au plus)")
+                      .arg(Files::formatSize(info.size()), Files::formatSize(Files::MaxFileBytes));
+    if (!problem.isEmpty()) {
+        QMessageBox::warning(this, tr("Joindre un fichier"), tr("Impossible de joindre ce fichier : %1.").arg(problem));
+        return;
+    }
+    m_pendingImage.clear();
+    m_pendingFile = path;
+    m_imagePreview->setPixmap(QFileIconProvider().icon(info).pixmap(40, 40));
+    m_imageInfo->setText(tr("<b>%1</b> · %2<br><span style='color:#5f6368'>%3</span>")
+                             .arg(Files::sanitizeName(info.fileName()).toHtmlEscaped(), Files::formatSize(info.size()),
+                                  info.size() > Files::AutoDownloadBytes
+                                      ? tr("Les autres le téléchargeront s'ils le souhaitent")
+                                      : tr("Ajoutez une légende si vous voulez, puis Entrée")));
+    m_imageBar->setVisible(true);
+    m_input->setFocus();
 }
 
 bool MainWindow::attachFromMime(const QMimeData *mime)
@@ -1139,8 +1197,8 @@ bool MainWindow::attachFromMime(const QMimeData *mime)
     // Fichier (gestionnaire de fichiers) : on relit le fichier pour garder la qualité, l'orientation et
     // l'animation d'un GIF
     for (const QUrl &url : mime->urls()) {
-        if (url.isLocalFile() && Attachment::isImageFile(url.toLocalFile())) {
-            attachPrepared(Attachment::prepareFile(url.toLocalFile()));
+        if (url.isLocalFile() && QFileInfo(url.toLocalFile()).isFile()) {
+            attachPath(url.toLocalFile());
             return true;
         }
     }
@@ -1161,6 +1219,7 @@ void MainWindow::attachPrepared(const Attachment::Prepared &prepared)
         return;
     }
     m_pendingImage = prepared.data;
+    m_pendingFile.clear();
     m_imagePreview->setPixmap(QPixmap::fromImage(
         prepared.preview.scaled(m_imagePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation)));
     const QString kind = prepared.animated ? tr("GIF animé") : tr("Image");
@@ -1184,12 +1243,18 @@ void MainWindow::attachPrepared(const Attachment::Prepared &prepared)
 void MainWindow::cancelImage()
 {
     m_pendingImage.clear();
+    m_pendingFile.clear();
     m_imagePreview->clear();
     m_imageBar->setVisible(false);
 }
 
 QString MainWindow::notificationBody(const QJsonObject &msg) const
 {
+    if (msg.contains("f")) {
+        const QString caption = Protocol::Message::caption(msg, true);
+        const QString name = Files::sanitizeName(msg.value("f").toObject().value("n").toString());
+        return caption.isEmpty() ? tr("📎 %1").arg(name) : tr("📎 %1 — %2").arg(name, caption);
+    }
     if (!msg.contains("img"))
         return msg.value("x").toString();
     const QString caption = Protocol::Message::caption(msg, true);
@@ -1201,7 +1266,7 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *event)
     const QMimeData *mime = event->mimeData();
     bool usable = mime->hasImage();
     for (const QUrl &url : mime->urls())
-        usable = usable || (url.isLocalFile() && Attachment::isImageFile(url.toLocalFile()));
+        usable = usable || (url.isLocalFile() && QFileInfo(url.toLocalFile()).isFile());
     if (usable && m_input->isEnabled())
         event->acceptProposedAction();
 }
@@ -1212,6 +1277,102 @@ void MainWindow::dropEvent(QDropEvent *event)
         event->acceptProposedAction();
 }
 
+
+// ---------------------------------------------------------------- Fichiers joints
+
+ChatEntry::File::State MainWindow::fileEntryState(int kind)
+{
+    switch (GroupNode::FileState::Kind(kind)) {
+    case GroupNode::FileState::NotDownloaded:
+        return ChatEntry::File::NotDownloaded;
+    case GroupNode::FileState::Downloading:
+        return ChatEntry::File::Downloading;
+    case GroupNode::FileState::Waiting:
+        return ChatEntry::File::Waiting;
+    case GroupNode::FileState::Complete:
+        return ChatEntry::File::Complete;
+    case GroupNode::FileState::Unknown:
+        break;
+    }
+    return ChatEntry::File::NotDownloaded;
+}
+
+void MainWindow::updateFileEntry(const QString &fileId)
+{
+    const GroupNode::FileState s = m_node->fileState(fileId);
+    m_chat->setFileState(fileId, fileEntryState(s.kind), s.received, s.total);
+}
+
+void MainWindow::onFileRequested(const QString &fileId, ChatView::FileAction action)
+{
+    switch (action) {
+    case ChatView::FileAction::Download:
+        m_node->download(fileId);
+        break;
+    case ChatView::FileAction::Cancel:
+        m_node->cancelDownload(fileId);
+        break;
+    case ChatView::FileAction::Open:
+        openFile(fileId);
+        break;
+    case ChatView::FileAction::SaveAs:
+        saveFileAs(fileId);
+        break;
+    }
+}
+
+void MainWindow::openFile(const QString &fileId)
+{
+    const auto info = m_node->files().info(fileId);
+    const QString stored = m_node->files().path(fileId);
+    if (!info || stored.isEmpty())
+        return;
+    if (Files::isRisky(info->name)
+        && QMessageBox::warning(this, tr("Ouvrir le fichier"),
+                                tr("<p><b>%1</b> est un programme ou un script.</p>"
+                                   "<p>L'ouvrir peut exécuter du code sur cet ordinateur, avec vos droits. "
+                                   "Ne le faites que si vous savez d'où il vient.</p>")
+                                    .arg(info->name.toHtmlEscaped()),
+                                QMessageBox::Open | QMessageBox::Cancel, QMessageBox::Cancel)
+               != QMessageBox::Open)
+        return;
+    // Le magasin range les fichiers sous leur empreinte : on l'ouvre sous son vrai nom, depuis une copie dans
+    // le dossier d'exécution de l'utilisateur (Linux : /run/user/<uid>, réservé et vidé à la déconnexion)
+    QString base = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    if (base.isEmpty())
+        base = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    const QString root = base + "/p2pchat-ouverts";
+    const QString dir = root + "/" + fileId.left(16);
+    QDir().mkpath(dir);
+    constexpr auto OwnerOnly = QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner;
+    QFile::setPermissions(root, OwnerOnly);
+    QFile::setPermissions(dir, OwnerOnly);
+    const QString named = dir + "/" + info->name;
+    if (QFileInfo(named).size() != info->size) {
+        QFile::remove(named);
+        if (!QFile::copy(stored, named)) {
+            QMessageBox::warning(this, tr("Ouvrir le fichier"), tr("Impossible de préparer %1.").arg(info->name));
+            return;
+        }
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(named));
+}
+
+void MainWindow::saveFileAs(const QString &fileId)
+{
+    const auto info = m_node->files().info(fileId);
+    const QString stored = m_node->files().path(fileId);
+    if (!info || stored.isEmpty())
+        return;
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    const QString path = QFileDialog::getSaveFileName(this, tr("Enregistrer le fichier"), dir + "/" + info->name);
+    if (path.isEmpty())
+        return;
+    if (QFile::exists(path))
+        QFile::remove(path); // le dialogue a déjà demandé confirmation
+    if (!QFile::copy(stored, path))
+        QMessageBox::warning(this, tr("Enregistrer le fichier"), tr("Impossible d'enregistrer %1.").arg(path));
+}
 
 // ---------------------------------------------------------------- Réglages
 

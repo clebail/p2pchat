@@ -4,6 +4,7 @@
 #include <QClipboard>
 #include <QMimeData>
 #include <QSignalSpy>
+#include <QTemporaryFile>
 #include <QtTest>
 
 #include <memory>
@@ -99,9 +100,24 @@ private slots:
         QCOMPARE(m_edit->text(), QString("gras"));
     }
 
+    void fileIsHandedOver()
+    {
+        QSignalSpy attached(m_edit.get(), &Composer::attachmentInserted);
+        QTemporaryFile file;
+        QVERIFY(file.open());
+        file.write("contenu");
+        file.close();
+        auto *mime = new QMimeData;
+        mime->setUrls({QUrl::fromLocalFile(file.fileName())});
+        QApplication::clipboard()->setMimeData(mime);
+        m_edit->paste();
+        QCOMPARE(attached.count(), 1);
+        QVERIFY(m_edit->text().isEmpty()); // pas le chemin du fichier
+    }
+
     void imageIsHandedOver()
     {
-        QSignalSpy image(m_edit.get(), &Composer::imageInserted);
+        QSignalSpy image(m_edit.get(), &Composer::attachmentInserted);
         QImage img(10, 10, QImage::Format_RGB32);
         img.fill(Qt::red);
         auto *mime = new QMimeData;

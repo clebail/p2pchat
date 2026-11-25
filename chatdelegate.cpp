@@ -2,6 +2,7 @@
 
 #include "chatstyle.h"
 #include "chatview.h"
+#include "filestore.h"
 
 #include <QApplication>
 #include <QMouseEvent>
@@ -11,6 +12,51 @@
 #include <cmath>
 
 using namespace ChatStyle;
+
+namespace {
+
+// Seconde ligne de la carte d'un fichier : taille et état
+QString fileStatusLine(const ChatEntry &e)
+{
+    const ChatEntry::File &f = e.file;
+    QString status;
+    switch (f.state) {
+    case ChatEntry::File::NotDownloaded:
+        status = QObject::tr("Télécharger");
+        break;
+    case ChatEntry::File::Downloading:
+        status = QObject::tr("Téléchargement… %1 %").arg(f.total ? 100 * f.received / f.total : 0);
+        break;
+    case ChatEntry::File::Waiting:
+        status = QObject::tr("En attente d'un membre qui l'a");
+        break;
+    case ChatEntry::File::Complete:
+        status = e.mine ? QObject::tr("Disponible pour le groupe") : QObject::tr("Ouvrir");
+        break;
+    case ChatEntry::File::None:
+        break;
+    }
+    if (f.risky)
+        status += QObject::tr(" · ⚠ programme");
+    return Files::formatSize(f.size) + QStringLiteral(" · ") + status;
+}
+
+QFont fileNameFont()
+{
+    QFont f = messageFont();
+    f.setWeight(QFont::DemiBold);
+    return f;
+}
+
+// Largeur voulue de la carte : pastille, puis le plus long du nom et de l'état
+int fileCardWidth(const ChatEntry &e)
+{
+    const int text = qMax(QFontMetrics(fileNameFont()).horizontalAdvance(e.file.name),
+                          QFontMetrics(smallFont()).horizontalAdvance(fileStatusLine(e)));
+    return 10 + 40 + 10 + text + 12;
+}
+
+} // namespace
 
 struct ChatDelegate::Geometry
 {
@@ -24,6 +70,7 @@ struct ChatDelegate::Geometry
     int quoteH = 0;         // 0 : pas de citation
     QString quoteText;      // extrait, coupé à la largeur disponible
     int imageTop = 0, imageW = 0, imageH = 0; // imageH = 0 : pas d'image
+    int fileTop = 0, fileW = 0, fileH = 0;    // fileH = 0 : pas de fichier joint
     int reactH = 0;                           // pastilles de réaction (0 : aucune)
     int height = 0;
 };
@@ -61,7 +108,7 @@ ChatDelegate::Geometry ChatDelegate::compute(const QModelIndex &index, int width
 
     // Contenu de la bulle, de haut en bas : citation, image, texte (chacun facultatif)
     const int maxBubble = qMax(120, qMin(int(width * 0.75), width - 2 * Side - Avatar - AvatarGap - 24));
-    const bool hasText = !e.text.isEmpty() || e.image.isNull();
+    const bool hasText = !e.text.isEmpty() || (e.image.isNull() && e.file.id.isEmpty());
     QTextLayout tl;
     prepareMessageLayout(tl, e);
     qreal used = 0;
@@ -94,11 +141,18 @@ ChatDelegate::Geometry ChatDelegate::compute(const QModelIndex &index, int width
         y = g.imageTop + g.imageH;
         bubbleW = qMax(bubbleW, g.imageW + 2 * ImageMargin);
     }
+    if (!e.file.id.isEmpty()) {
+        g.fileW = qBound(FileCardMinW, fileCardWidth(e), maxBubble - 2 * FileMargin);
+        g.fileH = FileCardH;
+        g.fileTop = y ? y + QuoteGap : FileMargin;
+        y = g.fileTop + g.fileH;
+        bubbleW = qMax(bubbleW, g.fileW + 2 * FileMargin);
+    }
     if (hasText) {
         g.textTop = y ? y + QuoteGap : PadV;
         y = g.textTop + int(std::ceil(h)) + PadV;
     } else {
-        y += ImageMargin; // image seule : bordure fine tout autour
+        y += g.fileH ? FileMargin : ImageMargin; // image ou fichier seul : bordure fine tout autour
     }
     g.bubbleW = bubbleW;
     g.bubbleH = y;
@@ -129,6 +183,11 @@ QRectF ChatDelegate::bubbleAt(const QModelIndex &index, const QRect &rect) const
     if (e.kind != ChatEntry::Message)
         return {};
     return bubbleRect(e, compute(index, rect.width()), rect);
+}
+
+QRectF ChatDelegate::fileRect(const Geometry &g, const QRectF &bubble) const
+{
+    return QRectF(bubble.left() + FileMargin, bubble.top() + g.fileTop, bubble.width() - 2 * FileMargin, g.fileH);
 }
 
 QRectF ChatDelegate::imageRect(const Geometry &g, const QRectF &bubble) const
@@ -185,6 +244,10 @@ ChatDelegate::Hit ChatDelegate::hitTest(const QModelIndex &index, const QRect &r
         hit.kind = Hit::Image;
         return hit;
     }
+    if (g.fileH && fileRect(g, bubble).contains(pos)) {
+        hit.kind = Hit::File;
+        return hit;
+    }
     if (e.links.isEmpty() || !bubble.contains(pos))
         return hit;
     // Caractère sous le pointeur, avec la même mise en page que le dessin
@@ -223,6 +286,9 @@ bool ChatDelegate::editorEvent(QEvent *event, QAbstractItemModel *model, const Q
                 return true;
             case Hit::Image:
                 emit imageClicked(index.row());
+                return true;
+            case Hit::File:
+                emit fileClicked(index.row());
                 return true;
             case Hit::Link:
                 emit linkClicked(hit.url);
@@ -360,7 +426,10 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
         }
     }
 
-    if (!e.text.isEmpty() || !g.imageH) {
+    if (g.fileH)
+        paintFile(p, e, fileRect(g, bubble));
+
+    if (!e.text.isEmpty() || (!g.imageH && !g.fileH)) {
         QTextLayout tl;
         prepareMessageLayout(tl, e, view ? view->searchTerm() : QString());
         layoutText(tl, g.bubbleW - 2 * PadH + 1, nullptr);
@@ -422,4 +491,77 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
                     (e.mine ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignTop, label);
     }
     p->restore();
+}
+
+namespace {
+
+// Pastille du type de fichier : couleur par famille, extension en clair
+QColor fileColor(const QString &mime, const QString &ext)
+{
+    static const QStringList archives{"zip", "7z", "rar", "gz", "tgz", "bz2", "xz", "tar", "zst"};
+    if (mime == "application/pdf")
+        return QColor("#d93025");
+    if (archives.contains(ext))
+        return QColor("#e37400");
+    if (mime.startsWith("audio/"))
+        return QColor("#9334e6");
+    if (mime.startsWith("video/"))
+        return QColor("#b0157a");
+    if (mime.startsWith("image/"))
+        return QColor("#188038");
+    if (mime.startsWith("text/") || mime.contains("document") || mime.contains("sheet") || mime.contains("presentation")
+        || mime.contains("msword") || mime.contains("opendocument"))
+        return QColor("#1a73e8");
+    return QColor("#5f6368");
+}
+
+} // namespace
+
+void ChatDelegate::paintFile(QPainter *p, const ChatEntry &e, const QRectF &card) const
+{
+    const ChatEntry::File &f = e.file;
+    QPainterPath box;
+    box.addRoundedRect(card, 12, 12);
+    p->fillPath(box, QColor(0, 0, 0, 14));
+
+    // Pastille : « PDF », « ZIP »…
+    const QString ext = f.name.section(QLatin1Char('.'), -1).toLower();
+    const QString label = f.name.contains(QLatin1Char('.')) && !ext.isEmpty() ? ext.left(4).toUpper() : QStringLiteral("…");
+    const QRectF icon(card.left() + 10, card.center().y() - 20, 40, 40);
+    p->setPen(Qt::NoPen);
+    p->setBrush(fileColor(f.mime, ext));
+    p->drawRoundedRect(icon, 8, 8);
+    p->setBrush(Qt::NoBrush);
+    p->setFont(smallFont(true));
+    p->setPen(Qt::white);
+    p->drawText(icon, Qt::AlignCenter, label);
+
+    // Nom, puis taille et état
+    const QString status = fileStatusLine(e);
+    const qreal textLeft = icon.right() + 10, textW = card.right() - 10 - textLeft;
+    const QFont nameFont = fileNameFont();
+    const QFontMetrics nameMetrics(nameFont), smallMetrics(smallFont());
+    p->setFont(nameFont);
+    p->setPen(e.mine ? MineText : OtherText);
+    p->drawText(QRectF(textLeft, card.top() + 8, textW, nameMetrics.height()), Qt::AlignLeft | Qt::AlignVCenter,
+                nameMetrics.elidedText(f.name, Qt::ElideMiddle, int(textW)));
+    p->setFont(smallFont());
+    p->setPen(f.state == ChatEntry::File::NotDownloaded || (f.state == ChatEntry::File::Complete && !e.mine)
+                  ? LinkText // action possible d'un clic
+                  : Muted);
+    p->drawText(QRectF(textLeft, card.bottom() - 8 - smallMetrics.height(), textW, smallMetrics.height()),
+                Qt::AlignLeft | Qt::AlignVCenter,
+                smallMetrics.elidedText(status, Qt::ElideRight, int(textW)));
+
+    // Progression, au bas de la carte
+    if ((f.state == ChatEntry::File::Downloading || f.state == ChatEntry::File::Waiting) && f.total > 0) {
+        const QRectF track(card.left() + 10, card.bottom() - 4, card.width() - 20, 3);
+        p->setPen(Qt::NoPen);
+        p->setBrush(QColor(0, 0, 0, 30));
+        p->drawRoundedRect(track, 1.5, 1.5);
+        p->setBrush(LinkText);
+        p->drawRoundedRect(QRectF(track.left(), track.top(), track.width() * f.received / f.total, track.height()),
+                           1.5, 1.5);
+        p->setBrush(Qt::NoBrush);
+    }
 }

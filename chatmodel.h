@@ -52,6 +52,17 @@ struct ChatEntry
     QImage image;
     QByteArray imageData;
     bool animated = false; // GIF animé : joué dans la bulle tant qu'il est visible
+    // Fichier joint (cf. filestore.h) : fiche et état du téléchargement chez nous
+    struct File
+    {
+        enum State { None, NotDownloaded, Downloading, Waiting, Complete };
+        QString id, name, mime;
+        qint64 size = 0;
+        State state = None;
+        int received = 0, total = 0; // morceaux
+        bool risky = false;          // exécutable ou script
+    };
+    File file;
     // Presence : évènements consécutifs regroupés en une seule ligne, dépliable d'un clic
     QList<PresenceEvent> events;
     bool expanded = false;
@@ -76,6 +87,7 @@ public:
     int rowOf(const QString &id) const; // -1 si absent
     int markerRow() const;              // -1 si pas de séparateur « Nouveaux messages »
     bool setReactions(const QString &id, const QList<ChatEntry::Reaction> &reactions); // false si absent
+    void setFileState(const QString &fileId, ChatEntry::File::State state, int received, int total);
     void setAuthorVerified(const QString &onion, bool verified);
     void removeRow(int row);
     // Recherche : lignes des messages contenant term (sans tenir compte de la casse ni des accents)

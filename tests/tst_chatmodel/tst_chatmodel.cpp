@@ -565,6 +565,61 @@ private slots:
         QCOMPARE(view.runningAnimations(), 0);
     }
 
+    void fileCard()
+    {
+        ChatView view;
+        view.resize(480, 400);
+        const QDateTime t0 = QDateTime::currentDateTime();
+        ChatEntry m = message(QString(), t0); // fichier sans légende
+        m.id = "m";
+        m.file.id = QString(64, 'a');
+        m.file.name = "rapport.pdf";
+        m.file.mime = "application/pdf";
+        m.file.size = 3 * 1024 * 1024;
+        m.file.state = ChatEntry::File::NotDownloaded;
+        m.file.total = 20;
+        view.addMessage(m);
+        ChatEntry reply = message("Merci !", t0.addSecs(5));
+        reply.replyTo = "m";
+        view.addMessage(reply);
+        QCOMPARE(view.chatModel()->entry(1).replyText, QString("📎 rapport.pdf")); // citation d'un fichier
+        QCOMPARE(ChatView::quotedText(view.chatModel()->entry(0)), QString("📎 rapport.pdf"));
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+
+        auto *delegate = qobject_cast<ChatDelegate *>(view.itemDelegate());
+        QSignalSpy requested(&view, &ChatView::fileRequested);
+        const QModelIndex idx = view.chatModel()->index(0);
+        auto clickCard = [&] {
+            QStyleOptionViewItem opt;
+            opt.rect = view.visualRect(idx);
+            for (int y = opt.rect.top(); y < opt.rect.bottom(); y += 3)
+                for (int x = opt.rect.left(); x < opt.rect.right(); x += 6)
+                    if (delegate->hitTest(idx, opt.rect, QPoint(x, y)).kind == ChatDelegate::Hit::File) {
+                        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), Qt::LeftButton, Qt::NoButton,
+                                            Qt::NoModifier);
+                        return delegate->editorEvent(&release, view.model(), opt, idx);
+                    }
+            return false;
+        };
+        QVERIFY(clickCard()); // pas encore là : télécharger
+        QCOMPARE(requested.last(), QVariantList({m.file.id, QVariant::fromValue(ChatView::FileAction::Download)}));
+
+        view.setFileState(m.file.id, ChatEntry::File::Downloading, 7, 20);
+        QCOMPARE(view.chatModel()->entry(0).file.received, 7);
+        const int before = requested.count();
+        QVERIFY(clickCard()); // en cours : rien de plus
+        QCOMPARE(requested.count(), before);
+        view.grab(); // carte avec barre de progression
+
+        view.setFileState(m.file.id, ChatEntry::File::Complete, 20, 20);
+        QVERIFY(clickCard()); // arrivé : ouvrir
+        QCOMPARE(requested.last(), QVariantList({m.file.id, QVariant::fromValue(ChatView::FileAction::Open)}));
+        view.setFileState(QString(64, 'z'), ChatEntry::File::Complete, 1, 1); // autre fichier : sans effet
+        QCOMPARE(view.chatModel()->entry(0).file.state, ChatEntry::File::Complete);
+        view.grab();
+    }
+
     void avatarColorIsStable()
     {
         QCOMPARE(ChatView::colorFor("Alice"), ChatView::colorFor("Alice"));

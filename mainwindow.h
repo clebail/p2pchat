@@ -68,11 +68,19 @@ private:
     void startReply(const QString &id, const QString &author, const QString &text);
     void cancelReply();
     // Image jointe au message en cours d'écriture (aperçu au-dessus de la zone de saisie)
-    void chooseImage();
+    void chooseAttachment();
+    void attachPath(const QString &path); // image, ou fichier joint
     bool attachFromMime(const QMimeData *mime); // false : rien d'utilisable
     void attachPrepared(const Attachment::Prepared &prepared);
     void cancelImage();
     QString notificationBody(const QJsonObject &msg) const;
+
+    // Fichiers joints (cf. filestore.h)
+    static ChatEntry::File::State fileEntryState(int groupNodeKind);
+    void updateFileEntry(const QString &fileId);
+    void onFileRequested(const QString &fileId, ChatView::FileAction action);
+    void openFile(const QString &fileId);   // avertissement avant un programme ou un script
+    void saveFileAs(const QString &fileId);
 
     // « Alice écrit… » : signal envoyé aux membres connectés, au plus toutes les 3 s pendant la frappe
     void onTyping();
@@ -146,6 +154,7 @@ private:
     QWidget *m_imageBar = nullptr;
     QLabel *m_imagePreview = nullptr, *m_imageInfo = nullptr;
     QByteArray m_pendingImage; // JPEG prêt à partir avec le prochain message
+    QString m_pendingFile;     // ou fichier à joindre (chemin)
     QWidget *m_searchBar = nullptr;
     QLineEdit *m_searchEdit = nullptr;
     QLabel *m_searchCount = nullptr;
