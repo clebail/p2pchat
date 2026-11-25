@@ -3,6 +3,7 @@
 #include "invitation.h"
 
 #include <QNetworkProxy>
+#include <QFile>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTcpSocket>
@@ -44,6 +45,8 @@ private:
         t.presenceGraceMs = 400;
         t.presenceBatchMs = 30;
         t.typingShownMs = 500;
+        t.fileTickMs = 20;
+        t.fileRequestTimeoutMs = 1000;
         return t;
     }
 
@@ -71,6 +74,7 @@ private:
         p.node = std::make_unique<GroupNode>(*p.store, m_dir->filePath(QStringLiteral("%1.jsonl").arg(name)),
                                              fastTiming());
         QVERIFY(p.node->listen());
+        p.node->setFilesDir(m_dir->filePath(QStringLiteral("%1-fichiers").arg(name)));
         const QString self = p.onion;
         p.node->setDialer([this, self](const QString &onion) {
             auto *s = new QTcpSocket;
@@ -353,6 +357,170 @@ private slots:
         start(a, 'a');
         a.node->loadHistory();
         QVERIFY(a.added.isEmpty());
+    }
+
+    // ---------------------------------------------------------------- Fichiers
+
+    QString sourceFile(const QString &name, const QByteArray &content)
+    {
+        const QString path = m_dir->filePath("envoi-" + name);
+        QFile f(path);
+        if (f.open(QIODevice::WriteOnly))
+            f.write(content);
+        return path;
+    }
+
+    static QByteArray contentOf(Peer &p, const QString &id)
+    {
+        QFile f(p.node->files().path(id));
+        return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+    }
+
+    static QString fileId(const QJsonObject &msg)
+    {
+        const auto info = Files::FileInfo::fromJson(msg.value("f").toObject());
+        return info ? info->id() : QString();
+    }
+
+    void smallFileIsDownloadedAutomatically()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        const QByteArray content = Crypto::randomBytes(300 * 1024);
+        QString error;
+        const QJsonObject msg = a.node->sendFile(sourceFile("photo.raw", content), "Regardez", {}, &error);
+        QVERIFY2(!msg.isEmpty(), qPrintable(error));
+        const QString id = fileId(msg);
+        QCOMPARE(a.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QCOMPARE(contentOf(b, id), content);
+        QCOMPARE(contentOf(c, id), content);
+        // L'annonce est un message authentique, avec sa légende
+        QCOMPARE(countId(b.added, Protocol::Message::id(msg)), 1);
+        QVERIFY(b.node->verifiedFile(b.added.last(), false));
+        QCOMPARE(Protocol::Message::caption(b.added.last(), true), QString("Regardez"));
+    }
+
+    void bigFileOnlyOnDemand()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        const QByteArray content = Crypto::randomBytes(int(Files::AutoDownloadBytes) + 500 * 1024);
+        QString error;
+        const QString id = fileId(a.node->sendFile(sourceFile("video.mp4", content), {}, {}, &error));
+        QVERIFY2(!id.isEmpty(), qPrintable(error));
+        QTRY_COMPARE(countId(b.added, Protocol::Message::id(a.added.last())), 1);
+        QTest::qWait(200);
+        QCOMPARE(b.node->fileState(id).kind, GroupNode::FileState::NotDownloaded); // plus de 2 Mo : sur demande
+        QCOMPARE(b.node->fileState(id).total, Files::FileInfo::expectedChunks(content.size()));
+
+        QSignalSpy progress(b.node.get(), &GroupNode::fileChanged);
+        b.node->download(id);
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QCOMPARE(contentOf(b, id), content);
+        QVERIFY(progress.count() > 3); // progression signalée en route
+        QCOMPARE(c.node->fileState(id).kind, GroupNode::FileState::NotDownloaded); // C n'a rien demandé
+        QVERIFY(!c.node->files().has(id));
+    }
+
+    void servedByAnotherMember()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        const QByteArray content = Crypto::randomBytes(3 * 1024 * 1024);
+        const QString id = fileId(a.node->sendFile(sourceFile("archive.zip", content)));
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::NotDownloaded);
+        b.node->download(id);
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
+
+        a.node->setOffline(); // l'auteur n'est plus là : B, qui l'a, le fournit
+        QTRY_VERIFY(!c.node->isConnected(a.onion));
+        QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::NotDownloaded);
+        c.node->download(id);
+        QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QCOMPARE(contentOf(c, id), content);
+    }
+
+    void resumesAfterCutAndRestart()
+    {
+        mesh();
+        Peer &a = peer('a'), &c = peer('c');
+        const QByteArray content = Crypto::randomBytes(4 * 1024 * 1024);
+        const QString id = fileId(a.node->sendFile(sourceFile("gros.iso", content)));
+        QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::NotDownloaded);
+
+        // Coupure au milieu : C passe hors ligne après 5 morceaux
+        int cutAt = -1;
+        auto cut = connect(c.node.get(), &GroupNode::fileChanged, this, [&] {
+            if (cutAt < 0 && c.node->fileState(id).received >= 5) {
+                cutAt = c.node->fileState(id).received;
+                QTimer::singleShot(0, c.node.get(), &GroupNode::setOffline);
+            }
+        });
+        c.node->download(id);
+        QTRY_VERIFY(cutAt >= 0);
+        disconnect(cut);
+        QTRY_VERIFY(!c.node->hasConnections());
+        const int afterCut = c.node->fileState(id).received;
+        QVERIFY(afterCut >= cutAt && afterCut < c.node->fileState(id).total);
+        QCOMPARE(c.node->fileState(id).kind, GroupNode::FileState::Waiting);
+
+        // Redémarrage complet de C : le téléchargement reprend là où il en était
+        start(c, 'c');
+        c.node->loadHistory();
+        QCOMPARE(c.node->fileState(id).received, afterCut);
+        c.node->setOnline(c.onion);
+        QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QCOMPARE(contentOf(c, id), content);
+    }
+
+    void corruptedSourceIsAvoided()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        const QByteArray content = Crypto::randomBytes(3 * 1024 * 1024);
+        const QString id = fileId(a.node->sendFile(sourceFile("donnees.bin", content)));
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::NotDownloaded);
+        b.node->download(id);
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
+        // Le fichier de B s'abîme (ou B triche) ; A s'absente
+        {
+            QFile f(b.node->files().path(id));
+            QVERIFY(f.open(QIODevice::ReadWrite) && f.seek(Files::ChunkBytes + 10));
+            f.write("abime");
+        }
+        a.node->setOffline();
+        QTRY_VERIFY(!c.node->isConnected(a.onion));
+        QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::NotDownloaded);
+        c.node->download(id);
+        // Le morceau faux de B est refusé, B est écarté : C attend une autre source
+        QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::Waiting);
+        QTest::qWait(200);
+        QVERIFY(c.node->fileState(id).kind != GroupNode::FileState::Complete);
+        a.node->setOnline(a.onion); // l'auteur revient : C termine auprès de lui
+        QTRY_COMPARE_WITH_TIMEOUT(c.node->fileState(id).kind, GroupNode::FileState::Complete, 10000);
+        QCOMPARE(contentOf(c, id), content);
+    }
+
+    void fileLimitsAndClearing()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b');
+        // Plus de 100 Mo : refusé avant tout envoi (fichier creux, rien n'est écrit)
+        const QString big = sourceFile("enorme.bin", {});
+        QFile f(big);
+        QVERIFY(f.open(QIODevice::ReadWrite) && f.resize(Files::MaxFileBytes + 1));
+        f.close();
+        QString error;
+        QVERIFY(a.node->sendFile(big, {}, {}, &error).isEmpty());
+        QVERIFY(error.contains("100 Mo"));
+
+        const QString id = fileId(a.node->sendFile(sourceFile("petit.txt", "contenu")));
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
+        b.node->clearHistory(); // vider la conversation efface aussi les fichiers
+        QVERIFY(!b.node->files().has(id));
+        QCOMPARE(b.node->fileState(id).kind, GroupNode::FileState::Unknown);
     }
 
     void cannotSendWithoutNetworkOrGroup()

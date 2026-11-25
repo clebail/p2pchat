@@ -1113,7 +1113,7 @@ void MainWindow::sendCurrent()
         return; // Entrée choisit un pseudo dans la liste
     const QString text = m_input->text().trimmed();
     // Sans personne en ligne, le message partira à la prochaine synchronisation
-    if (m_node->sendMessage(text, {m_replyTo, m_pendingImage}).isEmpty())
+    if (m_node->sendMessage(text, {m_replyTo, m_pendingImage, {}}).isEmpty())
         return;
     m_chat->clearUnreadMarker(); // on a répondu : les messages précédents sont lus
     m_input->clear();

@@ -18,7 +18,7 @@
 namespace Files {
 
 constexpr qint64 MaxFileBytes = 100LL * 1024 * 1024;           // 100 Mo
-constexpr int ChunkBytes = 192 * 1024;                          // un morceau tient dans une trame (256 Ko)
+constexpr int ChunkBytes = 160 * 1024; // en base64 (×4/3) + JSON : 214 Ko, dans une trame de 256 Ko
 constexpr qint64 AutoDownloadBytes = 2LL * 1024 * 1024;         // téléchargés sans demander
 constexpr qint64 RetentionMs = 30LL * 24 * 3600 * 1000;         // comme la synchronisation des messages
 constexpr qint64 FreeSpaceMarginBytes = 50LL * 1024 * 1024;     // place gardée libre sur le disque
@@ -27,6 +27,8 @@ constexpr qint64 FreeSpaceMarginBytes = 50LL * 1024 * 1024;     // place gardée
 QString sanitizeName(const QString &name);
 // Exécutable ou script : avertir avant de l'ouvrir
 bool isRisky(const QString &name);
+// « 850 Ko », « 2,3 Mo »
+QString formatSize(qint64 bytes);
 
 // Fiche d'un fichier, telle qu'annoncée (et signée) par son auteur
 struct FileInfo

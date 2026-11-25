@@ -7,7 +7,9 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QFile>
+#include <QFileInfo>
 #include <QNetworkProxy>
+#include <QRegularExpression>
 #include <QTcpServer>
 #include <QTcpSocket>
 
@@ -68,6 +70,11 @@ GroupNode::GroupNode(GroupStore &group, const QString &historyPath, const Timing
     });
     m_lastTick = now();
     m_wakeTimer.start();
+
+    setFilesDir(QFileInfo(historyPath).absolutePath() + "/fichiers");
+    m_fileTimer.setInterval(m_timing.fileTickMs);
+    connect(&m_fileTimer, &QTimer::timeout, this, &GroupNode::filesTick);
+    m_fileTimer.start();
 }
 
 GroupNode::~GroupNode()
@@ -220,6 +227,7 @@ void GroupNode::loadHistory()
         } else if (trust == Trust::Verified && !Protocol::Message::id(row.msg).isEmpty()) {
             // Les plus anciens (non affichés) restent disponibles pour la synchronisation
             m_store.insert(Protocol::Message::id(row.msg), History::stored(row.msg, row.mine));
+            noteFileAnnounce(row.msg, row.mine);
         }
     }
 }
@@ -229,6 +237,9 @@ void GroupNode::clearHistory()
     QFile::remove(m_historyPath);
     m_store.clear();
     m_reactions.clear();
+    m_files->clear(); // fichiers reçus et envoyés : effacés avec la conversation
+    m_fileInfos.clear();
+    m_downloads.clear();
     m_group.setClearedBefore(now());
 }
 
@@ -248,6 +259,7 @@ void GroupNode::addMessage(const QJsonObject &msg, bool mine, Trust trust, bool 
     if (!id.isEmpty() && trust == Trust::Verified) { // seuls les messages authentiques sont resynchronisés
         m_store.insert(id, History::stored(msg, mine));
         m_seenIds.insert(id);
+        noteFileAnnounce(msg, mine);
     }
     emit messageAdded(msg, mine, trust);
     if (save)
@@ -270,7 +282,7 @@ void GroupNode::appendToHistoryFile(const QJsonObject &record, bool mine)
 
 QJsonObject GroupNode::sendMessage(const QString &text, const Protocol::Message::Extras &extras)
 {
-    if ((text.isEmpty() && extras.image.isEmpty()) || !canSend())
+    if ((text.isEmpty() && extras.image.isEmpty() && extras.file.isEmpty()) || !canSend())
         return {};
     const QJsonObject msg = Protocol::Message::create(m_group.identitySeed(), m_ownOnion, m_group.nickname(), text,
                                                       now(), extras);
@@ -409,6 +421,14 @@ void GroupNode::onClosed(PeerConnection *c, const QString &reason)
         m_backoff.remove(activeKey); // il était là il y a un instant : on le rappelle tout de suite
         emit peerLost(activeKey);
         m_peerPresence.remove(activeKey); // ceux qu'il voyait ne sont plus joignables par lui
+        m_peerFiles.remove(activeKey);
+        m_serveQueue.remove(activeKey);
+        for (auto it = m_downloads.begin(); it != m_downloads.end(); ++it)
+            if (it->source == activeKey && it->chunk >= 0) {
+                it->chunk = -1; // un autre membre prendra le relais
+                emit fileChanged(it.key());
+            }
+        QTimer::singleShot(0, this, &GroupNode::pumpDownloads);
         if (m_typing.remove(activeKey) > 0)
             emit typingChanged();
         m_presenceTimer.start();
@@ -496,6 +516,11 @@ void GroupNode::setActive(PeerConnection *c)
     if (isNew)
         broadcast(membersMessage(), c);
     c->send(inventoryMessage()); // après la liste des membres : les clés des auteurs sont connues
+    if (c->peerVersion() >= Protocol::FilesVersion) {
+        QStringList ids = m_files->complete();
+        ids += m_downloads.keys(); // en cours : il peut déjà profiter des morceaux reçus
+        advertiseFiles(ids, c);
+    }
     emit peerReady(onion);       // reprise de la console partagée
     c->send(presenceMessage());
     if (!wasOnline) {
@@ -528,6 +553,10 @@ void GroupNode::closeAll()
     m_peerPresence.clear();
     m_quietDrops.clear();
     m_typing.clear();
+    m_peerFiles.clear();
+    m_serveQueue.clear();
+    for (Download &d : m_downloads)
+        d.chunk = -1;
     for (const PeerConnection *c : all)
         if (c->isReady())
             emit peerLost(c->peerOnion());
@@ -647,6 +676,14 @@ void GroupNode::onReceived(PeerConnection *c, const QJsonObject &o)
         broadcastReaction(o, c); // relais, comme les messages
     } else if (type == "typing") {
         onPeerTyping(c);
+    } else if (type == "file-have") {
+        onFileHave(c, o);
+    } else if (type == "file-want") {
+        onFileWant(c, o);
+    } else if (type == "file-chunk") {
+        onFileChunk(c, o);
+    } else if (type == "file-none") {
+        onFileNone(c, o);
     } else if (type == "msg") {
         onChatMessage(c, o);
     }
@@ -778,4 +815,311 @@ void GroupNode::broadcastReaction(const QJsonObject &r, PeerConnection *except)
     for (PeerConnection *p : std::as_const(m_active))
         if (p != except && p->peerVersion() >= Reactions::Version)
             p->send(r);
+}
+
+// ---------------------------------------------------------------- Fichiers
+
+void GroupNode::setFilesDir(const QString &dir)
+{
+    m_files = std::make_unique<Files::FileStore>(dir);
+    m_files->cleanup(now());
+    m_lastCleanup = now();
+}
+
+std::optional<Files::FileInfo> GroupNode::verifiedFile(const QJsonObject &msg, bool mine) const
+{
+    return Protocol::Message::verifiedFile(msg, authorKey(msg, mine));
+}
+
+QList<PeerConnection *> GroupNode::fileCapablePeers() const
+{
+    QList<PeerConnection *> peers;
+    for (PeerConnection *p : m_active)
+        if (p->peerVersion() >= Protocol::FilesVersion)
+            peers << p;
+    return peers;
+}
+
+QJsonObject GroupNode::sendFile(const QString &path, const QString &caption, const QString &replyTo, QString *error)
+{
+    if (!canSend()) {
+        if (error)
+            *error = tr("pas de conversation, ou réseau pas encore prêt");
+        return {};
+    }
+    const auto info = m_files->import(path, error);
+    if (!info)
+        return {};
+    m_fileInfos.insert(info->id(), *info);
+    advertiseFiles({info->id()}); // avant l'annonce : ceux qui la reçoivent savent à qui le demander
+    return sendMessage(caption, {replyTo, {}, info->toJson()});
+}
+
+void GroupNode::noteFileAnnounce(const QJsonObject &msg, bool mine)
+{
+    if (!msg.contains("f"))
+        return;
+    const auto info = verifiedFile(msg, mine);
+    if (!info)
+        return;
+    const QString id = info->id();
+    m_fileInfos.insert(id, *info);
+    if (mine || m_files->has(id) || m_downloads.contains(id))
+        return;
+    // Petit fichier récent, ou téléchargement interrompu : on le (re)prend sans attendre de clic
+    const bool recent = Protocol::Message::timestamp(msg) >= now() - Files::RetentionMs;
+    const bool interrupted = m_files->received(id).count(true) > 0;
+    if (interrupted || (recent && info->size <= Files::AutoDownloadBytes))
+        download(id);
+}
+
+void GroupNode::download(const QString &fileId)
+{
+    const auto it = m_fileInfos.constFind(fileId);
+    if (it == m_fileInfos.cend() || m_files->has(fileId) || m_downloads.contains(fileId))
+        return;
+    QString error;
+    if (!m_files->begin(*it, &error)) {
+        qWarning().noquote() << "[fichiers] téléchargement impossible :" << error;
+        return;
+    }
+    m_downloads.insert(fileId, {});
+    emit fileChanged(fileId);
+    pumpDownloads();
+}
+
+void GroupNode::cancelDownload(const QString &fileId)
+{
+    if (!m_downloads.remove(fileId))
+        return;
+    if (!m_files->has(fileId))
+        m_files->remove(fileId);
+    emit fileChanged(fileId);
+}
+
+GroupNode::FileState GroupNode::fileState(const QString &fileId) const
+{
+    FileState state;
+    const auto info = m_fileInfos.constFind(fileId);
+    if (info == m_fileInfos.cend() && !m_files->has(fileId))
+        return state;
+    state.total = info != m_fileInfos.cend() ? info->chunkCount() : 0;
+    if (m_files->has(fileId)) {
+        state.kind = FileState::Complete;
+        state.received = state.total;
+        return state;
+    }
+    state.received = m_files->received(fileId).count(true);
+    const auto d = m_downloads.constFind(fileId);
+    if (d == m_downloads.cend()) {
+        state.kind = FileState::NotDownloaded;
+    } else if (d->chunk >= 0) {
+        state.kind = FileState::Downloading;
+        state.source = d->source;
+    } else {
+        state.kind = FileState::Waiting; // aucun membre connecté ne l'a pour l'instant
+    }
+    return state;
+}
+
+bool GroupNode::peerHasChunk(const QString &peer, const QString &fileId, int chunk) const
+{
+    const auto files = m_peerFiles.constFind(peer);
+    if (files == m_peerFiles.cend())
+        return false;
+    const auto have = files->constFind(fileId);
+    if (have == files->cend())
+        return false;
+    return have->isEmpty() || (chunk < have->size() && have->testBit(chunk)); // vide : fichier complet
+}
+
+void GroupNode::advertiseFiles(const QStringList &ids, PeerConnection *only)
+{
+    QJsonArray files;
+    for (const QString &id : ids) {
+        if (m_files->has(id)) {
+            files.append(QJsonObject{{"f", id}, {"have", "all"}});
+        } else {
+            const QBitArray have = m_files->received(id);
+            if (have.count(true) == 0)
+                continue;
+            QString bits(have.size(), QLatin1Char('0'));
+            for (int i = 0; i < have.size(); ++i)
+                if (have.testBit(i))
+                    bits[i] = QLatin1Char('1');
+            files.append(QJsonObject{{"f", id}, {"have", bits}});
+        }
+    }
+    if (files.isEmpty())
+        return;
+    const QJsonObject msg{{"t", "file-have"}, {"files", files}};
+    if (only)
+        only->send(msg);
+    else
+        for (PeerConnection *p : fileCapablePeers())
+            p->send(msg);
+}
+
+void GroupNode::onFileHave(PeerConnection *c, const QJsonObject &o)
+{
+    const QString peer = m_active.key(c);
+    if (peer.isEmpty())
+        return;
+    static const QRegularExpression idRe(QStringLiteral("^[0-9a-f]{64}$"));
+    auto &known = m_peerFiles[peer];
+    for (const QJsonValue &v : o.value("files").toArray()) {
+        const QJsonObject f = v.toObject();
+        const QString id = f.value("f").toString();
+        if (!idRe.match(id).hasMatch() || (known.size() >= 5000 && !known.contains(id)))
+            continue; // garde-fou : un membre ne peut pas nous faire tout retenir
+        const QString have = f.value("have").toString();
+        if (have == QLatin1String("all")) {
+            known.insert(id, QBitArray());
+        } else if (have.size() <= Files::FileInfo::expectedChunks(Files::MaxFileBytes)) {
+            QBitArray bits(have.size());
+            for (int i = 0; i < have.size(); ++i)
+                bits.setBit(i, have.at(i) == QLatin1Char('1'));
+            known.insert(id, bits);
+        }
+    }
+    pumpDownloads();
+}
+
+void GroupNode::onFileWant(PeerConnection *c, const QJsonObject &o)
+{
+    const QString peer = m_active.key(c);
+    if (peer.isEmpty())
+        return;
+    auto &queue = m_serveQueue[peer];
+    const QPair<QString, int> request{o.value("f").toString(), o.value("i").toInt(-1)};
+    if (queue.size() < 8 && !queue.contains(request)) // il ne demande qu'un morceau à la fois
+        queue.append(request);
+    serveQueued();
+}
+
+void GroupNode::serveQueued()
+{
+    for (auto it = m_serveQueue.begin(); it != m_serveQueue.end();) {
+        PeerConnection *c = m_active.value(it.key());
+        if (!c) {
+            it = m_serveQueue.erase(it);
+            continue;
+        }
+        // Un morceau à la fois, et seulement quand la connexion a écoulé son retard : les messages passent
+        if (!it->isEmpty() && c->pendingBytes() < m_timing.fileBacklogBytes) {
+            const QPair<QString, int> request = it->takeFirst();
+            const QByteArray data = m_files->readChunk(request.first, request.second);
+            if (data.isEmpty())
+                c->send({{"t", "file-none"}, {"f", request.first}});
+            else
+                c->send({{"t", "file-chunk"}, {"f", request.first}, {"i", request.second},
+                         {"d", Protocol::toB64(data)}});
+        }
+        it = it->isEmpty() ? m_serveQueue.erase(it) : std::next(it);
+    }
+}
+
+void GroupNode::onFileChunk(PeerConnection *c, const QJsonObject &o)
+{
+    const QString peer = m_active.key(c);
+    const QString id = o.value("f").toString();
+    const int index = o.value("i").toInt(-1);
+    const auto it = m_downloads.find(id);
+    if (peer.isEmpty() || it == m_downloads.end() || it->source != peer || it->chunk != index)
+        return; // pas demandé (ou plus attendu)
+    it->chunk = -1;
+    const QByteArray data = Protocol::fromB64(o.value("d"));
+    switch (data.size() > Files::ChunkBytes ? Files::FileStore::ChunkResult::Rejected
+                                            : m_files->writeChunk(id, index, data)) {
+    case Files::FileStore::ChunkResult::Accepted:
+    case Files::FileStore::ChunkResult::Duplicate:
+        break;
+    case Files::FileStore::ChunkResult::Completed:
+        m_downloads.erase(it);
+        advertiseFiles({id}); // les autres peuvent désormais le demander aussi à nous
+        break;
+    case Files::FileStore::ChunkResult::Rejected:
+        qWarning().noquote() << "[fichiers] morceau faux reçu de" << peer.left(8) << ": source écartée";
+        it->bad.insert(peer);
+        break;
+    case Files::FileStore::ChunkResult::Unknown:
+        m_downloads.erase(it); // fiche perdue (magasin vidé) : abandon
+        break;
+    }
+    emit fileChanged(id);
+    pumpDownloads();
+}
+
+void GroupNode::onFileNone(PeerConnection *c, const QJsonObject &o)
+{
+    const QString peer = m_active.key(c);
+    const QString id = o.value("f").toString();
+    if (peer.isEmpty())
+        return;
+    if (m_peerFiles.contains(peer))
+        m_peerFiles[peer].remove(id);
+    const auto it = m_downloads.find(id);
+    if (it != m_downloads.end() && it->source == peer) {
+        it->chunk = -1;
+        emit fileChanged(id);
+    }
+    pumpDownloads();
+}
+
+void GroupNode::pumpDownloads()
+{
+    // Membres à qui un morceau est déjà demandé : un seul à la fois chacun
+    QSet<QString> busy;
+    for (const Download &d : std::as_const(m_downloads))
+        if (d.chunk >= 0)
+            busy.insert(d.source);
+
+    for (auto it = m_downloads.begin(); it != m_downloads.end(); ++it) {
+        if (it->chunk >= 0)
+            continue;
+        const QString id = it.key();
+        const QBitArray have = m_files->received(id);
+        if (have.isEmpty())
+            continue;
+        bool requested = false;
+        for (PeerConnection *p : fileCapablePeers()) {
+            const QString peer = m_active.key(p);
+            if (busy.contains(peer) || it->bad.contains(peer))
+                continue;
+            for (int i = 0; i < have.size() && !requested; ++i) {
+                if (have.testBit(i) || !peerHasChunk(peer, id, i))
+                    continue;
+                p->send({{"t", "file-want"}, {"f", id}, {"i", i}});
+                it->source = peer;
+                it->chunk = i;
+                it->requestedAt = now();
+                busy.insert(peer);
+                requested = true;
+            }
+            if (requested)
+                break;
+        }
+        if (requested)
+            emit fileChanged(id);
+    }
+}
+
+void GroupNode::filesTick()
+{
+    // Morceau demandé resté sans réponse : on le redemande, éventuellement à un autre
+    const qint64 t = now();
+    bool expired = false;
+    for (auto it = m_downloads.begin(); it != m_downloads.end(); ++it)
+        if (it->chunk >= 0 && t - it->requestedAt > m_timing.fileRequestTimeoutMs) {
+            it->chunk = -1;
+            expired = true;
+        }
+    if (expired)
+        pumpDownloads();
+    if (!m_serveQueue.isEmpty())
+        serveQueued();
+    if (t - m_lastCleanup > 12LL * 3600 * 1000) { // fichiers de plus de 30 jours
+        m_lastCleanup = t;
+        m_files->cleanup(t);
+    }
 }

@@ -1,10 +1,12 @@
 #pragma once
 #include "connectionpolicy.h"
+#include "filestore.h"
 #include "groupstore.h"
 #include "history.h"
 #include "protocol.h"
 #include "reactions.h"
 
+#include <QBitArray>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -13,6 +15,8 @@
 #include <QTimer>
 
 #include <functional>
+#include <memory>
+#include <optional>
 
 struct Invitation;
 class PeerConnection;
@@ -50,6 +54,9 @@ public:
         int wakeTickMs = 10 * 1000;          // détection de sortie de veille
         qint64 wakeGapMs = 45 * 1000;        // tic arrivé si tard : sortie de veille
         qint64 sleepKillsLinksMs = 110 * 1000; // au-delà, les correspondants nous ont déjà fermé la porte
+        int fileTickMs = 200;                  // fichiers : délais dépassés, envois en attente
+        qint64 fileRequestTimeoutMs = 60 * 1000; // morceau demandé sans réponse : autre source
+        qint64 fileBacklogBytes = 64 * 1024;   // morceau envoyé seulement si la connexion a écoulé son retard
     };
 
     GroupNode(GroupStore &group, const QString &historyPath, const Timing &timing, QObject *parent = nullptr);
@@ -95,6 +102,23 @@ public:
     void typing();                                       // au plus toutes les Timing::typingSendMs
     void sendTo(const QString &onion, const QJsonObject &obj); // console partagée
 
+    // ---- Fichiers (cf. filestore.h) : annonce signée, puis morceaux demandés à qui les a
+    void setFilesDir(const QString &dir); // par défaut : « fichiers » à côté de l'historique
+    Files::FileStore &files() { return *m_files; }
+    // Copie le fichier dans le magasin et l'annonce au groupe ; message vide (et error) si impossible
+    QJsonObject sendFile(const QString &path, const QString &caption = {}, const QString &replyTo = {},
+                         QString *error = nullptr);
+    std::optional<Files::FileInfo> verifiedFile(const QJsonObject &msg, bool mine) const;
+    void download(const QString &fileId); // automatique pour les petits fichiers (Files::AutoDownloadBytes)
+    void cancelDownload(const QString &fileId);
+    struct FileState
+    {
+        enum Kind { Unknown, NotDownloaded, Downloading, Waiting, Complete } kind = Unknown;
+        int received = 0, total = 0; // morceaux
+        QString source;              // membre qui nous l'envoie
+    };
+    FileState fileState(const QString &fileId) const;
+
     // ---- Connexions
     void connectToMembers();
     void reconnectNow(); // abandonne les tentatives en cours et relance tout de suite
@@ -124,6 +148,7 @@ signals:
     void invalidMessage(const QString &author);                       // signature invalide
     void stateChanged();                                              // connexions, membres, erreurs
     void typingChanged();
+    void fileChanged(const QString &fileId); // téléchargement commencé, progression, fin, en attente
     // Console partagée
     void peerReady(const QString &onion);
     void peerLost(const QString &onion);
@@ -160,6 +185,19 @@ private:
     void sendBatches(PeerConnection *c, const QList<QJsonObject> &messages);
     void receiveSync(PeerConnection *from, const QJsonArray &messages);
 
+    // Fichiers
+    void noteFileAnnounce(const QJsonObject &msg, bool mine);
+    void advertiseFiles(const QStringList &ids, PeerConnection *only = nullptr); // file-have
+    void onFileHave(PeerConnection *c, const QJsonObject &o);
+    void onFileWant(PeerConnection *c, const QJsonObject &o);
+    void onFileChunk(PeerConnection *c, const QJsonObject &o);
+    void onFileNone(PeerConnection *c, const QJsonObject &o);
+    void pumpDownloads();
+    void serveQueued();
+    void filesTick();
+    bool peerHasChunk(const QString &peer, const QString &fileId, int chunk) const;
+    QList<PeerConnection *> fileCapablePeers() const;
+
     // Réactions (cf. reactions.h)
     bool acceptReaction(const QJsonObject &r, bool mine, bool save); // false : déjà connue
     bool verifyReaction(const QJsonObject &r, bool mine) const;
@@ -195,6 +233,22 @@ private:
     QHash<QString, qint64> m_typing;              // onion -> fin de l'indication « écrit… »
     qint64 m_lastTypingSent = 0;
     qint64 m_lastTick = 0;
+
+    // Fichiers
+    std::unique_ptr<Files::FileStore> m_files;
+    QHash<QString, Files::FileInfo> m_fileInfos; // fiches annoncées par des messages authentiques
+    struct Download
+    {
+        QString source;       // membre à qui un morceau est demandé
+        int chunk = -1;       // morceau demandé (-1 : aucun)
+        qint64 requestedAt = 0;
+        QSet<QString> bad;    // membres qui ont fourni un morceau faux : plus sollicités
+    };
+    QHash<QString, Download> m_downloads;
+    QHash<QString, QHash<QString, QBitArray>> m_peerFiles; // membre -> fichier -> morceaux (vide : complet)
+    QHash<QString, QList<QPair<QString, int>>> m_serveQueue; // membre -> morceaux qu'il nous a demandés
+    QTimer m_fileTimer;
+    qint64 m_lastCleanup = 0;
 
     QTimer m_retryTimer, m_syncTimer, m_presenceTimer, m_typingTimer, m_wakeTimer;
 };

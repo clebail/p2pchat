@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLocale>
 #include <QMimeDatabase>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -96,6 +97,16 @@ bool isRisky(const QString &name)
                                    "app",  "command", "desktop", "appimage", "run", "bin", "deb", "rpm",
                                    "apk",  "dmg", "pkg", "msix", "appx", "cpl", "dll", "so", "dylib"};
     return risky.contains(QFileInfo(name).suffix().toLower());
+}
+
+QString formatSize(qint64 bytes)
+{
+    const QLocale fr(QLocale::French);
+    if (bytes < 1024)
+        return tr("%1 octets").arg(bytes);
+    if (bytes < 1024 * 1024)
+        return tr("%1 Ko").arg(fr.toString(double(bytes) / 1024, 'f', bytes < 10 * 1024 ? 1 : 0));
+    return tr("%1 Mo").arg(fr.toString(double(bytes) / (1024 * 1024), 'f', bytes < 10LL * 1024 * 1024 ? 1 : 0));
 }
 
 // ---------------------------------------------------------------- Fiche

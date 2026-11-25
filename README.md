@@ -216,7 +216,8 @@ Sous AddressSanitizer et UndefinedBehaviorSanitizer (accès mémoire, fuites, co
 Ils couvrent la cryptographie, les codes d'invitation, la signature des messages, l'état du groupe (membres,
 trousseau), l'historique et sa synchronisation, les règles de reconnexion, la poignée de main entre deux
 `PeerConnection` reliées en local (sans Tor), des scénarios complets entre plusieurs membres
-(`tst_groupnode` : maillage, relais, réactions, rattrapage après une absence, message falsifié, imposteur…),
+(`tst_groupnode` : maillage, relais, réactions, rattrapage après une absence, message falsifié, imposteur,
+fichiers téléchargés automatiquement ou à la demande, reprise après coupure, source au fichier abîmé…),
 la négociation de la console partagée (`tst_terminalsharing`, sans ouvrir de terminal), l'instance unique et le modèle de la liste de messages (rendu hors écran).
 
 ## Sécurité

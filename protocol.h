@@ -4,14 +4,20 @@
 #include <QString>
 #include <QStringList>
 
+#include <optional>
+
+#include "filestore.h"
+
 // Éléments communs du protocole : formats, limites et messages signés.
 namespace Protocol {
 
 constexpr int MaxNickLength = 40;
 
 // Version annoncée dans le hello. 4 : identité Ed25519 ; 5 : citations (réponses) ; 6 : images ;
-// 7 : réactions (cf. reactions.h) ; 8 : GIF animés. Les versions antérieures à MinVersion sont refusées.
-constexpr int Version = 8;
+// 7 : réactions (cf. reactions.h) ; 8 : GIF animés ; 9 : fichiers (cf. filestore.h).
+// Les versions antérieures à MinVersion sont refusées.
+constexpr int Version = 9;
+constexpr int FilesVersion = 9;
 constexpr int MinVersion = 4;
 
 // Ce qu'un pair de cette version ne voit pas (pour l'avertir dans l'état des membres) ; vide s'il est à jour
@@ -45,12 +51,17 @@ QByteArray signingBytes(const QJsonObject &m);
 QByteArray replySigningBytes(const QJsonObject &m);
 // Ce que l'auteur signe dans "si" : identifiant, auteur et empreinte de l'image
 QByteArray imageSigningBytes(const QJsonObject &m, const QByteArray &image);
+// Ce que l'auteur signe dans "sf" : identifiant, auteur et fiche du fichier joint, champs tels que reçus
+QByteArray fileSigningBytes(const QJsonObject &m);
 extern const QString ImagePlaceholder;
+// Texte vu par les versions sans fichiers (et notre légende quand il n'y en a pas)
+QString filePlaceholder(const QJsonObject &fileInfo);
 
 struct Extras
 {
     QString replyTo;  // message cité
     QByteArray image; // JPEG ou PNG, déjà réduit (Attachment::encode)
+    QJsonObject file; // fiche d'un fichier joint (Files::FileInfo::toJson)
 };
 QJsonObject create(const QByteArray &identitySeed, const QString &authorOnion, const QString &nick,
                    const QString &text, qint64 timestampMs, const Extras &extras = {});
@@ -61,8 +72,10 @@ qint64 timestamp(const QJsonObject &m);
 QString verifiedReplyTo(const QJsonObject &m, const QByteArray &authorKey);
 // Image jointe, seulement si sa signature "si" est valide ; vide sinon
 QByteArray verifiedImage(const QJsonObject &m, const QByteArray &authorKey);
-// Texte à afficher : la légende (vide pour une image sans légende)
-QString caption(const QJsonObject &m, bool hasImage);
+// Fichier joint ("f"), seulement si sa signature "sf" est valide et sa fiche correcte ; nullopt sinon
+std::optional<Files::FileInfo> verifiedFile(const QJsonObject &m, const QByteArray &authorKey);
+// Texte à afficher : la légende (vide pour une image ou un fichier sans légende)
+QString caption(const QJsonObject &m, bool hasAttachment);
 } // namespace Message
 
 } // namespace Protocol

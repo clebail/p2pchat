@@ -1,5 +1,6 @@
 #include "crypto.h"
 #include "attachment.h"
+#include "filestore.h"
 #include "peerconnection.h"
 #include "protocol.h"
 
@@ -116,11 +117,20 @@ private slots:
         // Message avec une image de taille maximale : doit tenir dans une trame
         const QByteArray image = Crypto::randomBytes(Attachment::MaxBytes);
         const QJsonObject withImage = Protocol::Message::create(a.seed, a.onion, a.nick, QString(4000, QChar(0x20AC)), // légende la plus lourde en UTF-8
-                                                                1, {QString(64, 'r'), image});
+                                                                1, {QString(64, 'r'), image, {}});
         out->send(withImage);
         QTRY_COMPARE(received.count(), 3);
         QCOMPARE(Protocol::Message::verifiedImage(received.at(2).at(0).toJsonObject(), Ed25519::publicKey(a.seed)),
                  image);
+
+        // Morceau de fichier de taille maximale : doit tenir dans une trame
+        const QJsonObject chunk{{"t", "file-chunk"},
+                                {"f", QString(64, 'f')},
+                                {"i", Files::FileInfo::expectedChunks(Files::MaxFileBytes) - 1},
+                                {"d", Protocol::toB64(Crypto::randomBytes(Files::ChunkBytes))}};
+        out->send(chunk);
+        QTRY_COMPARE(received.count(), 4);
+        QCOMPARE(received.at(3).at(0).toJsonObject(), chunk);
 
         QSignalSpy back(out, &PeerConnection::received);
         m_incoming->send({{"t", "reply"}});
