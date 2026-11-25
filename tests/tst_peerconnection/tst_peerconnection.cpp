@@ -328,11 +328,10 @@ private slots:
 
     void unreachablePeerFails()
     {
-        // Port fermé : l'appel échoue sans attendre le délai de poignée de main
-        QTcpServer closedPort;
-        QVERIFY(closedPort.listen(QHostAddress::LocalHost, 0));
-        const quint16 port = closedPort.serverPort();
-        closedPort.close();
+        // Port fermé : l'appel échoue sans attendre le délai de poignée de main. Le port 1 (réservé) plutôt
+        // qu'un port libéré à l'instant : sous macOS, celui-ci peut être réattribué au socket qui appelle, qui
+        // se connecte alors à lui-même
+        const quint16 port = 1;
 
         auto *s = new QTcpSocket;
         s->setProxy(QNetworkProxy::NoProxy);
