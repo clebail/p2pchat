@@ -1,5 +1,4 @@
 include(../tests.pri)
-QT += widgets
+include(../../ui.pri)
 TARGET = tst_mentioncompleter
-SOURCES += tst_mentioncompleter.cpp $$PWD/../../mentioncompleter.cpp $$PWD/../../composer.cpp
-HEADERS += $$PWD/../../mentioncompleter.h $$PWD/../../composer.h
+SOURCES += tst_mentioncompleter.cpp

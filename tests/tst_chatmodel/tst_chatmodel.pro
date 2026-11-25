@@ -1,5 +1,4 @@
 include(../tests.pri)
-QT += widgets
+include(../../ui.pri)
 TARGET = tst_chatmodel
-SOURCES += tst_chatmodel.cpp $$PWD/../../chatview.cpp
-HEADERS += $$PWD/../../chatview.h
+SOURCES += tst_chatmodel.cpp

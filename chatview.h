@@ -1,13 +1,9 @@
 #pragma once
-#include "links.h"
-#include "markup.h"
+#include "chatdelegate.h"
+#include "chatmodel.h"
 
-#include <QAbstractListModel>
-#include <QPersistentModelIndex>
-#include <QDateTime>
-#include <QImage>
 #include <QListView>
-#include <QStyledItemDelegate>
+#include <QPersistentModelIndex>
 #include <QTimer>
 
 class QBuffer;
@@ -15,126 +11,8 @@ class QMovie;
 class QToolButton;
 class HoverBar;
 
-// Liste de messages façon messagerie mobile (Material 3) : bulles arrondies,
-// regroupement des messages consécutifs, avatars, séparateurs de date.
-
-// Évènement de présence (connexion / déconnexion d'un membre)
-struct PresenceEvent
-{
-    QString who;
-    bool online = true;
-    QString reason; // motif de déconnexion
-    QDateTime ts;
-};
-
-struct ChatEntry
-{
-    enum Kind { Message, System, Presence, Marker }; // Marker : « Nouveaux messages »
-    enum Trust { Verified, Unsigned, Invalid }; // signature de l'auteur (historique)
-    Kind kind = Message;
-    QString author;
-    QString authorOnion;         // vide pour nos messages et les lignes système
-    bool authorVerified = false; // identité vérifiée par code de sécurité : ✔ à côté du nom
-    QString text;
-    QDateTime ts;
-    bool mine = false;
-    Trust trust = Verified;
-    // Mentions « @pseudo » : (position, longueur) dans text ; mentionsMe : nous sommes mentionnés
-    QList<QPair<int, int>> mentions;
-    bool mentionsMe = false; // mis en avant : nous sommes mentionnés, ou c'est une réponse à l'un de nos messages
-    // Réponse avec citation : identifiants du message et du message cité. La citation (auteur, extrait)
-    // est retrouvée dans la liste par le modèle, y compris si le message cité arrive après la réponse.
-    QString id, replyTo;
-    QString replyAuthor, replyText;
-    bool replyFound = false;
-    QList<Links::Span> links; // liens cliquables (calculés à l'ajout)
-    Markup::Result markup;    // `code` et blocs ```…``` (calculés à l'ajout)
-    // Réactions, sous la bulle : émoji, nombre, si nous en sommes, et qui (infobulle)
-    struct Reaction
-    {
-        QString emoji;
-        int count = 0;
-        bool mine = false;
-        QString who;
-    };
-    QList<Reaction> reactions;
-    // Image jointe : version réduite pour l'affichage, et fichier d'origine (JPEG ou PNG reçu)
-    QImage image;
-    QByteArray imageData;
-    bool animated = false; // GIF animé : joué dans la bulle tant qu'il est visible
-    // Presence : évènements consécutifs regroupés en une seule ligne, dépliable d'un clic
-    QList<PresenceEvent> events;
-    bool expanded = false;
-};
-
-class ChatModel : public QAbstractListModel
-{
-    Q_OBJECT
-public:
-    using QAbstractListModel::QAbstractListModel;
-    int rowCount(const QModelIndex &parent = {}) const override { return parent.isValid() ? 0 : int(m_entries.size()); }
-    QVariant data(const QModelIndex &index, int role) const override;
-    const ChatEntry &entry(int row) const { return m_entries.at(row); }
-    void append(const ChatEntry &e);
-    int insertSorted(const ChatEntry &e); // à sa place chronologique ; renvoie la ligne
-    void clear();
-    // Ajoute un évènement à la ligne de présence `row` (text et ts sont recalculés)
-    void addPresenceEvent(int row, const PresenceEvent &ev);
-    void toggleExpanded(int row);
-    int rowOf(const QString &id) const; // -1 si absent
-    int markerRow() const;              // -1 si pas de séparateur « Nouveaux messages »
-    bool setReactions(const QString &id, const QList<ChatEntry::Reaction> &reactions); // false si absent
-    void setAuthorVerified(const QString &onion, bool verified);
-    void removeRow(int row);
-    // Recherche : lignes des messages contenant term (sans tenir compte de la casse ni des accents)
-    QList<int> search(const QString &term) const;
-    // Minuscules sans accents, caractère pour caractère (les positions restent valables)
-    static QString fold(const QString &text);
-
-private:
-    void resolveReply(ChatEntry &e) const;
-    QList<ChatEntry> m_entries;
-};
-
-class ChatDelegate : public QStyledItemDelegate
-{
-    Q_OBJECT
-public:
-    explicit ChatDelegate(QListView *view);
-    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override;
-    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override;
-    bool editorEvent(QEvent *event, QAbstractItemModel *model, const QStyleOptionViewItem &option,
-                     const QModelIndex &index) override;
-
-signals:
-    void quoteClicked(const QString &id); // clic sur la citation d'une réponse
-    void imageClicked(int row);           // clic sur une image
-    void linkClicked(const QString &url); // clic sur un lien
-    void reactionClicked(int row, const QString &emoji);
-
-private:
-    struct Geometry;
-    Geometry compute(const QModelIndex &index, int width) const;
-    QRectF bubbleRect(const ChatEntry &e, const Geometry &g, const QRect &r) const;
-    QRectF quoteRect(const Geometry &g, const QRectF &bubble) const;
-    QRectF imageRect(const Geometry &g, const QRectF &bubble) const;
-    QList<QRectF> reactionRects(const ChatEntry &e, const QRectF &bubble) const;
-    QListView *m_view;
-
-public:
-    // Élément cliquable sous le pointeur (pos dans la vue) : citation, image ou lien
-    struct Hit
-    {
-        enum Kind { None, Quote, Image, Link, Reaction } kind = None;
-        QString url;   // Link
-        QString emoji; // Reaction
-        QString who;   // Reaction : qui a réagi
-    };
-    Hit hitTest(const QModelIndex &index, const QRect &rect, const QPoint &pos) const;
-    // Bulle d'un message dans la vue (vide pour une ligne qui n'est pas un message)
-    QRectF bubbleAt(const QModelIndex &index, const QRect &rect) const;
-};
-
+// Liste de messages façon messagerie mobile (Material 3) : bulles arrondies, regroupement des messages
+// consécutifs, avatars, séparateurs de date. Le contenu est dans ChatModel, le dessin dans ChatDelegate.
 class ChatView : public QListView
 {
     Q_OBJECT

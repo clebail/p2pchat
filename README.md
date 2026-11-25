@@ -274,7 +274,11 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 | `core.pri` | Liste des fichiers ci-dessus (sans interface), partagée par l'application et les tests |
 | `mainwindow.*` | Fenêtre, maillage et relais, reconnexion automatique, console partagée |
 | `notifier.*`, `notifier_mac.mm` | Notifications natives (D-Bus sous Linux, UserNotifications sous macOS) |
-| `chatview.*` | Liste de messages en bulles (modèle + délégué de dessin), regroupement des messages de présence |
+| `chatmodel.*` | Contenu de la conversation : messages, lignes système et de présence, citations, réactions, recherche |
+| `chatdelegate.*` | Dessin des bulles (citation, image, texte, réactions) et de ce qui y est cliquable |
+| `chatstyle.*` | Couleurs, dimensions, polices et mise en page du texte des bulles |
+| `chatview.*`, `hoverbar.h` | Liste des messages : défilement, séparateur, bouton ↓, barre de survol, GIF, images en grand |
+| `ui.pri` | Composants de la conversation, partagés par l'application et les tests graphiques |
 | `terminalsession.*` | Console partagée : shell dans un pseudo-terminal (hôte), miroir (invité), échanges avec l'autre membre |
 | `terminalclient.*` | Mode `p2pchat --terminal` exécuté dans la fenêtre de terminal (mode brut, relais vers P2P Chat) |
 | `tests/` | Tests unitaires (Qt Test) |

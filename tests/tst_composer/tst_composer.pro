@@ -1,5 +1,4 @@
 include(../tests.pri)
-QT += widgets
+include(../../ui.pri)
 TARGET = tst_composer
-SOURCES += tst_composer.cpp $$PWD/../../composer.cpp
-HEADERS += $$PWD/../../composer.h
+SOURCES += tst_composer.cpp

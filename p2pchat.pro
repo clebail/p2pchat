@@ -6,8 +6,11 @@ macx: TARGET = P2PChat
 # Cœur sans interface (protocole, crypto, groupe, historique), partagé avec les tests
 include(core.pri)
 
-SOURCES += main.cpp mainwindow.cpp chatview.cpp composer.cpp mentioncompleter.cpp torservice.cpp
-HEADERS += mainwindow.h chatview.h composer.h mentioncompleter.h notifier.h torservice.h
+# Composants de la conversation (liste, bulles, saisie), partagés avec les tests
+include(ui.pri)
+
+SOURCES += main.cpp mainwindow.cpp torservice.cpp
+HEADERS += mainwindow.h notifier.h torservice.h
 
 RESOURCES += resources.qrc
 
