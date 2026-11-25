@@ -165,6 +165,18 @@ mkdir build && cd build && qmake6 ../p2pchat.pro && mingw32-make
 windeployqt release/p2pchat.exe   # + copier libcrypto-3-x64.dll et le dossier tor\
 ```
 
+### Tests unitaires
+
+Qt Test (module `testlib`, inclus dans `qtbase`) : un exécutable par fichier `tests/tst_*/`.
+
+```bash
+mkdir build-tests && cd build-tests && qmake ../tests/tests.pro && make -j && make check
+```
+
+Ils couvrent la cryptographie, les codes d'invitation, la signature des messages, l'état du groupe (membres,
+trousseau), l'historique et sa synchronisation, les règles de reconnexion, la poignée de main entre deux
+`PeerConnection` reliées en local (sans Tor) et le modèle de la liste de messages (rendu hors écran).
+
 ## Sécurité
 
 - **Transport** : service onion Tor. Le trafic est chiffré de bout en bout, aucun relais ne connaît à la
@@ -200,13 +212,19 @@ windeployqt release/p2pchat.exe   # + copier libcrypto-3-x64.dll et le dossier t
 |---|---|
 | `torservice.*` | Lancement de tor, torrc, progression, adresse onion |
 | `peerconnection.*` | Trames, poignée de main, messages chiffrés, ping |
-| `crypto.*` | X25519, HKDF, ChaCha20-Poly1305 (OpenSSL) |
+| `crypto.*` | X25519, Ed25519, HKDF, ChaCha20-Poly1305 (OpenSSL) |
+| `protocol.*` | Formats communs (adresse onion, base64), messages signés |
 | `invitation.*` | Encodage / décodage du code d'invitation |
-| `mainwindow.*` | Fenêtre, groupe (membres, maillage, relais), reconnexion automatique, historique |
+| `groupstore.*` | État persistant : pseudo, identité, secret, membres, trousseau des clés |
+| `history.*` | Historique local, inventaire et lots de synchronisation |
+| `connectionpolicy.*` | Espacement des appels, appels croisés, présence relayée |
+| `core.pri` | Liste des fichiers ci-dessus (sans interface), partagée par l'application et les tests |
+| `mainwindow.*` | Fenêtre, maillage et relais, reconnexion automatique, console partagée |
 | `notifier.*`, `notifier_mac.mm` | Notifications natives (D-Bus sous Linux, UserNotifications sous macOS) |
 | `chatview.*` | Liste de messages en bulles (modèle + délégué de dessin), regroupement des messages de présence |
 | `terminalsession.*` | Console partagée : shell dans un pseudo-terminal (hôte), miroir (invité), échanges avec l'autre membre |
 | `terminalclient.*` | Mode `p2pchat --terminal` exécuté dans la fenêtre de terminal (mode brut, relais vers P2P Chat) |
+| `tests/` | Tests unitaires (Qt Test) |
 | `icons/` | Icône : `p2pchat.svg` (source), `.icns` (macOS), `.ico` (Windows), `.png` |
 
 La configuration (`p2pchat.ini`) est dans `~/.config/p2pchat/` (Linux), `~/Library/Preferences/p2pchat/` (macOS)

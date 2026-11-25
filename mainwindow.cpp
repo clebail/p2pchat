@@ -5,6 +5,7 @@
 #include "invitation.h"
 #include "notifier.h"
 #include "peerconnection.h"
+#include "protocol.h"
 #include "torservice.h"
 #ifdef P2P_TERMINAL
 #  include "terminalsession.h"
@@ -50,13 +51,9 @@
 
 #include <algorithm>
 
-namespace {
+using Protocol::isValidOnion;
 
-bool isValidOnion(const QString &s)
-{
-    static const QRegularExpression re(QStringLiteral("^[a-z2-7]{56}\\.onion$"));
-    return re.match(s).hasMatch();
-}
+namespace {
 
 QString torInstallHelp()
 {
@@ -72,36 +69,9 @@ QString torInstallHelp()
 #endif
 }
 
-const QByteArray MessageContext("p2pchat-msg-v1");
-
-QString toB64(const QByteArray &b)
-{
-    return QString::fromLatin1(b.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
-}
-
-QByteArray fromB64(const QJsonValue &v)
-{
-    return QByteArray::fromBase64(v.toString().toLatin1(), QByteArray::Base64UrlEncoding);
-}
-
-// Ce que l'auteur signe : identifiant, adresse, pseudo, texte et heure
-QByteArray messageSigningBytes(const QJsonObject &m)
-{
-    return Crypto::pack({MessageContext, m.value("id").toString().toUtf8(), m.value("a").toString().toUtf8(),
-                         m.value("n").toString().toUtf8(), m.value("x").toString().toUtf8(),
-                         QByteArray::number(qint64(m.value("ts").toDouble()))});
-}
-
 constexpr int MaxSeenIds = 5000;
-constexpr int MaxMembers = 32; // maillage complet : au-delà, ce n'est plus raisonnable
-constexpr int MaxPending = 16; // connexions entrantes pas encore authentifiées
-constexpr qint64 SyncWindowMs = 30LL * 24 * 3600 * 1000; // historique synchronisé : 30 jours
-constexpr qint64 NewMemberMarginMs = 3600LL * 1000;      // marge d'horloge pour un nouveau membre
-constexpr int MaxInventory = 4000;                       // identifiants annoncés au plus
-constexpr int MaxSyncBatchBytes = 150 * 1024;            // taille d'un lot (trame max : 256 Ko)
-constexpr int PresenceGraceMs = 60 * 1000;               // délai avant d'annoncer une déconnexion
-// Espacement des appels sans réponse. Un appel raté via Tor ne coûte presque rien : plafond bas.
-constexpr int BackoffMinSec = 10, BackoffMaxSec = 90;
+constexpr int MaxPending = 16;             // connexions entrantes pas encore authentifiées
+constexpr int PresenceGraceMs = 60 * 1000; // délai avant d'annoncer une déconnexion
 constexpr qint64 FastRetryMs = 2 * 60 * 1000; // après un (re)démarrage : essais toutes les 10 s
 constexpr qint64 WakeGapMs = 45 * 1000;       // tic de 10 s arrivé si tard : sortie de veille
 // Au-delà du délai d'inactivité du correspondant (100 s), il nous a déjà fermé la connexion
@@ -115,8 +85,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     QDir().mkpath(dataDir);
     m_historyPath = dataDir + "/history.jsonl";
 
-    if (identitySeed().size() != 32)
-        m_settings.setValue("identity/seed", Ed25519::generateSeed());
+    m_group.ensureIdentity();
 
     // Le secret du groupe, la clé d'identité, les clés Tor et l'historique : lisibles par nous seuls
     constexpr auto OwnerRW = QFile::ReadOwner | QFile::WriteOwner;
@@ -126,14 +95,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     if (QFile::exists(m_historyPath))
         QFile::setPermissions(m_historyPath, OwnerRW);
 
-    // Reprise de la configuration de la version à deux participants
-    if (m_settings.contains("contact/secret")) {
-        m_settings.setValue("group/secret", m_settings.value("contact/secret"));
-        const QString onion = m_settings.value("contact/onion").toString();
-        if (isValidOnion(onion))
-            saveMembers({{onion, m_settings.value("contact/nick").toString()}});
-        m_settings.remove("contact");
-    }
+    m_group.migrateLegacy();
 
     m_server = new QTcpServer(this);
     m_server->setProxy(QNetworkProxy::NoProxy);
@@ -504,8 +466,8 @@ void MainWindow::buildUi()
 
 void MainWindow::updateStatus()
 {
-    const QList<Member> list = members();
-    const bool inGroup = !secret().isEmpty();
+    const QList<Member> list = m_group.members();
+    const bool inGroup = m_group.inGroup();
     m_pages->setCurrentIndex(inGroup || m_chat->chatModel()->rowCount() > 0 ? 1 : 0);
 
     // Titre : les pseudos des membres
@@ -578,13 +540,11 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
 {
     const qint64 ms = qint64(msg.value("ts").toDouble());
     const QDateTime ts = ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms) : QDateTime::currentDateTime();
-    m_chat->addMessage(msg.value("n").toString().left(40), msg.value("x").toString(), ts, mine, trust);
-    const QString id = msg.value("id").toString();
+    m_chat->addMessage(msg.value("n").toString().left(Protocol::MaxNickLength), msg.value("x").toString(), ts, mine,
+                       trust);
+    const QString id = Protocol::Message::id(msg);
     if (!id.isEmpty() && trust == ChatEntry::Verified) { // seuls les messages authentiques sont resynchronisés
-        QJsonObject stored = msg;
-        stored.remove("t");
-        stored["mine"] = mine;
-        m_store.insert(id, stored);
+        m_store.insert(id, History::stored(msg, mine));
         m_seenIds.insert(id);
     }
     if (!save)
@@ -595,10 +555,7 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
     if (file.open(QIODevice::Append)) {
         if (created)
             file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
-        QJsonObject line = msg;
-        line.remove("t");
-        line["mine"] = mine;
-        file.write(QJsonDocument(line).toJson(QJsonDocument::Compact) + '\n');
+        file.write(History::toLine(msg, mine));
     }
 }
 
@@ -612,46 +569,16 @@ void MainWindow::loadHistory()
     QFile file(m_historyPath);
     if (!file.open(QIODevice::ReadOnly))
         return;
-    struct Row
-    {
-        QJsonObject msg;
-        bool mine;
-        ChatEntry::Trust trust;
-        qint64 ts;
-    };
-    QList<Row> rows;
-    QSet<QString> ids;
-    const qint64 cleared = m_settings.value("history/clearedBefore").toLongLong();
-    for (const QByteArray &line : file.readAll().split('\n')) {
-        const QJsonObject o = QJsonDocument::fromJson(line).object();
-        if (o.isEmpty())
-            continue;
-        if (o.contains("from")) { // ancien format, antérieur aux signatures
-            const qint64 ts = QDateTime::fromString(o["ts"].toString(), Qt::ISODate).toMSecsSinceEpoch();
-            const QJsonObject legacy{{"n", o["from"]}, {"x", o["text"]}, {"ts", double(ts)}};
-            rows.append({legacy, o["mine"].toBool(), ChatEntry::Unsigned, ts});
-            continue;
-        }
-        const QString id = o["id"].toString();
-        if (!id.isEmpty() && ids.contains(id))
-            continue;
-        ids.insert(id);
-        const qint64 ts = qint64(o["ts"].toDouble());
-        if (ts < cleared)
-            continue;
-        const bool mine = o["mine"].toBool();
-        rows.append({o, mine, verifyMessage(o, mine), ts});
-    }
-    std::stable_sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.ts < b.ts; });
-    for (qsizetype i = qMax<qsizetype>(0, rows.size() - 500); i < rows.size(); ++i)
-        appendMessage(rows[i].msg, rows[i].mine, rows[i].trust, false);
-    // Les plus anciens (non affichés) restent disponibles pour la synchronisation
-    for (qsizetype i = 0; i < rows.size() - 500; ++i) {
-        const QString id = rows[i].msg.value("id").toString();
-        if (!id.isEmpty() && rows[i].trust == ChatEntry::Verified) {
-            QJsonObject stored = rows[i].msg;
-            stored["mine"] = rows[i].mine;
-            m_store.insert(id, stored);
+    const QList<History::Row> rows = History::parse(file.readAll(), m_group.clearedBefore());
+    const qsizetype firstShown = qMax<qsizetype>(0, rows.size() - History::DisplayedRows);
+    for (qsizetype i = 0; i < rows.size(); ++i) {
+        const History::Row &row = rows[i];
+        const ChatEntry::Trust trust = row.legacy ? ChatEntry::Unsigned : verifyMessage(row.msg, row.mine);
+        if (i >= firstShown) {
+            appendMessage(row.msg, row.mine, trust, false);
+        } else if (trust == ChatEntry::Verified && !Protocol::Message::id(row.msg).isEmpty()) {
+            // Les plus anciens (non affichés) restent disponibles pour la synchronisation
+            m_store.insert(Protocol::Message::id(row.msg), History::stored(row.msg, row.mine));
         }
     }
     m_chat->scrollToBottom();
@@ -668,7 +595,7 @@ void MainWindow::clearConversation()
     m_chat->clearAll();
     QFile::remove(m_historyPath);
     m_store.clear();
-    m_settings.setValue("history/clearedBefore", QDateTime::currentMSecsSinceEpoch());
+    m_group.setClearedBefore(QDateTime::currentMSecsSinceEpoch());
     updateStatus();
 }
 
@@ -744,8 +671,8 @@ void MainWindow::onTorFailed(const QString &error)
 
 void MainWindow::invite()
 {
-    if (secret().isEmpty())
-        m_settings.setValue("group/secret", Crypto::randomBytes(16));
+    if (!m_group.inGroup())
+        m_group.setSecret(Crypto::randomBytes(16));
     if (m_myOnion.isEmpty()) {
         m_inviteWanted = true;
         appendSystem(tr("Le code s'affichera dès que Tor aura démarré…"));
@@ -758,7 +685,8 @@ void MainWindow::invite()
 
 void MainWindow::showInvitation()
 {
-    const QString code = Invitation{secret(), m_myOnion, nickname(), myIdentityKey()}.toCode();
+    const QString code =
+        Invitation{m_group.secret(), m_myOnion, m_group.nickname(), m_group.identityKey()}.toCode();
 
     QDialog dlg(this);
     dlg.setWindowTitle(tr("Code d'invitation"));
@@ -780,13 +708,9 @@ void MainWindow::showInvitation()
     auto *share = new QCheckBox(tr("Partager l'historique des 30 derniers jours avec la personne invitée"), &dlg);
     share->setToolTip(tr("Utile pour ajouter un de vos propres appareils.\n"
                          "Valable pour les personnes qui rejoignent dans les 7 jours."));
-    share->setChecked(m_settings.value("group/shareHistoryUntil").toLongLong() > QDateTime::currentMSecsSinceEpoch());
+    share->setChecked(m_group.shareHistoryUntil() > QDateTime::currentMSecsSinceEpoch());
     connect(share, &QCheckBox::toggled, this, [this](bool on) {
-        if (on)
-            m_settings.setValue("group/shareHistoryUntil",
-                                QDateTime::currentDateTime().addDays(7).toMSecsSinceEpoch());
-        else
-            m_settings.remove("group/shareHistoryUntil");
+        m_group.setShareHistoryUntil(on ? QDateTime::currentDateTime().addDays(7).toMSecsSinceEpoch() : 0);
     });
     lay->addWidget(share);
 
@@ -801,7 +725,7 @@ void MainWindow::showInvitation()
         QUrlQuery q;
         q.addQueryItem("subject", tr("Invitation P2P Chat"));
         q.addQueryItem("body", tr("Salut !\n\nOuvre P2P Chat, clique sur « Rejoindre » et colle ce code :\n\n%1\n\n%2")
-                                   .arg(code, nickname()));
+                                   .arg(code, m_group.nickname()));
         QUrl url("mailto:");
         url.setQuery(q);
         QDesktopServices::openUrl(url);
@@ -827,14 +751,14 @@ void MainWindow::join()
         QMessageBox::warning(this, tr("Rejoindre"), tr("C'est votre propre code !"));
         return;
     }
-    if (!secret().isEmpty() && secret() != inv->secret) {
+    if (m_group.inGroup() && m_group.secret() != inv->secret) {
         if (QMessageBox::question(this, tr("Rejoindre"),
                                   tr("<p>Vous faites déjà partie d'une autre conversation. "
                                      "La quitter pour rejoindre celle de %1 ?</p>").arg(inv->nickname.toHtmlEscaped()))
             != QMessageBox::Yes)
             return;
         closeAll();
-        saveMembers({});
+        m_group.setMembers({});
     }
     if (!pinKey(inv->onion, inv->identityKey)) {
         QMessageBox::warning(this, tr("Rejoindre"),
@@ -842,7 +766,7 @@ void MainWindow::join()
                                 "Par sécurité, il est refusé.</p>").arg(inv->nickname.toHtmlEscaped()));
         return;
     }
-    m_settings.setValue("group/secret", inv->secret);
+    m_group.setSecret(inv->secret);
     mergeMember(inv->onion, inv->nickname);
     appendSystem(tr("Invitation de %1 enregistrée.").arg(inv->nickname));
     connectToMembers();
@@ -851,146 +775,71 @@ void MainWindow::join()
 
 // ---------------------------------------------------------------- Membres
 
-QList<MainWindow::Member> MainWindow::members() const
-{
-    QList<Member> list;
-    const QJsonArray arr = QJsonDocument::fromJson(m_settings.value("group/members").toByteArray()).array();
-    for (const QJsonValue &v : arr) {
-        const QJsonObject o = v.toObject();
-        if (isValidOnion(o["o"].toString()))
-            list.append({o["o"].toString(), o["n"].toString()});
-    }
-    return list;
-}
-
-void MainWindow::saveMembers(const QList<Member> &list)
-{
-    QJsonArray arr;
-    for (const Member &m : list)
-        arr.append(QJsonObject{{"o", m.onion}, {"n", m.nick}});
-    m_settings.setValue("group/members", QJsonDocument(arr).toJson(QJsonDocument::Compact));
-}
-
 bool MainWindow::mergeMember(const QString &onion, const QString &nick)
 {
-    if (!isValidOnion(onion) || onion == m_myOnion)
-        return false;
-    QList<Member> list = members();
-    for (Member &m : list) {
-        if (m.onion == onion) {
-            if (!nick.isEmpty() && nick != m.nick) {
-                m.nick = nick.left(40);
-                saveMembers(list);
-            }
-            return false;
-        }
-    }
-    if (list.size() >= MaxMembers)
-        return false; // protège contre une liste de membres gonflée artificiellement
-    list.append({onion, nick.left(40)});
-    saveMembers(list);
-    return true;
-}
-
-QString MainWindow::memberNick(const QString &onion) const
-{
-    for (const Member &m : members())
-        if (m.onion == onion && !m.nick.isEmpty())
-            return m.nick;
-    return tr("Un membre");
-}
-
-QJsonObject MainWindow::membersMessage() const
-{
-    QJsonArray arr;
-    arr.append(QJsonObject{{"o", m_myOnion}, {"n", nickname()}, {"k", toB64(myIdentityKey())}});
-    for (const Member &m : members())
-        arr.append(QJsonObject{{"o", m.onion}, {"n", m.nick}, {"k", toB64(pinnedKey(m.onion))}});
-    return {{"t", "members"}, {"m", arr}};
-}
-
-// ---------------------------------------------------------------- Identité et signatures
-
-
-QByteArray MainWindow::identitySeed() const
-{
-    return m_settings.value("identity/seed").toByteArray();
-}
-
-QByteArray MainWindow::myIdentityKey() const
-{
-    return Ed25519::publicKey(identitySeed());
-}
-
-QByteArray MainWindow::pinnedKey(const QString &onion) const
-{
-    const QJsonObject ring = QJsonDocument::fromJson(m_settings.value("keyring").toByteArray()).object();
-    return fromB64(ring.value(onion));
+    return m_group.mergeMember(onion, nick, m_myOnion);
 }
 
 bool MainWindow::pinKey(const QString &onion, const QByteArray &key)
 {
-    if (key.size() != 32 || !isValidOnion(onion))
-        return false;
-    const QByteArray known = pinnedKey(onion);
-    if (!known.isEmpty())
-        return known == key;
-    QJsonObject ring = QJsonDocument::fromJson(m_settings.value("keyring").toByteArray()).object();
-    ring.insert(onion, toB64(key));
-    m_settings.setValue("keyring", QJsonDocument(ring).toJson(QJsonDocument::Compact));
-    QJsonObject seen = QJsonDocument::fromJson(m_settings.value("firstSeen").toByteArray()).object();
-    // Invitation avec partage d'historique en cours : le nouveau venu reçoit les 30 derniers jours
-    const bool shareHistory =
-        m_settings.value("group/shareHistoryUntil").toLongLong() > QDateTime::currentMSecsSinceEpoch();
-    seen.insert(onion, shareHistory ? 0.0 : double(QDateTime::currentMSecsSinceEpoch()));
-    m_settings.setValue("firstSeen", QJsonDocument(seen).toJson(QJsonDocument::Compact));
-    return true;
+    return m_group.pinKey(onion, key, QDateTime::currentMSecsSinceEpoch());
 }
 
-QJsonObject MainWindow::signedMessage(const QString &text) const
+QString MainWindow::memberNick(const QString &onion) const
 {
-    QJsonObject m{{"t", "msg"},
-                  {"id", QString::fromLatin1(Crypto::randomBytes(12).toHex())},
-                  {"a", m_myOnion},
-                  {"n", nickname()},
-                  {"x", text},
-                  {"ts", double(QDateTime::currentMSecsSinceEpoch())}};
-    m.insert("s", toB64(Ed25519::sign(identitySeed(), messageSigningBytes(m))));
-    return m;
+    const QString nick = m_group.nickOf(onion);
+    return nick.isEmpty() ? tr("Un membre") : nick;
+}
+
+QJsonObject MainWindow::membersMessage() const
+{
+    using Protocol::toB64;
+    QJsonArray arr;
+    arr.append(QJsonObject{{"o", m_myOnion}, {"n", m_group.nickname()}, {"k", toB64(m_group.identityKey())}});
+    for (const Member &m : m_group.members())
+        arr.append(QJsonObject{{"o", m.onion}, {"n", m.nick}, {"k", toB64(m_group.pinnedKey(m.onion))}});
+    return {{"t", "members"}, {"m", arr}};
 }
 
 ChatEntry::Trust MainWindow::verifyMessage(const QJsonObject &msg, bool mine) const
 {
     if (!msg.contains("s"))
         return ChatEntry::Unsigned;
-    const QByteArray key = mine ? myIdentityKey() : pinnedKey(msg.value("a").toString());
-    return Ed25519::verify(key, messageSigningBytes(msg), fromB64(msg.value("s"))) ? ChatEntry::Verified
-                                                                                   : ChatEntry::Invalid;
+    const QByteArray key = mine ? m_group.identityKey() : m_group.pinnedKey(msg.value("a").toString());
+    return Protocol::Message::verify(msg, key) ? ChatEntry::Verified : ChatEntry::Invalid;
 }
 
 // ---------------------------------------------------------------- Connexions
 
+PeerConnection *MainWindow::newConnection(QTcpSocket *socket, bool outgoing)
+{
+    auto *c = new PeerConnection(socket, outgoing, m_group.secret(), m_group.nickname(), m_myOnion,
+                                 m_group.identitySeed(), this);
+    connect(c, &PeerConnection::ready, this, [this, c] { setActive(c); });
+    connect(c, &PeerConnection::received, this, [this, c](const QJsonObject &o) { onReceived(c, o); });
+    connect(c, &PeerConnection::closed, this, [this, c](const QString &reason) { onClosed(c, reason); });
+    return c;
+}
+
 void MainWindow::onNewConnection()
 {
     while (QTcpSocket *s = m_server->nextPendingConnection()) {
-        if (secret().isEmpty() || m_myOnion.isEmpty() || m_pending.size() >= MaxPending) {
+        if (!m_group.inGroup() || m_myOnion.isEmpty() || m_pending.size() >= MaxPending) {
             s->abort();
             s->deleteLater();
             continue;
         }
-        auto *c = new PeerConnection(s, false, secret(), nickname(), m_myOnion, identitySeed(), this);
-        m_pending.insert(c);
-        watch(c);
+        m_pending.insert(newConnection(s, false));
     }
 }
 
 void MainWindow::connectToMembers()
 {
-    if (m_myOnion.isEmpty() || secret().isEmpty())
+    if (m_myOnion.isEmpty() || !m_group.inGroup())
         return;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    for (const Member &m : members())
-        if (!m_active.contains(m.onion) && !m_attempts.contains(m.onion) && m_backoff.value(m.onion).nextTry <= now)
+    for (const Member &m : m_group.members())
+        if (!m_active.contains(m.onion) && !m_attempts.contains(m.onion) && m_backoff.value(m.onion).due(now))
             dial(m.onion);
     updateStatus();
 }
@@ -1014,59 +863,54 @@ void MainWindow::dial(const QString &onion)
 {
     auto *s = new QTcpSocket;
     s->setProxy(QNetworkProxy(QNetworkProxy::Socks5Proxy, "127.0.0.1", m_tor->socksPort()));
-    auto *c = new PeerConnection(s, true, secret(), nickname(), m_myOnion, identitySeed(), this);
-    m_attempts.insert(onion, c);
-    watch(c);
+    m_attempts.insert(onion, newConnection(s, true));
     s->connectToHost(onion, TorService::OnionPort); // résolu par Tor, pas localement
 }
 
-void MainWindow::watch(PeerConnection *c)
+void MainWindow::onClosed(PeerConnection *c, const QString &reason)
 {
-    connect(c, &PeerConnection::ready, this, [this, c] { setActive(c); });
-    connect(c, &PeerConnection::received, this, [this, c](const QJsonObject &o) { onReceived(c, o); });
-    connect(c, &PeerConnection::closed, this, [this, c](const QString &reason) {
-        c->deleteLater();
-        m_pending.remove(c);
-        const QString attemptKey = m_attempts.key(c);
-        if (!attemptKey.isEmpty()) {
-            m_attempts.remove(attemptKey);
-            m_lastError.insert(attemptKey, reason);
-            // Échec : prochain essai de plus en plus espacé (10 s, 20 s, 40 s… jusqu'à 90 s),
-            // sauf juste après un (re)démarrage, où Tor n'a pas encore tout ce qu'il lui faut
-            const qint64 now = QDateTime::currentMSecsSinceEpoch();
-            Backoff &b = m_backoff[attemptKey];
-            b.delay = (b.delay == 0 || now < m_fastRetryUntil) ? BackoffMinSec : qMin(b.delay * 2, BackoffMaxSec);
-            b.nextTry = now + qint64(b.delay) * 1000;
-        }
-        const QString activeKey = m_active.key(c);
-        if (!activeKey.isEmpty()) {
-            m_active.remove(activeKey);
-            m_lastError.insert(activeKey, reason);
-            m_backoff.remove(activeKey); // il était là il y a un instant : on le rappelle tout de suite
-            terminalPeerLost(activeKey);
-            m_peerPresence.remove(activeKey); // ceux qu'il voyait ne sont plus joignables par lui
-            m_presenceTimer.start();
-            checkQuietDrops();
-            // La déconnexion n'est annoncée que si le membre ne revient pas dans le délai de grâce
-            const quint64 token = ++m_dropToken;
-            m_dropped.insert(activeKey, {reason, token});
-            QTimer::singleShot(PresenceGraceMs, this, [this, activeKey, token] {
-                const auto it = m_dropped.constFind(activeKey);
-                if (it == m_dropped.cend() || it->token != token)
-                    return;
-                const QString why = it->reason;
-                m_dropped.erase(it);
-                if (m_active.contains(activeKey))
-                    return;
-                // Toujours joignable par un autre membre : annoncé seulement quand il ne l'est plus
-                if (relayedOnline().contains(activeKey))
-                    m_quietDrops.insert(activeKey, why);
-                else
-                    m_chat->addPresence(memberNick(activeKey), false, why);
-            });
-            QTimer::singleShot(5000, this, &MainWindow::connectToMembers);
-        }
-        updateStatus();
+    c->deleteLater();
+    m_pending.remove(c);
+    const QString attemptKey = m_attempts.key(c);
+    if (!attemptKey.isEmpty()) {
+        m_attempts.remove(attemptKey);
+        m_lastError.insert(attemptKey, reason);
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        m_backoff[attemptKey].failed(now, now < m_fastRetryUntil);
+    }
+    const QString activeKey = m_active.key(c);
+    if (!activeKey.isEmpty()) {
+        m_active.remove(activeKey);
+        m_lastError.insert(activeKey, reason);
+        m_backoff.remove(activeKey); // il était là il y a un instant : on le rappelle tout de suite
+        terminalPeerLost(activeKey);
+        m_peerPresence.remove(activeKey); // ceux qu'il voyait ne sont plus joignables par lui
+        m_presenceTimer.start();
+        checkQuietDrops();
+        announceDropLater(activeKey, reason);
+        QTimer::singleShot(5000, this, &MainWindow::connectToMembers);
+    }
+    updateStatus();
+}
+
+void MainWindow::announceDropLater(const QString &onion, const QString &reason)
+{
+    // La déconnexion n'est annoncée que si le membre ne revient pas dans le délai de grâce
+    const quint64 token = ++m_dropToken;
+    m_dropped.insert(onion, {reason, token});
+    QTimer::singleShot(PresenceGraceMs, this, [this, onion, token] {
+        const auto it = m_dropped.constFind(onion);
+        if (it == m_dropped.cend() || it->token != token)
+            return;
+        const QString why = it->reason;
+        m_dropped.erase(it);
+        if (m_active.contains(onion))
+            return;
+        // Toujours joignable par un autre membre : annoncé seulement quand il ne l'est plus
+        if (relayedOnline().contains(onion))
+            m_quietDrops.insert(onion, why);
+        else
+            m_chat->addPresence(memberNick(onion), false, why);
     });
 }
 
@@ -1098,16 +942,14 @@ void MainWindow::setActive(PeerConnection *c)
         return;
     }
 
-    // Deux membres peuvent s'appeler en même temps. Règle identique des deux côtés :
-    // on garde la connexion ouverte par l'adresse onion la plus petite.
     // Revenu pendant le délai de grâce : la coupure passe inaperçue
     const bool graceReturn = m_dropped.remove(onion) > 0;
     const bool quietReturn = m_quietDrops.remove(onion) > 0;
     const bool wasOnline = m_active.contains(onion) || graceReturn || quietReturn;
     if (PeerConnection *old = m_active.value(onion); old && old != c) {
+        // Appels croisés : les deux côtés gardent la même connexion
         auto initiator = [this](PeerConnection *p) { return p->isOutgoing() ? m_myOnion : p->peerOnion(); };
-        const QString keep = initiator(old), other = initiator(c);
-        if (keep != other && keep < other) {
+        if (ConnectionPolicy::keepExisting(initiator(old), initiator(c))) {
             c->close();
             return;
         }
@@ -1148,74 +990,21 @@ void MainWindow::setActive(PeerConnection *c)
 
 // ---------------------------------------------------------------- Synchronisation
 
-qint64 MainWindow::firstSeen(const QString &onion) const
-{
-    const QJsonObject seen = QJsonDocument::fromJson(m_settings.value("firstSeen").toByteArray()).object();
-    return qint64(seen.value(onion).toDouble()); // 0 : membre connu avant cette fonctionnalité
-}
-
 qint64 MainWindow::syncCutoff() const
 {
-    return qMax(QDateTime::currentMSecsSinceEpoch() - SyncWindowMs,
-                m_settings.value("history/clearedBefore").toLongLong());
+    return History::syncCutoff(QDateTime::currentMSecsSinceEpoch(), m_group.clearedBefore());
 }
 
 QJsonObject MainWindow::inventoryMessage() const
 {
-    const qint64 cutoff = syncCutoff();
-    QList<QPair<qint64, QString>> recent;
-    for (auto it = m_store.cbegin(); it != m_store.cend(); ++it) {
-        const qint64 ts = qint64(it.value().value("ts").toDouble());
-        if (ts >= cutoff)
-            recent.append({ts, it.key()});
-    }
-    std::sort(recent.begin(), recent.end(), std::greater<>());
-    QJsonArray ids;
-    for (int i = 0; i < qMin(int(recent.size()), MaxInventory); ++i)
-        ids.append(recent[i].second);
-    return {{"t", "inv"}, {"ids", ids}};
+    return {{"t", "inv"}, {"ids", History::inventory(m_store, syncCutoff())}};
 }
 
-void MainWindow::sendMissing(PeerConnection *c, const QJsonArray &theirIds)
+void MainWindow::sendBatches(PeerConnection *c, const QList<QJsonObject> &messages)
 {
-    QSet<QString> theirs;
-    for (const QJsonValue &v : theirIds)
-        theirs.insert(v.toString());
-    QList<QJsonObject> missing;
-    for (auto it = m_store.cbegin(); it != m_store.cend(); ++it)
-        if (!theirs.contains(it.key()))
-            missing.append(it.value());
-    sendBatches(c, missing);
-}
-
-void MainWindow::sendBatches(PeerConnection *c, QList<QJsonObject> messages)
-{
-    // Un nouveau membre ne reçoit pas ce qui s'est dit avant son arrivée
-    const qint64 cutoff = qMax(syncCutoff(), firstSeen(c->peerOnion()) - NewMemberMarginMs);
-    messages.erase(std::remove_if(messages.begin(), messages.end(), [cutoff](const QJsonObject &m) {
-        return qint64(m.value("ts").toDouble()) < cutoff;
-    }), messages.end());
-    std::sort(messages.begin(), messages.end(), [](const QJsonObject &a, const QJsonObject &b) {
-        return a.value("ts").toDouble() < b.value("ts").toDouble();
-    });
-
-    QJsonArray batch;
-    qsizetype bytes = 0;
-    auto flush = [&] {
-        if (!batch.isEmpty())
-            c->send({{"t", "sync"}, {"m", batch}});
-        batch = QJsonArray();
-        bytes = 0;
-    };
-    for (QJsonObject m : std::as_const(messages)) {
-        m.remove("mine");
-        const qsizetype size = QJsonDocument(m).toJson(QJsonDocument::Compact).size();
-        if (bytes + size > MaxSyncBatchBytes)
-            flush();
-        batch.append(m);
-        bytes += size;
-    }
-    flush();
+    const qint64 cutoff = History::cutoffFor(syncCutoff(), m_group.firstSeen(c->peerOnion()));
+    for (const QJsonArray &batch : History::batches(messages, cutoff))
+        c->send({{"t", "sync"}, {"m", batch}});
 }
 
 void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
@@ -1225,9 +1014,9 @@ void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
     int received = 0;
     QString lastAuthor, lastText;
     for (const QJsonValue &v : messages) {
-        QJsonObject m = v.toObject();
-        const QString id = m.value("id").toString();
-        if (id.isEmpty() || m_store.contains(id) || qint64(m.value("ts").toDouble()) < cutoff)
+        const QJsonObject m = v.toObject();
+        const QString id = Protocol::Message::id(m);
+        if (id.isEmpty() || m_store.contains(id) || Protocol::Message::timestamp(m) < cutoff)
             continue;
         const bool mine = !m_myOnion.isEmpty() && m.value("a").toString() == m_myOnion;
         // Chaque message est vérifié avec la clé de son auteur : un membre ne peut rien inventer
@@ -1248,109 +1037,120 @@ void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
         for (PeerConnection *p : std::as_const(m_active))
             if (p != from)
                 sendBatches(p, accepted);
-    if (received == 0)
-        return;
-    if (!isVisible() || !isActiveWindow()) {
-        m_unread += received;
-        updateUnread();
-        if (received == 1)
-            m_notifier->notify(lastAuthor, lastText);
-        else
-            m_notifier->notify(tr("P2P Chat"), tr("%n message(s) reçu(s) pendant votre absence", nullptr, received));
-    }
+    if (received == 1)
+        notifyUnread(1, lastAuthor, lastText);
+    else if (received > 1)
+        notifyUnread(received, tr("P2P Chat"),
+                     tr("%n message(s) reçu(s) pendant votre absence", nullptr, received));
 }
+
+void MainWindow::notifyUnread(int count, const QString &title, const QString &text)
+{
+    if (isVisible() && isActiveWindow())
+        return;
+    m_unread += count;
+    updateUnread();
+    m_notifier->notify(title, text);
+}
+
+// ---------------------------------------------------------------- Messages reçus
 
 void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
 {
     const QString type = o.value("t").toString();
-    if (type.startsWith(QLatin1String("term-"))) {
+    if (type.startsWith(QLatin1String("term-")))
         onTerminalMessage(c, o);
+    else if (type == "members")
+        onMembers(c, o);
+    else if (type == "presence")
+        onPresence(c, o);
+    else if (type == "inv")
+        sendBatches(c, History::missing(m_store, o.value("ids").toArray()));
+    else if (type == "sync")
+        receiveSync(c, o.value("m").toArray());
+    else if (type == "msg")
+        onChatMessage(c, o);
+}
+
+void MainWindow::onMembers(PeerConnection *c, const QJsonObject &o)
+{
+    bool changed = false;
+    for (const QJsonValue &v : o.value("m").toArray()) {
+        const QJsonObject m = v.toObject();
+        const QString onion = m["o"].toString();
+        if (onion == m_myOnion)
+            continue;
+        // Un membre présenté sans clé, ou avec une clé différente de celle connue, est ignoré
+        if (!pinKey(onion, Protocol::fromB64(m["k"]))) {
+            qWarning().noquote() << "[identité] clé refusée pour" << onion.left(8);
+            continue;
+        }
+        if (mergeMember(onion, m["n"].toString())) {
+            changed = true;
+            appendSystem(tr("%1 fait partie de la conversation.").arg(m["n"].toString()));
+        }
+    }
+    if (changed) {
+        broadcast(membersMessage(), c);
+        connectToMembers();
+    }
+    updateStatus(); // un pseudo a pu changer
+}
+
+void MainWindow::onPresence(PeerConnection *c, const QJsonObject &o)
+{
+    const QString from = m_active.key(c);
+    if (from.isEmpty())
+        return; // connexion remplacée entre-temps
+    QSet<QString> seen;
+    for (const QJsonValue &v : o.value("on").toArray()) {
+        const QString onion = v.toString();
+        if (onion != from && m_group.isMember(onion))
+            seen.insert(onion);
+    }
+    const QSet<QString> before = m_peerPresence.value(from);
+    m_peerPresence.insert(from, seen);
+    // Un membre vient d'apparaître chez un autre : il est en ligne, on l'appelle sans attendre
+    bool redial = false;
+    for (const QString &onion : std::as_const(seen))
+        if (!before.contains(onion) && !m_active.contains(onion) && !m_attempts.contains(onion)) {
+            m_backoff.remove(onion);
+            redial = true;
+        }
+    checkQuietDrops();
+    if (redial)
+        connectToMembers();
+    else
+        updateStatus();
+}
+
+void MainWindow::onChatMessage(PeerConnection *c, const QJsonObject &o)
+{
+    const QString id = Protocol::Message::id(o);
+    if (id.isEmpty() || m_seenIds.contains(id) || m_store.contains(id))
+        return;
+    if (m_seenIds.size() > MaxSeenIds)
+        m_seenIds.clear();
+    m_seenIds.insert(id);
+
+    const QString author = o.value("n").toString().left(Protocol::MaxNickLength);
+    if (verifyMessage(o, false) != ChatEntry::Verified) {
+        appendSystem(tr("⚠ Message attribué à « %1 » rejeté : signature invalide.").arg(author));
         return;
     }
-    if (type == "members") {
-        bool changed = false;
-        for (const QJsonValue &v : o.value("m").toArray()) {
-            const QJsonObject m = v.toObject();
-            const QString onion = m["o"].toString();
-            if (onion == m_myOnion)
-                continue;
-            // Un membre présenté sans clé, ou avec une clé différente de celle connue, est ignoré
-            if (!pinKey(onion, fromB64(m["k"]))) {
-                qWarning().noquote() << "[identité] clé refusée pour" << onion.left(8);
-                continue;
-            }
-            if (mergeMember(onion, m["n"].toString())) {
-                changed = true;
-                appendSystem(tr("%1 fait partie de la conversation.").arg(m["n"].toString()));
-            }
-        }
-        if (changed) {
-            broadcast(membersMessage(), c);
-            connectToMembers();
-        }
-        updateStatus(); // un pseudo a pu changer
-    } else if (type == "presence") {
-        const QString from = m_active.key(c);
-        if (from.isEmpty())
-            return; // connexion remplacée entre-temps
-        QSet<QString> known;
-        for (const Member &m : members())
-            known.insert(m.onion);
-        QSet<QString> seen;
-        for (const QJsonValue &v : o.value("on").toArray()) {
-            const QString onion = v.toString();
-            if (known.contains(onion) && onion != from)
-                seen.insert(onion);
-        }
-        const QSet<QString> before = m_peerPresence.value(from);
-        m_peerPresence.insert(from, seen);
-        // Un membre vient d'apparaître chez un autre : il est en ligne, on l'appelle sans attendre
-        bool redial = false;
-        for (const QString &onion : std::as_const(seen))
-            if (!before.contains(onion) && !m_active.contains(onion) && !m_attempts.contains(onion)) {
-                m_backoff.remove(onion);
-                redial = true;
-            }
-        checkQuietDrops();
-        if (redial)
-            connectToMembers();
-        else
-            updateStatus();
-    } else if (type == "inv") {
-        sendMissing(c, o.value("ids").toArray());
-    } else if (type == "sync") {
-        receiveSync(c, o.value("m").toArray());
-    } else if (type == "msg") {
-        const QString id = o.value("id").toString();
-        if (id.isEmpty() || m_seenIds.contains(id) || m_store.contains(id))
-            return;
-        if (m_seenIds.size() > MaxSeenIds)
-            m_seenIds.clear();
-        m_seenIds.insert(id);
+    appendMessage(o, false, ChatEntry::Verified);
 
-        const QString author = o.value("n").toString().left(40);
-        if (verifyMessage(o, false) != ChatEntry::Verified) {
-            appendSystem(tr("⚠ Message attribué à « %1 » rejeté : signature invalide.").arg(author));
-            return;
-        }
-        appendMessage(o, false, ChatEntry::Verified);
+    // L'auteur vient d'écrire (message relayé) : il est en ligne, inutile d'attendre pour le rappeler
+    const QString authorOnion = o.value("a").toString();
+    if (!m_active.contains(authorOnion) && m_backoff.remove(authorOnion) > 0)
+        connectToMembers();
 
-        // L'auteur vient d'écrire (message relayé) : il est en ligne, inutile d'attendre pour le rappeler
-        const QString authorOnion = o.value("a").toString();
-        if (!m_active.contains(authorOnion) && m_backoff.remove(authorOnion) > 0)
-            connectToMembers();
+    // Relais : au cas où un membre ne serait pas encore relié directement à l'auteur
+    broadcast(o, c);
 
-        // Relais : au cas où un membre ne serait pas encore relié directement à l'auteur
-        broadcast(o, c);
-
-        if (!isVisible() || !isActiveWindow()) {
-            ++m_unread;
-            updateUnread();
-            m_notifier->notify(author, o.value("x").toString());
-            if (isVisible())
-                QApplication::alert(this);
-        }
-    }
+    notifyUnread(1, author, o.value("x").toString());
+    if (isVisible() && !isActiveWindow())
+        QApplication::alert(this);
 }
 
 void MainWindow::broadcast(const QJsonObject &obj, PeerConnection *except)
@@ -1414,12 +1214,8 @@ QJsonObject MainWindow::presenceMessage() const
 
 QHash<QString, QString> MainWindow::relayedOnline() const
 {
-    QHash<QString, QString> via;
-    for (auto it = m_peerPresence.cbegin(); it != m_peerPresence.cend(); ++it)
-        for (const QString &onion : it.value())
-            if (onion != m_myOnion && !m_active.contains(onion) && !via.contains(onion))
-                via.insert(onion, it.key());
-    return via;
+    const QList<QString> active = m_active.keys();
+    return ConnectionPolicy::relayedOnline(m_peerPresence, QSet<QString>(active.cbegin(), active.cend()), m_myOnion);
 }
 
 void MainWindow::checkQuietDrops()
@@ -1440,10 +1236,11 @@ void MainWindow::checkQuietDrops()
 void MainWindow::sendCurrent()
 {
     const QString text = m_input->text().trimmed();
-    if (text.isEmpty() || secret().isEmpty() || members().isEmpty() || m_myOnion.isEmpty())
+    if (text.isEmpty() || !m_group.inGroup() || m_group.members().isEmpty() || m_myOnion.isEmpty())
         return; // sans personne en ligne, le message partira à la prochaine synchronisation
-    const QJsonObject msg = signedMessage(text);
-    m_seenIds.insert(msg.value("id").toString());
+    const QJsonObject msg = Protocol::Message::create(m_group.identitySeed(), m_myOnion, m_group.nickname(), text,
+                                                      QDateTime::currentMSecsSinceEpoch());
+    m_seenIds.insert(Protocol::Message::id(msg));
     broadcast(msg);
     appendMessage(msg, true, ChatEntry::Verified);
     m_input->clear();
@@ -1451,17 +1248,14 @@ void MainWindow::sendCurrent()
 
 // ---------------------------------------------------------------- Réglages
 
-QString MainWindow::nickname() const { return m_settings.value("nickname").toString(); }
-QByteArray MainWindow::secret() const { return m_settings.value("group/secret").toByteArray(); }
-
 void MainWindow::changeNickname()
 {
     bool ok = false;
     const QString n = QInputDialog::getText(this, tr("Pseudo"), tr("Votre pseudo :"), QLineEdit::Normal,
-                                            nickname(), &ok).trimmed();
+                                            m_group.nickname(), &ok).trimmed();
     if (!ok || n.isEmpty())
         return;
-    m_settings.setValue("nickname", n.left(40));
+    m_group.setNickname(n);
     broadcast(membersMessage()); // les autres mettent à jour notre pseudo
 }
 
@@ -1475,7 +1269,7 @@ void MainWindow::resetAll()
         != QMessageBox::Yes)
         return;
     closeAll();
-    m_settings.remove("group");
+    m_group.leaveGroup();
     m_lastError.clear();
     appendSystem(tr("Vous avez quitté le groupe."));
     updateStatus();
@@ -1498,7 +1292,7 @@ void MainWindow::shareTerminal()
         return;
     }
     QList<Member> online;
-    for (const Member &m : members())
+    for (const Member &m : m_group.members())
         if (m_active.contains(m.onion))
             online << m;
     if (online.isEmpty()) {

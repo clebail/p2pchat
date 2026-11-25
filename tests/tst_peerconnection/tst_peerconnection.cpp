@@ -1,0 +1,195 @@
+#include "crypto.h"
+#include "peerconnection.h"
+
+#include <QNetworkProxy>
+#include <QSignalSpy>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QtEndian>
+#include <QtTest>
+
+#include <memory>
+
+// Poignée de main et échanges entre deux PeerConnection reliées en local (sans Tor).
+class TestPeerConnection : public QObject
+{
+    Q_OBJECT
+
+private:
+    struct Side
+    {
+        QString onion, nick;
+        QByteArray psk, seed = Ed25519::generateSeed();
+    };
+
+    QTcpServer m_server;
+    PeerConnection *m_incoming = nullptr;
+    // Branchés dès la création : la connexion entrante peut se fermer avant que le test la voie
+    std::unique_ptr<QSignalSpy> m_inReady, m_inClosed;
+    Side m_serverSide;
+
+    PeerConnection *dial(const Side &side)
+    {
+        auto *s = new QTcpSocket;
+        s->setProxy(QNetworkProxy::NoProxy);
+        auto *c = new PeerConnection(s, true, side.psk, side.nick, side.onion, side.seed, this);
+        s->connectToHost(QHostAddress::LocalHost, m_server.serverPort());
+        return c;
+    }
+
+    // Socket brut, pour parler au serveur sans suivre le protocole
+    QTcpSocket *rawSocket()
+    {
+        auto *s = new QTcpSocket(this);
+        s->setProxy(QNetworkProxy::NoProxy);
+        s->connectToHost(QHostAddress::LocalHost, m_server.serverPort());
+        return s;
+    }
+
+    static Side side(char c, const QByteArray &psk = "secret-du-groupe")
+    {
+        Side s;
+        s.onion = QString(56, c) + ".onion";
+        s.nick = QStringLiteral("Membre %1").arg(c);
+        s.psk = psk;
+        return s;
+    }
+
+private slots:
+    void initTestCase()
+    {
+        m_server.setProxy(QNetworkProxy::NoProxy);
+        QVERIFY(m_server.listen(QHostAddress::LocalHost, 0));
+        connect(&m_server, &QTcpServer::newConnection, this, [this] {
+            while (QTcpSocket *s = m_server.nextPendingConnection()) {
+                m_incoming = new PeerConnection(s, false, m_serverSide.psk, m_serverSide.nick, m_serverSide.onion,
+                                                m_serverSide.seed, this);
+                m_inReady = std::make_unique<QSignalSpy>(m_incoming, &PeerConnection::ready);
+                m_inClosed = std::make_unique<QSignalSpy>(m_incoming, &PeerConnection::closed);
+            }
+        });
+    }
+
+    void init()
+    {
+        m_incoming = nullptr;
+        m_serverSide = side('b');
+    }
+
+    void cleanup()
+    {
+        m_inReady.reset();
+        m_inClosed.reset();
+        delete m_incoming;
+        m_incoming = nullptr;
+    }
+
+    void handshakeAndExchange()
+    {
+        const Side a = side('a');
+        PeerConnection *out = dial(a);
+        QSignalSpy outReady(out, &PeerConnection::ready);
+        QTRY_COMPARE(outReady.count(), 1);
+        QTRY_COMPARE(m_inReady->count(), 1);
+
+        QVERIFY(out->isReady() && out->isOutgoing());
+        QVERIFY(m_incoming->isReady() && !m_incoming->isOutgoing());
+        // Chacun connaît l'autre, identité prouvée par la signature du hello
+        QCOMPARE(out->peerOnion(), m_serverSide.onion);
+        QCOMPARE(out->peerNickname(), m_serverSide.nick);
+        QCOMPARE(out->peerIdentityKey(), Ed25519::publicKey(m_serverSide.seed));
+        QCOMPARE(m_incoming->peerOnion(), a.onion);
+        QCOMPARE(m_incoming->peerNickname(), a.nick);
+        QCOMPARE(m_incoming->peerIdentityKey(), Ed25519::publicKey(a.seed));
+
+        QSignalSpy received(m_incoming, &PeerConnection::received);
+        out->send({{"t", "msg"}, {"x", "bonjour"}});
+        out->send({{"t", "msg"}, {"x", QString(200000, 'z')}}); // gros message, en plusieurs morceaux TCP
+        QTRY_COMPARE(received.count(), 2);
+        QCOMPARE(received.at(0).at(0).toJsonObject().value("x").toString(), QString("bonjour"));
+        QCOMPARE(received.at(1).at(0).toJsonObject().value("x").toString().size(), 200000);
+
+        QSignalSpy back(out, &PeerConnection::received);
+        m_incoming->send({{"t", "reply"}});
+        QTRY_COMPARE(back.count(), 1);
+
+        // Fermeture : signalée une seule fois de chaque côté
+        QSignalSpy outClosed(out, &PeerConnection::closed);
+        out->close();
+        out->close();
+        QCOMPARE(outClosed.count(), 1);
+        QVERIFY(!out->isReady());
+        QTRY_COMPARE(m_inClosed->count(), 1);
+        out->send({{"t", "msg"}}); // sans effet après fermeture
+        delete out;
+    }
+
+    void wrongSecretIsRejected()
+    {
+        PeerConnection *out = dial(side('a', "un autre secret"));
+        QSignalSpy outClosed(out, &PeerConnection::closed), outReady(out, &PeerConnection::ready);
+        QTRY_VERIFY(m_incoming);
+        QTRY_COMPARE(m_inClosed->count(), 1);
+        QTRY_COMPARE(outClosed.count(), 1);
+        QVERIFY(m_inClosed->at(0).at(0).toString().contains("secret"));
+        QCOMPARE(outReady.count(), 0);
+        QCOMPARE(m_inReady->count(), 0);
+        delete out;
+    }
+
+    void rejectsNonP2PChatPeer()
+    {
+        QTcpSocket *raw = rawSocket();
+        QTRY_VERIFY(m_incoming);
+        QSignalSpy &closed = *m_inClosed;
+        QByteArray frame("HTTP/1.1 200 OK", 15);
+        QByteArray header(4, '\0');
+        qToBigEndian<quint32>(quint32(frame.size()), header.data());
+        raw->write(header + frame);
+        QTRY_COMPARE(closed.count(), 1);
+        QVERIFY(closed.at(0).at(0).toString().contains("P2P Chat"));
+        delete raw;
+    }
+
+    void rejectsOversizedFrame()
+    {
+        QTcpSocket *raw = rawSocket();
+        QTRY_VERIFY(m_incoming);
+        QSignalSpy &closed = *m_inClosed;
+        raw->write(QByteArray("\xff\xff\xff\xff", 4));
+        QTRY_COMPARE(closed.count(), 1);
+        QVERIFY(closed.at(0).at(0).toString().contains("trop grande"));
+        delete raw;
+    }
+
+    void detectsPeerDisconnect()
+    {
+        QTcpSocket *raw = rawSocket();
+        QTRY_VERIFY(m_incoming);
+        QSignalSpy &closed = *m_inClosed;
+        raw->disconnectFromHost();
+        QTRY_COMPARE(closed.count(), 1);
+        delete raw;
+    }
+
+    void unreachablePeerFails()
+    {
+        // Port fermé : l'appel échoue sans attendre le délai de poignée de main
+        QTcpServer closedPort;
+        QVERIFY(closedPort.listen(QHostAddress::LocalHost, 0));
+        const quint16 port = closedPort.serverPort();
+        closedPort.close();
+
+        auto *s = new QTcpSocket;
+        s->setProxy(QNetworkProxy::NoProxy);
+        const Side a = side('a');
+        PeerConnection c(s, true, a.psk, a.nick, a.onion, a.seed);
+        QSignalSpy closed(&c, &PeerConnection::closed);
+        s->connectToHost(QHostAddress::LocalHost, port);
+        QTRY_COMPARE(closed.count(), 1);
+        QVERIFY(closed.at(0).at(0).toString().contains("injoignable"));
+    }
+};
+
+QTEST_GUILESS_MAIN(TestPeerConnection)
+#include "tst_peerconnection.moc"

@@ -1,5 +1,7 @@
 #include "peerconnection.h"
 
+#include "protocol.h"
+
 #include <QDebug>
 #include <QJsonDocument>
 #include <QTcpSocket>
@@ -9,16 +11,6 @@ static const QByteArray Magic("P2PCHAT1");
 static constexpr quint32 MaxFrame = 256 * 1024;
 
 static const QByteArray HelloContext("p2pchat-hello-v4");
-
-static QByteArray b64(const QByteArray &b)
-{
-    return b.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
-}
-
-static QByteArray unb64(const QJsonValue &v)
-{
-    return QByteArray::fromBase64(v.toString().toLatin1(), QByteArray::Base64UrlEncoding);
-}
 
 PeerConnection::PeerConnection(QTcpSocket *socket, bool outgoing, const QByteArray &psk, const QString &nickname,
                                const QString &ownOnion, const QByteArray &identitySeed, QObject *parent)
@@ -105,8 +97,8 @@ void PeerConnection::handleFrame(const QByteArray &frame)
                        {"n", m_nick},
                        {"o", m_ownOnion},
                        {"v", 4},
-                       {"k", QString::fromLatin1(b64(Ed25519::publicKey(m_identitySeed)))},
-                       {"s", QString::fromLatin1(b64(proof))}});
+                       {"k", Protocol::toB64(Ed25519::publicKey(m_identitySeed))},
+                       {"s", Protocol::toB64(proof)}});
         return;
     }
 
@@ -124,11 +116,11 @@ void PeerConnection::handleFrame(const QByteArray &frame)
             fail(tr("protocole inattendu"));
             return;
         }
-        m_peerNick = o.value("n").toString().left(40);
+        m_peerNick = o.value("n").toString().left(Protocol::MaxNickLength);
         if (m_peerNick.isEmpty())
             m_peerNick = tr("Correspondant");
         m_peerOnion = o.value("o").toString().left(70);
-        const QByteArray key = unb64(o.value("k")), proof = unb64(o.value("s"));
+        const QByteArray key = Protocol::fromB64(o.value("k")), proof = Protocol::fromB64(o.value("s"));
         if (o.value("v").toInt() < 4) {
             fail(tr("le correspondant utilise une ancienne version de P2P Chat"));
             return;

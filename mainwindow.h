@@ -1,5 +1,8 @@
 #pragma once
 #include "chatview.h"
+#include "connectionpolicy.h"
+#include "groupstore.h"
+#include "history.h"
 
 #include <QDateTime>
 #include <QHash>
@@ -18,6 +21,7 @@ class QMessageBox;
 class QLineEdit;
 class QPushButton;
 class QTcpServer;
+class QTcpSocket;
 class QStackedWidget;
 class QSystemTrayIcon;
 class Notifier;
@@ -38,11 +42,6 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
 private:
-    struct Member
-    {
-        QString onion, nick;
-    };
-
     // Interface
     void buildUi();
     void updateStatus();
@@ -64,39 +63,34 @@ private:
     void showInvitation();
     void join();
 
-    // Membres du groupe
-    QList<Member> members() const;
-    void saveMembers(const QList<Member> &list);
+    // Membres du groupe (cf. GroupStore)
     bool mergeMember(const QString &onion, const QString &nick); // true si nouveau membre
+    bool pinKey(const QString &onion, const QByteArray &key);    // false si une autre clé est déjà connue
+    QString memberNick(const QString &onion) const;
     QJsonObject membersMessage() const;
-
-    // Identité : clé Ed25519 de ce poste, et trousseau des clés des membres (mémorisées à la
-    // première rencontre, conservées même après avoir quitté le groupe pour vérifier l'historique)
-    QByteArray identitySeed() const;
-    QByteArray myIdentityKey() const;
-    QByteArray pinnedKey(const QString &onion) const;
-    bool pinKey(const QString &onion, const QByteArray &key); // false si une autre clé est déjà connue
-    QJsonObject signedMessage(const QString &text) const;
     ChatEntry::Trust verifyMessage(const QJsonObject &msg, bool mine) const;
 
-    // Synchronisation de l'historique : à chaque connexion, chacun envoie l'inventaire de ses
-    // messages récents et reçoit en retour ceux qui lui manquent (signés par leur auteur).
+    // Synchronisation de l'historique (cf. history.h)
     QJsonObject inventoryMessage() const;
-    void sendMissing(PeerConnection *c, const QJsonArray &theirIds);
-    void sendBatches(PeerConnection *c, QList<QJsonObject> messages); // filtrés pour ce membre
+    void sendBatches(PeerConnection *c, const QList<QJsonObject> &messages); // filtrés pour ce membre
     void receiveSync(PeerConnection *from, const QJsonArray &messages);
-    qint64 syncCutoff() const;                    // rien d'antérieur n'est échangé
-    qint64 firstSeen(const QString &onion) const; // date de première rencontre d'un membre
-    QString memberNick(const QString &onion) const;
+    qint64 syncCutoff() const;
+    // Message reçu alors que la fenêtre n'est pas au premier plan
+    void notifyUnread(int count, const QString &title, const QString &text);
 
     // Connexions
     void onNewConnection();
     void connectToMembers();
     void reconnectNow(); // abandonne les tentatives en cours et relance tout de suite
     void dial(const QString &onion);
-    void watch(PeerConnection *c);
+    PeerConnection *newConnection(QTcpSocket *socket, bool outgoing);
+    void onClosed(PeerConnection *c, const QString &reason);
+    void announceDropLater(const QString &onion, const QString &reason);
     void setActive(PeerConnection *c);
     void onReceived(PeerConnection *c, const QJsonObject &obj);
+    void onMembers(PeerConnection *c, const QJsonObject &obj);
+    void onPresence(PeerConnection *c, const QJsonObject &obj);
+    void onChatMessage(PeerConnection *c, const QJsonObject &obj);
     void broadcast(const QJsonObject &obj, PeerConnection *except = nullptr);
     void closeAll();
     void onWake(qint64 gapMs);          // l'ordinateur sort de veille (ou le programme était figé)
@@ -118,10 +112,9 @@ private:
 
     void changeNickname();
     void resetAll();
-    QString nickname() const;
-    QByteArray secret() const;
 
     QSettings m_settings;
+    GroupStore m_group{m_settings};
     QTcpServer *m_server = nullptr; // 127.0.0.1 uniquement, joint via le service onion
     TorService *m_tor = nullptr;
     QString m_myOnion, m_torStatus, m_torError;
@@ -140,12 +133,7 @@ private:
     QHash<QString, Dropped> m_dropped; // onion -> déconnexion en attente d'annonce
     quint64 m_dropToken = 0;
     // Espacement progressif des appels vers les membres injoignables
-    struct Backoff
-    {
-        int delay = 0;       // secondes
-        qint64 nextTry = 0;  // ms depuis l'époque
-    };
-    QHash<QString, Backoff> m_backoff;
+    QHash<QString, ConnectionPolicy::Backoff> m_backoff;
     qint64 m_fastRetryUntil = 0; // jusque-là, essais à intervalle fixe (Tor vient de (re)démarrer)
     // Présence relayée
     QHash<QString, QSet<QString>> m_peerPresence; // membre connecté -> membres qu'il voit en ligne
@@ -156,7 +144,7 @@ private:
     qint64 m_lastTick = 0;
     QSet<QString> m_seenIds;                     // anti-doublon des messages relayés
     QSet<QString> m_identityWarned;              // avertissements d'identité déjà affichés
-    QHash<QString, QJsonObject> m_store;         // historique signé : id -> message
+    History::Store m_store;                      // historique signé : id -> message
     QTimer m_retryTimer;
     QTimer m_syncTimer; // inventaire de contrôle périodique
     int m_unread = 0;
