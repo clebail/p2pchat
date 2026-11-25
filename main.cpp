@@ -1,10 +1,13 @@
 #include "groupstore.h"
 #include "mainwindow.h"
+#include "singleinstance.h"
 
 #include <QApplication>
 #include <QIcon>
 #include <QInputDialog>
+#include <QMessageBox>
 #include <QSettings>
+#include <QStandardPaths>
 
 #ifdef P2P_TERMINAL
 #  include "terminalclient.h"
@@ -26,6 +29,14 @@ int main(int argc, char *argv[])
     QApplication::setWindowIcon(QIcon(":/icons/p2pchat.png"));
     QSettings::setDefaultFormat(QSettings::IniFormat); // même format sur Linux, macOS et Windows
 
+    // Une seule instance : sinon, on montre celle qui est déjà ouverte (peut-être dans la zone de notification)
+    SingleInstance instance(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+    if (!instance.acquire()) {
+        if (!instance.activateRunning())
+            QMessageBox::information(nullptr, "P2P Chat", QObject::tr("P2P Chat est déjà ouvert."));
+        return 0;
+    }
+
     QSettings settings;
     GroupStore group(settings);
     while (group.nickname().isEmpty()) {
@@ -39,6 +50,7 @@ int main(int argc, char *argv[])
     settings.sync();
 
     MainWindow w;
+    QObject::connect(&instance, &SingleInstance::activationRequested, &w, &MainWindow::showAndRaise);
     w.show();
     return app.exec();
 }

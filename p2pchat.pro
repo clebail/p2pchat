@@ -29,8 +29,8 @@ macx {
 # Console partagée (Linux et macOS) : pseudo-terminal + fenêtre de terminal
 unix {
     DEFINES += P2P_TERMINAL
-    SOURCES += terminalsession.cpp terminalclient.cpp
-    HEADERS += terminalsession.h terminalclient.h
+    SOURCES += terminalsession.cpp terminalsharing.cpp terminalclient.cpp
+    HEADERS += terminalsession.h terminalsharing.h terminalclient.h
     linux: LIBS += -lutil   # forkpty (glibc < 2.34) ; macOS : dans la libc
 }
 

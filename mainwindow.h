@@ -30,6 +30,7 @@ class QMimeData;
 class Notifier;
 class QToolButton;
 class TerminalSession;
+class TerminalSharing;
 class TorService;
 
 // Fenêtre principale : la conversation, Tor, les notifications et la console partagée.
@@ -39,6 +40,8 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+    // Affiche la fenêtre (depuis la zone de notification, une notification ou une autre instance lancée)
+    void showAndRaise();
 
 protected:
     void changeEvent(QEvent *event) override;
@@ -86,7 +89,6 @@ private:
     void openLink(const QString &url);
     void clearConversation();
     void setupTray();
-    void showAndRaise();
     void updateUnread();
 
     // Tor
@@ -109,12 +111,10 @@ private:
     void reconnectNow(); // Tor en panne : relancé ; sinon, le groupe rappelle tout le monde
     void sendCurrent();
 
-    // Console partagée (Linux, macOS) : un membre ouvre sa console à un autre, cf. terminalsession.h
+    // Console partagée (Linux, macOS) : négociation dans TerminalSharing, ici les questions posées
+    void setupTerminalSharing();
     void shareTerminal();
-    void stopTerminal();
-    void onTerminalMessage(const QString &from, const QJsonObject &obj);
-    bool startTerminal(bool host, const QString &sid, const QString &onion, bool control);
-    void terminalPeerLost(const QString &onion);
+    void askTerminalOffer(const QString &onion, const QString &nick, bool control);
 
     void changeNickname();
     // Code de sécurité (cf. safetynumber.h) : choix du membre, puis comparaison de vive voix
@@ -131,15 +131,8 @@ private:
 
     int m_unread = 0;
 
-    struct TermOffer
-    {
-        QString sid, onion;
-        bool control = false;
-    };
-    TerminalSession *m_term = nullptr;  // une seule console partagée à la fois
-    TermOffer m_termOffer;              // proposition envoyée, en attente de réponse
-    TermOffer m_termIncoming;           // proposition reçue, en attente de notre réponse
-    QPointer<QMessageBox> m_termPrompt;
+    TerminalSharing *m_sharing = nullptr;
+    QPointer<QMessageBox> m_termPrompt; // « Ouvrir la console de … ? »
     QAction *m_termShareAct = nullptr, *m_termCtlAct = nullptr, *m_termStopAct = nullptr;
 
     ChatView *m_chat = nullptr;

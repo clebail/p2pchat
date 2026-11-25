@@ -15,6 +15,7 @@
 #include "torservice.h"
 #ifdef P2P_TERMINAL
 #  include "terminalsession.h"
+#  include "terminalsharing.h"
 #endif
 
 #include <QApplication>
@@ -172,18 +173,7 @@ void MainWindow::connectNode()
     });
     connect(m_node, &GroupNode::stateChanged, this, &MainWindow::updateStatus);
     connect(m_node, &GroupNode::typingChanged, this, &MainWindow::updateStatus);
-    connect(m_node, &GroupNode::terminalMessage, this, &MainWindow::onTerminalMessage);
-    connect(m_node, &GroupNode::peerLost, this, &MainWindow::terminalPeerLost);
-#ifdef P2P_TERMINAL
-    connect(m_node, &GroupNode::peerReady, this, [this](const QString &onion) {
-        if (m_term && m_term->peerOnion() == onion)
-            m_term->setLinkUp(); // reprise de la console partagée
-    });
-    connect(m_node, &GroupNode::allClosed, this, [this] {
-        if (m_term) // plus aucune connexion (Tor arrêté, groupe quitté) : inutile d'attendre
-            m_term->end(tr("connexions fermées"), false);
-    });
-#endif
+    setupTerminalSharing();
 }
 
 // ---------------------------------------------------------------- Système (zone de notification, fermeture)
@@ -422,22 +412,20 @@ void MainWindow::buildUi()
 #ifdef P2P_TERMINAL
     menu->addSeparator();
     m_termShareAct = menu->addAction(tr("Partager ma console…"), this, &MainWindow::shareTerminal);
-    m_termCtlAct = menu->addAction(QString(), this, [this] {
-        if (m_term && m_term->role() == TerminalSession::Host)
-            m_term->setControl(!m_term->control());
-    });
-    m_termStopAct = menu->addAction(QString(), this, &MainWindow::stopTerminal);
+    m_termCtlAct = menu->addAction(QString(), this, [this] { m_sharing->toggleControl(); });
+    m_termStopAct = menu->addAction(QString(), this, [this] { m_sharing->stop(); });
     connect(menu, &QMenu::aboutToShow, this, [this] {
-        const bool host = m_term && m_term->role() == TerminalSession::Host;
-        m_termShareAct->setEnabled(!m_term && m_termOffer.sid.isEmpty() && m_node->hasConnections());
+        const TerminalSession *term = m_sharing->session();
+        const bool host = term && term->role() == TerminalSession::Host;
+        m_termShareAct->setEnabled(m_sharing->canShare() && m_node->hasConnections());
         m_termCtlAct->setVisible(host);
         if (host)
-            m_termCtlAct->setText(m_term->control() ? tr("Retirer le contrôle à %1").arg(m_term->peerNick())
-                                                    : tr("Donner le contrôle à %1").arg(m_term->peerNick()));
-        m_termStopAct->setVisible(m_term || !m_termOffer.sid.isEmpty());
-        m_termStopAct->setText(!m_term ? tr("Annuler la proposition de console")
-                               : host  ? tr("Arrêter le partage de console")
-                                       : tr("Quitter la console de %1").arg(m_term->peerNick()));
+            m_termCtlAct->setText(term->control() ? tr("Retirer le contrôle à %1").arg(term->peerNick())
+                                                  : tr("Donner le contrôle à %1").arg(term->peerNick()));
+        m_termStopAct->setVisible(term || m_sharing->hasOutgoingOffer());
+        m_termStopAct->setText(!term  ? tr("Annuler la proposition de console")
+                               : host ? tr("Arrêter le partage de console")
+                                      : tr("Quitter la console de %1").arg(term->peerNick()));
     });
 #endif
     menu->addSeparator();
@@ -1418,9 +1406,20 @@ void MainWindow::openLink(const QString &url)
 
 #ifdef P2P_TERMINAL
 
+void MainWindow::setupTerminalSharing()
+{
+    m_sharing = new TerminalSharing(*m_node, [this](const QString &onion) { return memberNick(onion); }, this);
+    connect(m_sharing, &TerminalSharing::systemMessage, this, &MainWindow::appendSystem);
+    connect(m_sharing, &TerminalSharing::offerReceived, this, &MainWindow::askTerminalOffer);
+    connect(m_sharing, &TerminalSharing::offerWithdrawn, this, [this] {
+        if (m_termPrompt)
+            m_termPrompt->close();
+    });
+}
+
 void MainWindow::shareTerminal()
 {
-    if (m_term || !m_termOffer.sid.isEmpty()) {
+    if (!m_sharing->canShare()) {
         QMessageBox::information(this, tr("Partager ma console"), tr("Un partage de console est déjà en cours."));
         return;
     }
@@ -1455,177 +1454,45 @@ void MainWindow::shareTerminal()
     connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     lay->addWidget(buttons);
-    if (dlg.exec() != QDialog::Accepted || m_term || !m_termOffer.sid.isEmpty())
+    if (dlg.exec() != QDialog::Accepted || !m_sharing->canShare())
         return;
 
     const QString onion = who->currentData().toString();
-    if (!m_node->isConnected(onion)) {
+    if (!m_sharing->propose(onion, control->isChecked()))
         QMessageBox::information(this, tr("Partager ma console"), tr("%1 n'est plus en ligne.").arg(memberNick(onion)));
-        return;
-    }
-    const QString sid = QString::fromLatin1(Crypto::randomBytes(12).toHex());
-    m_termOffer = {sid, onion, control->isChecked()};
-    m_node->sendTo(onion, {{"t", "term-offer"}, {"sid", sid}, {"ctl", m_termOffer.control}});
-    appendSystem(tr("Proposition de partage de console envoyée à %1…").arg(memberNick(onion)));
-
-    QTimer::singleShot(120000, this, [this, sid] {
-        if (m_termOffer.sid != sid)
-            return;
-        m_node->sendTo(m_termOffer.onion, {{"t", "term-end"}, {"sid", sid}});
-        appendSystem(tr("%1 n'a pas répondu à la proposition de partage de console.").arg(memberNick(m_termOffer.onion)));
-        m_termOffer = {};
-    });
 }
 
-void MainWindow::stopTerminal()
+void MainWindow::askTerminalOffer(const QString &, const QString &nick, bool control)
 {
-    if (m_term) {
-        m_term->end(m_term->role() == TerminalSession::Host ? tr("vous avez arrêté le partage")
-                                                            : tr("vous avez quitté la console"));
-    } else if (!m_termOffer.sid.isEmpty()) {
-        m_node->sendTo(m_termOffer.onion, {{"t", "term-end"}, {"sid", m_termOffer.sid}});
-        appendSystem(tr("Proposition de partage de console annulée."));
-        m_termOffer = {};
-    }
-}
-
-bool MainWindow::startTerminal(bool host, const QString &sid, const QString &onion, bool control)
-{
-    auto *t = new TerminalSession(host ? TerminalSession::Host : TerminalSession::Guest, sid, onion,
-                                  memberNick(onion), control, this);
-    t->setBacklogProbe([this, onion] { return m_node->pendingBytes(onion); });
-    connect(t, &TerminalSession::sendToPeer, this,
-            [this, onion](const QJsonObject &o) { m_node->sendTo(onion, o); });
-    connect(t, &TerminalSession::finished, this, [this, t](const QString &reason) {
-        if (m_term == t)
-            m_term = nullptr;
-        t->deleteLater();
-        appendSystem(tr("Console partagée fermée : %1.").arg(reason));
-    });
-    m_term = t;
-    QString error;
-    if (!t->start(&error)) {
-        t->end(error); // prévient l'autre membre
-        return false;
-    }
-    return true;
-}
-
-void MainWindow::onTerminalMessage(const QString &from, const QJsonObject &o)
-{
-    const QString type = o.value("t").toString();
-    const QString sid = o.value("sid").toString();
-    if (sid.isEmpty())
-        return;
-
-    if (type == "term-offer") {
-        if (m_term || m_termPrompt || !m_termOffer.sid.isEmpty()) {
-            m_node->sendTo(from, {{"t", "term-refuse"}, {"sid", sid}, {"busy", true}});
-            return;
-        }
-        const bool control = o.value("ctl").toBool();
-        const QString nick = memberNick(from);
-        m_termIncoming = {sid, from, control};
-        auto *box = new QMessageBox(
-            QMessageBox::Question, tr("Console partagée"),
-            tr("<b>%1</b> vous propose de voir sa console.<br><br>%2")
-                .arg(nick.toHtmlEscaped(),
-                     control ? tr("Vous pourrez y taper des commandes, exécutées sur son poste.")
-                             : tr("En lecture seule : vous verrez ce qui s'affiche, sans pouvoir taper.")),
-            QMessageBox::NoButton, this);
-        QPushButton *accept = box->addButton(tr("Ouvrir la console"), QMessageBox::AcceptRole);
-        box->addButton(tr("Refuser"), QMessageBox::RejectRole);
-        box->setAttribute(Qt::WA_DeleteOnClose);
-        m_termPrompt = box;
-        connect(box, &QMessageBox::finished, this, [this, box, accept] {
-            const TermOffer offer = m_termIncoming;
-            m_termIncoming = {};
-            if (offer.sid.isEmpty())
-                return; // annulée entre-temps par l'autre membre
-            if (box->clickedButton() != accept) {
-                m_node->sendTo(offer.onion, {{"t", "term-refuse"}, {"sid", offer.sid}});
-                appendSystem(tr("Vous avez refusé la console de %1.").arg(memberNick(offer.onion)));
-                return;
-            }
-            if (!m_node->isConnected(offer.onion) || m_term) {
-                appendSystem(tr("%1 n'est plus en ligne : console non ouverte.").arg(memberNick(offer.onion)));
-                return;
-            }
-            if (startTerminal(false, offer.sid, offer.onion, offer.control))
-                m_node->sendTo(offer.onion, {{"t", "term-accept"}, {"sid", offer.sid}});
-        });
-        box->open();
-        if (!isVisible() || !isActiveWindow()) {
-            m_notifier->notify(nick, tr("vous propose de partager sa console"));
-            if (isVisible())
-                QApplication::alert(this);
-        }
-        return;
-    }
-
-    // Réponses à notre proposition
-    if (!m_termOffer.sid.isEmpty() && sid == m_termOffer.sid && from == m_termOffer.onion) {
-        const TermOffer offer = m_termOffer;
-        if (type == "term-accept") {
-            m_termOffer = {};
-            if (startTerminal(true, offer.sid, offer.onion, offer.control))
-                appendSystem(tr("Console partagée avec %1 (%2).")
-                                 .arg(memberNick(offer.onion),
-                                      offer.control ? tr("peut taper des commandes") : tr("lecture seule")));
-        } else if (type == "term-refuse" || type == "term-end") {
-            m_termOffer = {};
-            appendSystem(o.value("busy").toBool()
-                             ? tr("%1 a déjà une console partagée en cours.").arg(memberNick(offer.onion))
-                             : tr("%1 a refusé le partage de console.").arg(memberNick(offer.onion)));
-        }
-        return;
-    }
-
-    // Proposition reçue, annulée avant notre réponse
-    if (type == "term-end" && sid == m_termIncoming.sid && from == m_termIncoming.onion) {
-        m_termIncoming = {};
-        if (m_termPrompt)
-            m_termPrompt->close();
-        appendSystem(tr("%1 a annulé sa proposition de console.").arg(memberNick(from)));
-        return;
-    }
-
-    // Session en cours : seul l'autre membre de la session peut y écrire
-    if (m_term && sid == m_term->sid() && from == m_term->peerOnion()) {
-        m_term->handlePeerMessage(o);
-        return;
-    }
-    // Reprise d'une session qui n'existe plus chez nous (terminée pendant la coupure)
-    if (type == "term-resume")
-        m_node->sendTo(from, {{"t", "term-end"}, {"sid", sid}});
-}
-
-void MainWindow::terminalPeerLost(const QString &onion)
-{
-    if (m_term && m_term->peerOnion() == onion)
-        m_term->setLinkDown(); // la session attend le retour du membre (2 min au plus)
-    if (m_termOffer.onion == onion && !m_termOffer.sid.isEmpty()) {
-        m_termOffer = {};
-        appendSystem(tr("Proposition de console annulée : %1 s'est déconnecté(e).").arg(memberNick(onion)));
-    }
-    if (m_termIncoming.onion == onion && !m_termIncoming.sid.isEmpty()) {
-        m_termIncoming = {};
-        if (m_termPrompt)
-            m_termPrompt->close();
+    auto *box = new QMessageBox(
+        QMessageBox::Question, tr("Console partagée"),
+        tr("<b>%1</b> vous propose de voir sa console.<br><br>%2")
+            .arg(nick.toHtmlEscaped(), control ? tr("Vous pourrez y taper des commandes, exécutées sur son poste.")
+                                               : tr("En lecture seule : vous verrez ce qui s'affiche, sans pouvoir taper.")),
+        QMessageBox::NoButton, this);
+    QPushButton *accept = box->addButton(tr("Ouvrir la console"), QMessageBox::AcceptRole);
+    box->addButton(tr("Refuser"), QMessageBox::RejectRole);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    m_termPrompt = box;
+    // Fermée aussi quand la proposition est retirée : answer() n'a alors plus d'effet
+    connect(box, &QMessageBox::finished, this, [this, box, accept] { m_sharing->answer(box->clickedButton() == accept); });
+    box->open();
+    if (!isVisible() || !isActiveWindow()) {
+        m_notifier->notify(nick, tr("vous propose de partager sa console"));
+        if (isVisible())
+            QApplication::alert(this);
     }
 }
 
 #else // pas de console partagée sur cette plateforme
 
-void MainWindow::shareTerminal() {}
-void MainWindow::stopTerminal() {}
-bool MainWindow::startTerminal(bool, const QString &, const QString &, bool) { return false; }
-void MainWindow::terminalPeerLost(const QString &) {}
-
-void MainWindow::onTerminalMessage(const QString &from, const QJsonObject &o)
+void MainWindow::setupTerminalSharing()
 {
-    if (o.value("t").toString() == "term-offer")
-        m_node->sendTo(from, {{"t", "term-refuse"}, {"sid", o.value("sid").toString()}});
+    // Toute proposition est refusée
+    connect(m_node, &GroupNode::terminalMessage, this, [this](const QString &from, const QJsonObject &o) {
+        if (o.value("t").toString() == "term-offer")
+            m_node->sendTo(from, {{"t", "term-refuse"}, {"sid", o.value("sid").toString()}});
+    });
 }
 
 #endif

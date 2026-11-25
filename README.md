@@ -92,6 +92,8 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 - Arrivées et départs regroupés : les « X est en ligne » / « X s'est déconnecté(e) » consécutifs tiennent sur une
   seule ligne (un clic la déplie). Une coupure n'est annoncée que si le membre n'est pas revenu au bout de 60 s,
   et qu'aucun autre membre ne le voit encore en ligne.
+- **Une seule instance** : relancer P2P Chat alors qu'il est déjà ouvert (par exemple caché dans la zone de
+  notification) affiche simplement la fenêtre existante.
 - **Notifications natives** avec l'icône de l'application quand un message arrive et que la fenêtre n'est pas
   au premier plan. Un clic sur la notification rouvre la fenêtre.
 - **Linux / Windows** : icône dans la zone de notification, avec une pastille rouge s'il y a des messages non lus.
@@ -214,7 +216,8 @@ Sous AddressSanitizer et UndefinedBehaviorSanitizer (accès mémoire, fuites, co
 Ils couvrent la cryptographie, les codes d'invitation, la signature des messages, l'état du groupe (membres,
 trousseau), l'historique et sa synchronisation, les règles de reconnexion, la poignée de main entre deux
 `PeerConnection` reliées en local (sans Tor), des scénarios complets entre plusieurs membres
-(`tst_groupnode` : maillage, relais, réactions, rattrapage après une absence, message falsifié, imposteur…) et le modèle de la liste de messages (rendu hors écran).
+(`tst_groupnode` : maillage, relais, réactions, rattrapage après une absence, message falsifié, imposteur…),
+la négociation de la console partagée (`tst_terminalsharing`, sans ouvrir de terminal), l'instance unique et le modèle de la liste de messages (rendu hors écran).
 
 ## Sécurité
 
@@ -282,6 +285,8 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 | `chatview.*`, `hoverbar.h` | Liste des messages : défilement, séparateur, bouton ↓, barre de survol, GIF, images en grand |
 | `ui.pri` | Composants de la conversation, partagés par l'application et les tests graphiques |
 | `terminalsession.*` | Console partagée : shell dans un pseudo-terminal (hôte), miroir (invité), échanges avec l'autre membre |
+| `terminalsharing.*` | Console partagée : proposition, réponse, annulation, une session à la fois |
+| `singleinstance.*` | Une seule instance par utilisateur ; la suivante affiche la fenêtre existante |
 | `terminalclient.*` | Mode `p2pchat --terminal` exécuté dans la fenêtre de terminal (mode brut, relais vers P2P Chat) |
 | `tests/` | Tests unitaires (Qt Test) |
 | `icons/` | Icône : `p2pchat.svg` (source), `.icns` (macOS), `.ico` (Windows), `.png` |

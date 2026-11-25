@@ -13,9 +13,13 @@ SUBDIRS += \
     tst_protocol \
     tst_reactions \
     tst_safetynumber \
+    tst_singleinstance \
     tst_groupnode \
     tst_groupstore \
     tst_history \
     tst_connectionpolicy \
     tst_peerconnection \
     tst_chatmodel
+
+# Console partagée : Linux et macOS seulement
+unix: SUBDIRS += tst_terminalsharing
