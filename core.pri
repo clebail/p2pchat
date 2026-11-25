@@ -11,6 +11,7 @@ SOURCES += \
     $$PWD/groupstore.cpp \
     $$PWD/history.cpp \
     $$PWD/invitation.cpp \
+    $$PWD/links.cpp \
     $$PWD/mentions.cpp \
     $$PWD/peerconnection.cpp \
     $$PWD/protocol.cpp
@@ -22,6 +23,7 @@ HEADERS += \
     $$PWD/groupstore.h \
     $$PWD/history.h \
     $$PWD/invitation.h \
+    $$PWD/links.h \
     $$PWD/mentions.h \
     $$PWD/peerconnection.h \
     $$PWD/protocol.h

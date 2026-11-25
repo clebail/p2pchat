@@ -12,6 +12,7 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QStandardPaths>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QMouseEvent>
 #include <QHash>
@@ -30,6 +31,9 @@ const QColor MineBubble("#d3e3fd"), MineText("#041e49");
 const QColor OtherBubble("#e9eef6"), OtherText("#1f1f1f");
 const QColor MentionBubble("#fdefc3"); // message qui nous mentionne
 const QColor MentionText("#0b57d0");   // « @pseudo »
+const QColor LinkText("#0b57d0");
+const QColor SearchHighlight("#fde293");
+const QColor MarkerColor("#d93025");   // « Nouveaux messages »
 const QColor Muted("#5f6368");
 
 constexpr int Side = 14;        // marge latérale
@@ -81,12 +85,31 @@ qreal layoutText(QTextLayout &tl, int maxWidth, qreal *usedWidth)
     return y;
 }
 
-// Texte d'un message, mentions en gras et en couleur
-void prepareMessageLayout(QTextLayout &tl, const ChatEntry &e)
+// Texte d'un message : mentions en gras et en couleur, liens soulignés, occurrences recherchées surlignées
+void prepareMessageLayout(QTextLayout &tl, const ChatEntry &e, const QString &searchTerm = {})
 {
     tl.setText(e.text);
     tl.setFont(messageFont());
     QVector<QTextLayout::FormatRange> formats;
+    const QString term = ChatModel::fold(searchTerm);
+    if (!term.isEmpty()) {
+        const QString folded = ChatModel::fold(e.text);
+        for (int i = int(folded.indexOf(term)); i >= 0; i = int(folded.indexOf(term, i + term.size()))) {
+            QTextLayout::FormatRange r;
+            r.start = i;
+            r.length = int(term.size());
+            r.format.setBackground(SearchHighlight);
+            formats.append(r);
+        }
+    }
+    for (const Links::Span &l : e.links) {
+        QTextLayout::FormatRange r;
+        r.start = l.start;
+        r.length = l.length;
+        r.format.setFontUnderline(true);
+        r.format.setForeground(LinkText);
+        formats.append(r);
+    }
     for (const auto &m : e.mentions) {
         QTextLayout::FormatRange r;
         r.start = m.first;
@@ -208,6 +231,51 @@ int ChatModel::rowOf(const QString &id) const
     return -1;
 }
 
+int ChatModel::markerRow() const
+{
+    for (int i = int(m_entries.size()) - 1; i >= 0; --i)
+        if (m_entries.at(i).kind == ChatEntry::Marker)
+            return i;
+    return -1;
+}
+
+void ChatModel::removeRow(int row)
+{
+    if (row < 0 || row >= m_entries.size())
+        return;
+    beginRemoveRows({}, row, row);
+    m_entries.removeAt(row);
+    endRemoveRows();
+    // Les voisins se regroupent peut-être à nouveau
+    const int first = qMax(0, row - 1), last = qMin(int(m_entries.size()) - 1, row);
+    if (first <= last)
+        emit dataChanged(index(first), index(last));
+}
+
+QString ChatModel::fold(const QString &text)
+{
+    QString out = text;
+    for (int i = 0; i < out.size(); ++i) {
+        QChar c = out.at(i);
+        while (c.decompositionTag() == QChar::Canonical && !c.decomposition().isEmpty())
+            c = c.decomposition().at(0); // « é » -> « e »
+        out[i] = c.toLower();
+    }
+    return out;
+}
+
+QList<int> ChatModel::search(const QString &term) const
+{
+    const QString t = fold(term.trimmed());
+    QList<int> rows;
+    if (t.isEmpty())
+        return rows;
+    for (int i = 0; i < m_entries.size(); ++i)
+        if (m_entries.at(i).kind == ChatEntry::Message && fold(m_entries.at(i).text).contains(t))
+            rows.append(i);
+    return rows;
+}
+
 void ChatModel::resolveReply(ChatEntry &e) const
 {
     const int row = rowOf(e.replyTo);
@@ -307,6 +375,11 @@ ChatDelegate::Geometry ChatDelegate::compute(const QModelIndex &index, int width
     g.top = (row == 0 ? 10 : (g.first ? 12 : 2)) + (g.dateHeader ? 34 : 0);
 
     const QFontMetrics small(smallFont());
+    if (e.kind == ChatEntry::Marker) {
+        g.bubbleH = small.height() + 4;
+        g.height = g.top + g.bubbleH + 8;
+        return g;
+    }
     if (e.kind != ChatEntry::Message) {
         QTextLayout tl(e.text, smallFont());
         g.bubbleH = int(std::ceil(layoutText(tl, width - 4 * Side, nullptr)));
@@ -385,22 +458,68 @@ QRectF ChatDelegate::quoteRect(const Geometry &g, const QRectF &bubble) const
     return QRectF(bubble.left() + QuoteMargin, bubble.top() + QuoteMargin, bubble.width() - 2 * QuoteMargin, g.quoteH);
 }
 
+ChatDelegate::Hit ChatDelegate::hitTest(const QModelIndex &index, const QRect &rect, const QPoint &pos) const
+{
+    Hit hit;
+    if (!index.isValid())
+        return hit;
+    const ChatEntry &e = static_cast<const ChatModel *>(index.model())->entry(index.row());
+    if (e.kind != ChatEntry::Message)
+        return hit;
+    const Geometry g = compute(index, rect.width());
+    const QRectF bubble = bubbleRect(e, g, rect);
+    if (g.quoteH && quoteRect(g, bubble).contains(pos)) {
+        hit.kind = Hit::Quote;
+        return hit;
+    }
+    if (g.imageH && imageRect(g, bubble).contains(pos)) {
+        hit.kind = Hit::Image;
+        return hit;
+    }
+    if (e.links.isEmpty() || !bubble.contains(pos))
+        return hit;
+    // Caractère sous le pointeur, avec la même mise en page que le dessin
+    QTextLayout tl;
+    prepareMessageLayout(tl, e);
+    layoutText(tl, g.bubbleW - 2 * PadH + 1, nullptr);
+    const QPointF local = QPointF(pos) - QPointF(bubble.left() + PadH, bubble.top() + g.textTop);
+    for (int i = 0; i < tl.lineCount(); ++i) {
+        const QTextLine line = tl.lineAt(i);
+        if (local.y() < line.y() || local.y() >= line.y() + line.height())
+            continue;
+        if (local.x() < 0 || local.x() > line.naturalTextWidth())
+            break;
+        const int c = line.xToCursor(local.x(), QTextLine::CursorOnCharacter);
+        for (const Links::Span &l : e.links)
+            if (c >= l.start && c < l.start + l.length) {
+                hit.kind = Hit::Link;
+                hit.url = l.url;
+            }
+        break;
+    }
+    return hit;
+}
+
 bool ChatDelegate::editorEvent(QEvent *event, QAbstractItemModel *model, const QStyleOptionViewItem &option,
                                const QModelIndex &index)
 {
     if (event->type() == QEvent::MouseButtonRelease) {
         const auto *mouse = static_cast<QMouseEvent *>(event);
-        const ChatEntry &e = static_cast<const ChatModel *>(index.model())->entry(index.row());
-        if (mouse->button() == Qt::LeftButton && e.kind == ChatEntry::Message) {
-            const Geometry g = compute(index, option.rect.width());
-            const QRectF bubble = bubbleRect(e, g, option.rect);
-            if (g.quoteH && quoteRect(g, bubble).contains(mouse->pos())) {
+        if (mouse->button() == Qt::LeftButton) {
+            const Hit hit = hitTest(index, option.rect, mouse->pos());
+            const ChatEntry &e = static_cast<const ChatModel *>(index.model())->entry(index.row());
+            switch (hit.kind) {
+            case Hit::Quote:
                 emit quoteClicked(e.replyTo);
                 return true;
-            }
-            if (g.imageH && imageRect(g, bubble).contains(mouse->pos())) {
+            case Hit::Image:
                 emit imageClicked(index.row());
                 return true;
+            case Hit::Link:
+                emit linkClicked(hit.url);
+                return true;
+            case Hit::None:
+                break;
             }
         }
     }
@@ -420,7 +539,7 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
 
     // Message rejoint depuis une citation : brièvement mis en évidence
     const auto *view = qobject_cast<const ChatView *>(m_view);
-    if (view && !e.id.isEmpty() && view->flashedId() == e.id)
+    if (view && view->isFlashed(index))
         p->fillRect(r.adjusted(0, g.dateHeader ? g.top - 6 : 0, 0, 0), QColor(11, 87, 208, 28));
 
     // Séparateur de date
@@ -431,6 +550,20 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
     }
 
     int y = r.top() + g.top;
+
+    // « Nouveaux messages » : trait rouge de part et d'autre du libellé
+    if (e.kind == ChatEntry::Marker) {
+        const QFontMetrics fm(smallFont(true));
+        const int textW = fm.horizontalAdvance(e.text) + 24;
+        const qreal mid = y + g.bubbleH / 2.0;
+        p->setPen(QPen(MarkerColor, 1));
+        p->drawLine(QPointF(r.left() + Side, mid), QPointF(r.center().x() - textW / 2.0, mid));
+        p->drawLine(QPointF(r.center().x() + textW / 2.0, mid), QPointF(r.right() - Side, mid));
+        p->setFont(smallFont(true));
+        p->drawText(QRect(r.left(), y, r.width(), g.bubbleH), Qt::AlignCenter, e.text);
+        p->restore();
+        return;
+    }
 
     if (e.kind != ChatEntry::Message) {
         QFont f = smallFont();
@@ -496,7 +629,7 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
 
     if (!e.text.isEmpty() || !g.imageH) {
         QTextLayout tl;
-        prepareMessageLayout(tl, e);
+        prepareMessageLayout(tl, e, view ? view->searchTerm() : QString());
         layoutText(tl, g.bubbleW - 2 * PadH + 1, nullptr);
         p->setPen(e.mine ? MineText : OtherText);
         tl.draw(p, QPointF(bubble.left() + PadH, bubble.top() + g.textTop));
@@ -541,17 +674,33 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
 ChatView::ChatView(QWidget *parent) : QListView(parent), m_model(new ChatModel(this))
 {
     setModel(m_model);
-    auto *delegate = new ChatDelegate(this);
-    setItemDelegate(delegate);
-    connect(delegate, &ChatDelegate::quoteClicked, this, &ChatView::showMessage);
-    connect(delegate, &ChatDelegate::imageClicked, this, &ChatView::openImage);
+    m_delegate = new ChatDelegate(this);
+    setItemDelegate(m_delegate);
+    connect(m_delegate, &ChatDelegate::quoteClicked, this, &ChatView::showMessage);
+    connect(m_delegate, &ChatDelegate::imageClicked, this, &ChatView::openImage);
+    connect(m_delegate, &ChatDelegate::linkClicked, this, &ChatView::linkClicked);
+    viewport()->setMouseTracking(true); // main au-dessus des liens, citations et images
     m_flashTimer = new QTimer(this);
     m_flashTimer->setSingleShot(true);
     m_flashTimer->setInterval(1600);
     connect(m_flashTimer, &QTimer::timeout, this, [this] {
-        m_flashId.clear();
+        m_flash = QPersistentModelIndex();
         viewport()->update();
     });
+
+    // « ↓ » en bas à droite quand on a remonté l'historique, avec le nombre de messages arrivés depuis
+    m_downButton = new QToolButton(this);
+    m_downButton->setObjectName("downButton");
+    m_downButton->setCursor(Qt::PointingHandCursor);
+    m_downButton->setToolTip(tr("Aller aux derniers messages"));
+    m_downButton->setStyleSheet(
+        "QToolButton#downButton { background: #ffffff; color: #0b57d0; border: 1px solid #c4c7c5;"
+        " border-radius: 18px; padding: 0 13px; min-height: 34px; font-size: 15px; font-weight: 600; }"
+        "QToolButton#downButton:hover { background: #e9eef6; }");
+    m_downButton->hide();
+    connect(m_downButton, &QToolButton::clicked, this, [this] { scrollToBottom(); });
+    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, &ChatView::updateDownButton);
+    connect(verticalScrollBar(), &QScrollBar::rangeChanged, this, &ChatView::updateDownButton);
     setSelectionMode(QAbstractItemView::NoSelection);
     setFocusPolicy(Qt::NoFocus);
     setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
@@ -584,8 +733,39 @@ void ChatView::appendEntry(const ChatEntry &e)
     const int row = m_model->insertSorted(e);
     // Les hauteurs des voisins ont pu changer : on refait la mise en page
     scheduleDelayedItemsLayout();
-    if ((atBottom && row == m_model->rowCount() - 1) || e.mine)
+    if ((atBottom && row == m_model->rowCount() - 1) || e.mine) {
         QMetaObject::invokeMethod(this, [this] { scrollToBottom(); }, Qt::QueuedConnection);
+    } else if (!atBottom && e.kind == ChatEntry::Message && row == m_model->rowCount() - 1) {
+        ++m_newBelow; // arrivé hors de vue
+        updateDownButton();
+    }
+}
+
+void ChatView::updateDownButton()
+{
+    QScrollBar *sb = verticalScrollBar();
+    const bool atBottom = sb->value() >= sb->maximum() - 40;
+    if (atBottom)
+        m_newBelow = 0;
+    m_downButton->setText(m_newBelow ? QStringLiteral("↓  %1").arg(m_newBelow) : QStringLiteral("↓"));
+    m_downButton->adjustSize();
+    const QRect vp = viewport()->geometry();
+    m_downButton->move(vp.right() - m_downButton->width() - 14, vp.bottom() - m_downButton->height() - 14);
+    m_downButton->setVisible(!atBottom);
+    m_downButton->raise();
+}
+
+bool ChatView::isDownButtonVisible() const
+{
+    return !m_downButton->isHidden();
+}
+
+void ChatView::mouseMoveEvent(QMouseEvent *event)
+{
+    QListView::mouseMoveEvent(event);
+    const QModelIndex idx = indexAt(event->pos());
+    const bool clickable = m_delegate->hitTest(idx, visualRect(idx), event->pos()).kind != ChatDelegate::Hit::None;
+    viewport()->setCursor(clickable ? Qt::PointingHandCursor : Qt::ArrowCursor);
 }
 
 void ChatView::addMessage(const QString &author, const QString &text, const QDateTime &ts, bool mine,
@@ -605,6 +785,7 @@ void ChatView::addMessage(const QString &author, const QString &text, const QDat
 void ChatView::addMessage(ChatEntry e)
 {
     e.kind = ChatEntry::Message;
+    e.links = Links::find(e.text);
     e.mentionsMe = e.mentionsMe && !e.mine;
     appendEntry(e);
 }
@@ -614,11 +795,97 @@ bool ChatView::showMessage(const QString &id)
     const int row = m_model->rowOf(id);
     if (row < 0)
         return false;
-    scrollTo(m_model->index(row), QAbstractItemView::PositionAtCenter);
-    m_flashId = id;
+    showRow(row);
+    return true;
+}
+
+void ChatView::showRow(int row)
+{
+    const QModelIndex idx = m_model->index(row);
+    if (!idx.isValid())
+        return;
+    scrollTo(idx, QAbstractItemView::PositionAtCenter);
+    m_flash = idx;
     m_flashTimer->start();
     viewport()->update();
-    return true;
+}
+
+QString ChatView::flashedId() const
+{
+    return m_flash.isValid() ? m_model->entry(m_flash.row()).id : QString();
+}
+
+void ChatView::markUnread(const QDateTime &firstUnread)
+{
+    const int row = m_model->markerRow();
+    if (row >= 0 && !m_markerSeen)
+        return; // déjà placé pendant cette absence
+    if (row >= 0)
+        m_model->removeRow(row);
+    ChatEntry e;
+    e.kind = ChatEntry::Marker;
+    e.text = tr("Nouveaux messages");
+    e.ts = firstUnread.addMSecs(-1); // juste avant le premier message non lu
+    m_model->insertSorted(e);
+    scheduleDelayedItemsLayout();
+    m_markerSeen = false;
+}
+
+void ChatView::revealUnreadMarker()
+{
+    const int row = m_model->markerRow();
+    if (row < 0 || m_markerSeen)
+        return;
+    m_markerSeen = true;
+    // Après la mise en page (les lignes viennent peut-être d'arriver)
+    QMetaObject::invokeMethod(this, [this] {
+        const int r = m_model->markerRow();
+        if (r >= 0)
+            scrollTo(m_model->index(r), QAbstractItemView::PositionAtTop);
+    }, Qt::QueuedConnection);
+}
+
+void ChatView::clearUnreadMarker()
+{
+    m_model->removeRow(m_model->markerRow());
+    m_markerSeen = false;
+    scheduleDelayedItemsLayout();
+}
+
+void ChatView::setSearchTerm(const QString &term)
+{
+    m_searchTerm = term.trimmed();
+    m_searchCurrent = QPersistentModelIndex();
+    viewport()->update();
+    const QList<int> rows = m_model->search(m_searchTerm);
+    if (rows.isEmpty()) {
+        emit searchResultChanged(0, 0);
+        return;
+    }
+    m_searchCurrent = m_model->index(rows.last());
+    showRow(rows.last());
+    emit searchResultChanged(1, int(rows.size()));
+}
+
+void ChatView::searchNext(bool older)
+{
+    const QList<int> rows = m_model->search(m_searchTerm);
+    if (rows.isEmpty()) {
+        emit searchResultChanged(0, 0);
+        return;
+    }
+    // Les lignes ont pu bouger (messages arrivés) : on repart de la position actuelle
+    int pos = m_searchCurrent.isValid() ? int(rows.indexOf(m_searchCurrent.row())) : -1;
+    if (pos < 0)
+        pos = int(rows.size());
+    pos += older ? -1 : 1;
+    if (pos < 0)
+        pos = int(rows.size()) - 1; // on reboucle
+    else if (pos >= rows.size())
+        pos = 0;
+    m_searchCurrent = m_model->index(rows.at(pos));
+    showRow(rows.at(pos));
+    emit searchResultChanged(int(rows.size()) - pos, int(rows.size()));
 }
 
 QString ChatView::excerpt(const QString &text, int maxChars)
@@ -663,12 +930,16 @@ void ChatView::addPresence(const QString &who, bool online, const QString &reaso
 void ChatView::clearAll()
 {
     m_model->clear();
+    m_markerSeen = false;
+    m_newBelow = 0;
+    m_searchCurrent = QPersistentModelIndex();
 }
 
 void ChatView::resizeEvent(QResizeEvent *event)
 {
     QListView::resizeEvent(event);
     doItemsLayout(); // les hauteurs dépendent de la largeur
+    updateDownButton();
 }
 
 void ChatView::contextMenuEvent(QContextMenuEvent *event)

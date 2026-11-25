@@ -4,6 +4,7 @@ SUBDIRS += \
     tst_attachment \
     tst_crypto \
     tst_invitation \
+    tst_links \
     tst_mentions \
     tst_mentioncompleter \
     tst_protocol \

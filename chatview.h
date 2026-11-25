@@ -1,10 +1,15 @@
 #pragma once
+#include "links.h"
+
 #include <QAbstractListModel>
+#include <QPersistentModelIndex>
 #include <QDateTime>
 #include <QImage>
 #include <QListView>
 #include <QStyledItemDelegate>
 #include <QTimer>
+
+class QToolButton;
 
 // Liste de messages façon messagerie mobile (Material 3) : bulles arrondies,
 // regroupement des messages consécutifs, avatars, séparateurs de date.
@@ -20,7 +25,7 @@ struct PresenceEvent
 
 struct ChatEntry
 {
-    enum Kind { Message, System, Presence };
+    enum Kind { Message, System, Presence, Marker }; // Marker : « Nouveaux messages »
     enum Trust { Verified, Unsigned, Invalid }; // signature de l'auteur (historique)
     Kind kind = Message;
     QString author;
@@ -36,6 +41,7 @@ struct ChatEntry
     QString id, replyTo;
     QString replyAuthor, replyText;
     bool replyFound = false;
+    QList<Links::Span> links; // liens cliquables (calculés à l'ajout)
     // Image jointe : version réduite pour l'affichage, et fichier d'origine (JPEG ou PNG reçu)
     QImage image;
     QByteArray imageData;
@@ -59,6 +65,12 @@ public:
     void addPresenceEvent(int row, const PresenceEvent &ev);
     void toggleExpanded(int row);
     int rowOf(const QString &id) const; // -1 si absent
+    int markerRow() const;              // -1 si pas de séparateur « Nouveaux messages »
+    void removeRow(int row);
+    // Recherche : lignes des messages contenant term (sans tenir compte de la casse ni des accents)
+    QList<int> search(const QString &term) const;
+    // Minuscules sans accents, caractère pour caractère (les positions restent valables)
+    static QString fold(const QString &text);
 
 private:
     void resolveReply(ChatEntry &e) const;
@@ -78,6 +90,7 @@ public:
 signals:
     void quoteClicked(const QString &id); // clic sur la citation d'une réponse
     void imageClicked(int row);           // clic sur une image
+    void linkClicked(const QString &url); // clic sur un lien
 
 private:
     struct Geometry;
@@ -86,6 +99,15 @@ private:
     QRectF quoteRect(const Geometry &g, const QRectF &bubble) const;
     QRectF imageRect(const Geometry &g, const QRectF &bubble) const;
     QListView *m_view;
+
+public:
+    // Élément cliquable sous le pointeur (pos dans la vue) : citation, image ou lien
+    struct Hit
+    {
+        enum Kind { None, Quote, Image, Link } kind = None;
+        QString url;
+    };
+    Hit hitTest(const QModelIndex &index, const QRect &rect, const QPoint &pos) const;
 };
 
 class ChatView : public QListView
@@ -105,7 +127,24 @@ public:
     ChatModel *chatModel() const { return m_model; }
     // Fait défiler jusqu'au message et le met brièvement en évidence ; false s'il n'est pas dans la liste
     bool showMessage(const QString &id);
-    QString flashedId() const { return m_flashId; }
+    void showRow(int row);
+    bool isFlashed(const QModelIndex &index) const { return m_flash.isValid() && m_flash == index; }
+    QString flashedId() const; // identifiant du message mis en évidence (vide si aucun)
+
+    // Séparateur « Nouveaux messages » : placé avant le premier message reçu en notre absence.
+    // Il reste en place après notre retour, et se déplace à la prochaine absence.
+    void markUnread(const QDateTime &firstUnread);
+    void revealUnreadMarker(); // retour sur la fenêtre : on fait défiler jusqu'au séparateur
+    void clearUnreadMarker();
+
+    // Recherche : surlignage des occurrences, navigation du plus récent au plus ancien
+    void setSearchTerm(const QString &term);
+    QString searchTerm() const { return m_searchTerm; }
+    void searchNext(bool older);
+
+    // Bouton « ↓ » : nombre de messages arrivés en dessous de la partie affichée
+    int newMessagesBelow() const { return m_newBelow; }
+    bool isDownButtonVisible() const;
 
     static QColor colorFor(const QString &name);
     // Extrait d'un message pour une citation : une ligne, espaces regroupés, coupé à maxChars
@@ -117,14 +156,24 @@ public:
 signals:
     // Menu contextuel « Répondre » sur un message
     void replyRequested(const QString &id, const QString &author, const QString &text);
+    void linkClicked(const QString &url);
+    void searchResultChanged(int current, int total); // current : 1 = plus récent ; 0 si aucun résultat
 
 protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
 
 private:
     void appendEntry(const ChatEntry &e);
+    void updateDownButton();
     ChatModel *m_model;
-    QString m_flashId;
+    ChatDelegate *m_delegate;
+    QPersistentModelIndex m_flash;
     QTimer *m_flashTimer;
+    bool m_markerSeen = false; // le séparateur actuel a déjà été vu : il sera déplacé
+    QString m_searchTerm;
+    QPersistentModelIndex m_searchCurrent;
+    QToolButton *m_downButton;
+    int m_newBelow = 0;
 };

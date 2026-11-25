@@ -48,6 +48,15 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 ### Interface
 
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
+- **Nouveaux messages** : en revenant sur la fenêtre, un séparateur rouge marque le premier message reçu en votre
+  absence, et la liste s'y place. Si vous avez remonté l'historique, un bouton « ↓ » en bas à droite indique le
+  nombre de messages arrivés depuis et ramène en bas.
+- **« Alice écrit… »** s'affiche sous le titre pendant qu'un membre relié directement tape un message (signal
+  envoyé au plus toutes les 3 s, jamais enregistré ni relayé).
+- **Recherche** (Ctrl+F) : occurrences surlignées, sans tenir compte des majuscules ni des accents ; Entrée pour
+  le résultat précédent (plus ancien), Maj+Entrée pour le suivant, Échap pour fermer.
+- **Liens** cliquables (http, https, www.). Ils s'ouvrent dans le navigateur, donc **hors Tor** : une confirmation
+  le rappelle la première fois.
 - **Images** : bouton 🖼 à gauche de la zone de saisie, glisser-déposer d'un fichier ou d'une image n'importe où
   sur la fenêtre, ou collage (Ctrl+V) d'une capture d'écran. Un aperçu apparaît au-dessus de la zone de saisie
   (✕ pour retirer) ; on peut ajouter une légende avant d'envoyer. L'image est réduite (1600 px au plus) et
@@ -231,6 +240,7 @@ trousseau), l'historique et sa synchronisation, les règles de reconnexion, la p
 | `protocol.*` | Formats communs (adresse onion, base64), messages signés |
 | `invitation.*` | Encodage / décodage du code d'invitation |
 | `attachment.*` | Images jointes : chargement, réduction et compression, décodage sûr à la réception |
+| `links.*` | Détection des liens dans le texte des messages |
 | `mentions.*`, `mentioncompleter.*` | Détection des « @pseudo », autocomplétion dans la zone de saisie |
 | `groupstore.*` | État persistant : pseudo, identité, secret, membres, trousseau des clés |
 | `history.*` | Historique local, inventaire et lots de synchronisation |

@@ -71,6 +71,18 @@ private:
     void attachImage(const QImage &image, const QString &error = {});
     void cancelImage();
     QString notificationBody(const QJsonObject &msg) const;
+
+    // « Alice écrit… » : signal envoyé aux membres connectés, au plus toutes les 3 s pendant la frappe
+    void onTyping();
+    void onPeerTyping(PeerConnection *c);
+    QString typingText() const; // vide si personne n'écrit
+
+    // Recherche dans la conversation (Ctrl+F)
+    void openSearch();
+    void closeSearch();
+
+    // Lien cliqué : ouvert dans le navigateur, hors Tor (confirmation la première fois)
+    void openLink(const QString &url);
     void loadHistory();
     void clearConversation();
     void setupTray();
@@ -99,7 +111,8 @@ private:
     void receiveSync(PeerConnection *from, const QJsonArray &messages);
     qint64 syncCutoff() const;
     // Message reçu alors que la fenêtre n'est pas au premier plan
-    void notifyUnread(int count, const QString &title, const QString &text);
+    // firstTs : heure du plus ancien de ces messages (séparateur « Nouveaux messages »)
+    void notifyUnread(int count, const QString &title, const QString &text, qint64 firstTs);
 
     // Connexions
     void onNewConnection();
@@ -194,6 +207,12 @@ private:
     QWidget *m_imageBar = nullptr;
     QLabel *m_imagePreview = nullptr, *m_imageInfo = nullptr;
     QByteArray m_pendingImage; // JPEG prêt à partir avec le prochain message
+    QHash<QString, qint64> m_typing; // onion -> fin de l'indication « écrit… » (ms)
+    qint64 m_lastTypingSent = 0;
+    QTimer m_typingTimer;            // efface les indications expirées
+    QWidget *m_searchBar = nullptr;
+    QLineEdit *m_searchEdit = nullptr;
+    QLabel *m_searchCount = nullptr;
     QToolButton *m_sendButton = nullptr;
     QLabel *m_title = nullptr, *m_subtitle = nullptr;
     QString m_historyPath;

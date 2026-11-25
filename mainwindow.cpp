@@ -80,6 +80,8 @@ QString torInstallHelp()
 constexpr int MaxSeenIds = 5000;
 constexpr int MaxPending = 16;             // connexions entrantes pas encore authentifiées
 constexpr int PresenceGraceMs = 60 * 1000; // délai avant d'annoncer une déconnexion
+constexpr qint64 TypingSendMs = 3000;    // « écrit… » : renvoyé au plus toutes les 3 s pendant la frappe
+constexpr qint64 TypingShownMs = 6000;   // affiché tant que le dernier signal a moins de 6 s
 constexpr qint64 FastRetryMs = 2 * 60 * 1000; // après un (re)démarrage : essais toutes les 10 s
 constexpr qint64 WakeGapMs = 45 * 1000;       // tic de 10 s arrivé si tard : sortie de veille
 // Au-delà du délai d'inactivité du correspondant (100 s), il nous a déjà fermé la connexion
@@ -123,6 +125,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 
     m_presenceTimer.setSingleShot(true);
     m_presenceTimer.setInterval(1000);
+    m_typingTimer.setInterval(1000);
+    connect(&m_typingTimer, &QTimer::timeout, this, [this] {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        for (auto it = m_typing.begin(); it != m_typing.end();)
+            it = it.value() <= now ? m_typing.erase(it) : std::next(it);
+        if (m_typing.isEmpty())
+            m_typingTimer.stop();
+        updateStatus();
+    });
     connect(&m_presenceTimer, &QTimer::timeout, this, [this] { broadcast(presenceMessage()); });
 
     // Les minuteurs sont suspendus pendant la veille : un tic très en retard signale le réveil
@@ -277,6 +288,11 @@ QToolButton#sendButton:disabled { background: #c4c7c5; }
 QToolButton#attachButton { border: none; border-radius: 24px; background: transparent; }
 QToolButton#attachButton:hover { background: #e9eef6; }
 QLabel#imagePreview { border-radius: 6px; }
+QWidget#searchBar { background: #ffffff; border-bottom: 1px solid #e1e3e1; }
+QLineEdit#searchEdit { background: #f0f4f9; border: none; border-radius: 16px; padding: 0 12px; min-height: 32px; }
+QLabel#searchCount { color: #5f6368; padding: 0 6px; }
+QToolButton#searchButton { border: none; border-radius: 16px; color: #444746; }
+QToolButton#searchButton:hover { background: #e9eef6; }
 QMenu { background: #f0f4f9; border: 1px solid #e1e3e1; border-radius: 8px; padding: 6px 0; }
 QMenu::item { padding: 9px 28px 9px 20px; color: #1f1f1f; }
 QMenu::item:selected { background: #dde3ea; }
@@ -430,6 +446,51 @@ void MainWindow::buildUi()
     top->addWidget(menuButton, 0, Qt::AlignTop);
     layout->addWidget(topBar);
 
+    // Barre de recherche (Ctrl+F)
+    m_searchBar = new QWidget(central);
+    m_searchBar->setObjectName("searchBar");
+    m_searchBar->setAttribute(Qt::WA_StyledBackground);
+    auto *searchRow = new QHBoxLayout(m_searchBar);
+    searchRow->setContentsMargins(12, 6, 8, 6);
+    searchRow->setSpacing(4);
+    m_searchEdit = new QLineEdit(m_searchBar);
+    m_searchEdit->setObjectName("searchEdit");
+    m_searchEdit->setPlaceholderText(tr("Rechercher dans la conversation"));
+    m_searchEdit->setClearButtonEnabled(true);
+    m_searchCount = new QLabel(m_searchBar);
+    m_searchCount->setObjectName("searchCount");
+    auto searchButton = [this](const QString &text, const QString &tip) {
+        auto *b = new QToolButton(m_searchBar);
+        b->setObjectName("searchButton");
+        b->setText(text);
+        b->setToolTip(tip);
+        b->setFixedSize(32, 32);
+        b->setCursor(Qt::PointingHandCursor);
+        return b;
+    };
+    QToolButton *older = searchButton(QStringLiteral("▲"), tr("Résultat précédent, plus ancien (Entrée)"));
+    QToolButton *newer = searchButton(QStringLiteral("▼"), tr("Résultat suivant, plus récent (Maj+Entrée)"));
+    QToolButton *closeSearch = searchButton(QStringLiteral("✕"), tr("Fermer la recherche (Échap)"));
+    searchRow->addWidget(m_searchEdit, 1);
+    searchRow->addWidget(m_searchCount);
+    searchRow->addWidget(older);
+    searchRow->addWidget(newer);
+    searchRow->addWidget(closeSearch);
+    m_searchBar->setVisible(false);
+    layout->addWidget(m_searchBar);
+    connect(m_searchEdit, &QLineEdit::textChanged, this, [this](const QString &t) { m_chat->setSearchTerm(t); });
+    connect(m_searchEdit, &QLineEdit::returnPressed, this, [this] {
+        m_chat->searchNext(!(QGuiApplication::keyboardModifiers() & Qt::ShiftModifier));
+    });
+    connect(older, &QToolButton::clicked, this, [this] { m_chat->searchNext(true); });
+    connect(newer, &QToolButton::clicked, this, [this] { m_chat->searchNext(false); });
+    connect(closeSearch, &QToolButton::clicked, this, &MainWindow::closeSearch);
+    auto *searchEscape = new QShortcut(QKeySequence(Qt::Key_Escape), m_searchEdit, nullptr, nullptr,
+                                       Qt::WidgetShortcut);
+    connect(searchEscape, &QShortcut::activated, this, &MainWindow::closeSearch);
+    auto *find = new QShortcut(QKeySequence::Find, this);
+    connect(find, &QShortcut::activated, this, &MainWindow::openSearch);
+
     m_pages = new QStackedWidget(central);
 
     // Page d'accueil (pas encore de groupe)
@@ -572,6 +633,13 @@ void MainWindow::buildUi()
     auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), m_input, nullptr, nullptr, Qt::WidgetShortcut);
     connect(escape, &QShortcut::activated, this, &MainWindow::cancelReply);
     connect(m_chat, &ChatView::replyRequested, this, &MainWindow::startReply);
+    connect(m_chat, &ChatView::linkClicked, this, &MainWindow::openLink);
+    connect(m_chat, &ChatView::searchResultChanged, this, [this](int current, int total) {
+        m_searchCount->setText(m_searchEdit->text().trimmed().isEmpty() ? QString()
+                               : total == 0                             ? tr("Aucun résultat")
+                                                                        : tr("%1 / %2").arg(current).arg(total));
+    });
+    connect(m_input, &QLineEdit::textEdited, this, &MainWindow::onTyping);
     connect(m_sendButton, &QToolButton::clicked, this, &MainWindow::sendCurrent);
 }
 
@@ -602,6 +670,8 @@ void MainWindow::updateStatus()
         sub = tr("Aucune conversation");
     } else if (list.isEmpty()) {
         sub = dot.arg("#e37400") + tr("En attente de la première personne invitée…");
+    } else if (const QString typing = typingText(); !typing.isEmpty()) {
+        sub = dot.arg("#188038") + QStringLiteral("<i>%1</i>").arg(typing.toHtmlEscaped());
     } else {
         // Les membres vus en ligne par un autre sont joignables : nos messages passent par lui
         QStringList online;
@@ -803,9 +873,12 @@ void MainWindow::clearConversation()
 
 void MainWindow::changeEvent(QEvent *event)
 {
-    if (event->type() == QEvent::ActivationChange && isActiveWindow() && m_unread) {
-        m_unread = 0;
-        updateUnread();
+    if (event->type() == QEvent::ActivationChange && isActiveWindow()) {
+        m_chat->revealUnreadMarker();
+        if (m_unread) {
+            m_unread = 0;
+            updateUnread();
+        }
     }
     QMainWindow::changeEvent(event);
 }
@@ -1087,6 +1160,7 @@ void MainWindow::onClosed(PeerConnection *c, const QString &reason)
         m_backoff.remove(activeKey); // il était là il y a un instant : on le rappelle tout de suite
         terminalPeerLost(activeKey);
         m_peerPresence.remove(activeKey); // ceux qu'il voyait ne sont plus joignables par lui
+        m_typing.remove(activeKey);
         m_presenceTimer.start();
         checkQuietDrops();
         announceDropLater(activeKey, reason);
@@ -1214,6 +1288,7 @@ void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
     QList<QJsonObject> accepted;
     const qint64 cutoff = syncCutoff();
     int received = 0, mentioned = 0;
+    qint64 firstTs = 0;
     QString lastTitle, lastText;
     for (const QJsonValue &v : messages) {
         const QJsonObject m = v.toObject();
@@ -1231,6 +1306,8 @@ void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
         if (!mine) {
             ++received;
             mentioned += (mentionsMe(m) || repliesToMe(m)) ? 1 : 0;
+            const qint64 ts = Protocol::Message::timestamp(m);
+            firstTs = firstTs ? qMin(firstTs, ts) : ts;
             lastTitle = notificationTitle(m);
             lastText = notificationBody(m);
         }
@@ -1241,17 +1318,19 @@ void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
             if (p != from)
                 sendBatches(p, accepted);
     if (received == 1)
-        notifyUnread(1, lastTitle, lastText);
+        notifyUnread(1, lastTitle, lastText, firstTs);
     else if (received > 1)
         notifyUnread(received, tr("P2P Chat"),
                      tr("%n message(s) reçu(s) pendant votre absence", nullptr, received)
-                         + (mentioned ? tr(", dont %n pour vous", nullptr, mentioned) : QString()));
+                         + (mentioned ? tr(", dont %n pour vous", nullptr, mentioned) : QString()),
+                     firstTs);
 }
 
-void MainWindow::notifyUnread(int count, const QString &title, const QString &text)
+void MainWindow::notifyUnread(int count, const QString &title, const QString &text, qint64 firstTs)
 {
     if (isVisible() && isActiveWindow())
         return;
+    m_chat->markUnread(QDateTime::fromMSecsSinceEpoch(firstTs));
     m_unread += count;
     updateUnread();
     m_notifier->notify(title, text);
@@ -1272,6 +1351,8 @@ void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
         sendBatches(c, History::missing(m_store, o.value("ids").toArray()));
     else if (type == "sync")
         receiveSync(c, o.value("m").toArray());
+    else if (type == "typing")
+        onPeerTyping(c);
     else if (type == "msg")
         onChatMessage(c, o);
 }
@@ -1346,13 +1427,15 @@ void MainWindow::onChatMessage(PeerConnection *c, const QJsonObject &o)
 
     // L'auteur vient d'écrire (message relayé) : il est en ligne, inutile d'attendre pour le rappeler
     const QString authorOnion = o.value("a").toString();
+    if (m_typing.remove(authorOnion) > 0) // il a fini d'écrire
+        updateStatus();
     if (!m_active.contains(authorOnion) && m_backoff.remove(authorOnion) > 0)
         connectToMembers();
 
     // Relais : au cas où un membre ne serait pas encore relié directement à l'auteur
     broadcast(o, c);
 
-    notifyUnread(1, notificationTitle(o), notificationBody(o));
+    notifyUnread(1, notificationTitle(o), notificationBody(o), Protocol::Message::timestamp(o));
     if (isVisible() && !isActiveWindow())
         QApplication::alert(this);
 }
@@ -1448,6 +1531,8 @@ void MainWindow::sendCurrent()
     const QJsonObject msg = Protocol::Message::create(m_group.identitySeed(), m_myOnion, m_group.nickname(), text,
                                                       QDateTime::currentMSecsSinceEpoch(), {m_replyTo, m_pendingImage});
     m_seenIds.insert(Protocol::Message::id(msg));
+    m_chat->clearUnreadMarker(); // on a répondu : les messages précédents sont lus
+    m_lastTypingSent = 0;        // prochaine frappe : signalée tout de suite
     broadcast(msg);
     appendMessage(msg, true, ChatEntry::Verified);
     m_input->clear();
@@ -1598,6 +1683,82 @@ void MainWindow::resetAll()
     m_lastError.clear();
     appendSystem(tr("Vous avez quitté le groupe."));
     updateStatus();
+}
+
+// ---------------------------------------------------------------- Écriture en cours, recherche, liens
+
+void MainWindow::onTyping()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_input->text().trimmed().isEmpty() || now - m_lastTypingSent < TypingSendMs)
+        return;
+    m_lastTypingSent = now;
+    // Seulement aux membres reliés directement : ni signé, ni relayé, ni conservé
+    broadcast({{"t", "typing"}});
+}
+
+void MainWindow::onPeerTyping(PeerConnection *c)
+{
+    const QString from = m_active.key(c);
+    if (from.isEmpty())
+        return;
+    m_typing.insert(from, QDateTime::currentMSecsSinceEpoch() + TypingShownMs);
+    if (!m_typingTimer.isActive())
+        m_typingTimer.start();
+    updateStatus();
+}
+
+QString MainWindow::typingText() const
+{
+    QStringList names;
+    for (auto it = m_typing.cbegin(); it != m_typing.cend(); ++it)
+        names << memberNick(it.key());
+    names.sort(Qt::CaseInsensitive);
+    if (names.isEmpty())
+        return {};
+    if (names.size() == 1)
+        return tr("%1 écrit…").arg(names.first());
+    if (names.size() == 2)
+        return tr("%1 et %2 écrivent…").arg(names.at(0), names.at(1));
+    return tr("Plusieurs personnes écrivent…");
+}
+
+void MainWindow::openSearch()
+{
+    m_searchBar->setVisible(true);
+    m_searchEdit->setFocus();
+    m_searchEdit->selectAll();
+    if (!m_searchEdit->text().isEmpty())
+        m_chat->setSearchTerm(m_searchEdit->text());
+}
+
+void MainWindow::closeSearch()
+{
+    m_searchBar->setVisible(false);
+    m_chat->setSearchTerm(QString()); // retire le surlignage
+    m_input->setFocus();
+}
+
+void MainWindow::openLink(const QString &url)
+{
+    const QUrl u(url);
+    if (!u.isValid() || (u.scheme() != "http" && u.scheme() != "https"))
+        return;
+    if (!m_settings.value("links/noConfirm").toBool()) {
+        QMessageBox box(QMessageBox::Question, tr("Ouvrir le lien"),
+                        tr("<p>Ouvrir ce lien dans votre navigateur ?</p><p><b>%1</b></p>"
+                           "<p>Il s'ouvre <b>en dehors de Tor</b> : le site verra votre adresse IP, comme pour "
+                           "n'importe quel lien.</p>")
+                            .arg(url.toHtmlEscaped()),
+                        QMessageBox::Open | QMessageBox::Cancel, this);
+        auto *dontAsk = new QCheckBox(tr("Ne plus demander"), &box);
+        box.setCheckBox(dontAsk);
+        if (box.exec() != QMessageBox::Open)
+            return;
+        if (dontAsk->isChecked())
+            m_settings.setValue("links/noConfirm", true);
+    }
+    QDesktopServices::openUrl(u);
 }
 
 // ---------------------------------------------------------------- Console partagée

@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QMouseEvent>
 #include <QSignalSpy>
+#include <QScrollBar>
 #include <QtTest>
 
 namespace {
@@ -238,6 +239,143 @@ private slots:
         QCOMPARE(clicked.count(), 1);
         QCOMPARE(clicked.first().first().toInt(), 0);
         view.grab(); // dessin de l'image arrondie
+    }
+
+    void foldAndSearch()
+    {
+        QCOMPARE(ChatModel::fold("Été À ÇA œuf"), QString("ete a ca œuf"));
+        QCOMPARE(ChatModel::fold("Été").size(), 3); // positions inchangées
+        ChatModel model;
+        const QDateTime t0 = QDateTime::currentDateTime();
+        model.insertSorted(message("Il a fait très chaud cet été", t0));
+        model.insertSorted(message("rien à voir", t0.addSecs(1)));
+        ChatEntry sys;
+        sys.kind = ChatEntry::System;
+        sys.text = "été système";
+        sys.ts = t0.addSecs(2);
+        model.insertSorted(sys); // les lignes système ne sont pas cherchées
+        model.insertSorted(message("ETE 2024", t0.addSecs(3)));
+        QCOMPARE(model.search("ete"), QList<int>({0, 3}));
+        QCOMPARE(model.search("  Été "), QList<int>({0, 3}));
+        QVERIFY(model.search("").isEmpty());
+        QVERIFY(model.search("hiver").isEmpty());
+    }
+
+    void searchNavigation()
+    {
+        ChatView view;
+        view.resize(480, 400);
+        const QDateTime t0 = QDateTime::currentDateTime();
+        for (int i = 0; i < 6; ++i)
+            view.addMessage(message(i % 2 ? QStringLiteral("chat %1").arg(i) : QStringLiteral("autre %1").arg(i),
+                                    t0.addSecs(i)));
+        QSignalSpy result(&view, &ChatView::searchResultChanged);
+        view.setSearchTerm("chat"); // lignes 1, 3, 5 : on commence par la plus récente
+        QCOMPARE(result.last(), QVariantList({1, 3}));
+        QCOMPARE(view.chatModel()->entry(5).text, QString("chat 5"));
+        QVERIFY(view.isFlashed(view.chatModel()->index(5)));
+        view.searchNext(true);
+        QCOMPARE(result.last(), QVariantList({2, 3}));
+        QVERIFY(view.isFlashed(view.chatModel()->index(3)));
+        view.searchNext(true);
+        view.searchNext(true); // reboucle sur le plus récent
+        QCOMPARE(result.last(), QVariantList({1, 3}));
+        view.searchNext(false); // plus récent que le plus récent : le plus ancien
+        QCOMPARE(result.last(), QVariantList({3, 3}));
+        view.setSearchTerm("introuvable");
+        QCOMPARE(result.last(), QVariantList({0, 0}));
+        view.setSearchTerm(QString());
+        QCOMPARE(view.searchTerm(), QString());
+    }
+
+    void unreadMarker()
+    {
+        ChatView view;
+        ChatModel *model = view.chatModel();
+        const QDateTime t0 = QDateTime::currentDateTime();
+        view.addMessage(message("lu", t0));
+        view.addMessage(message("non lu 1", t0.addSecs(10)));
+        view.markUnread(t0.addSecs(10));
+        view.addMessage(message("non lu 2", t0.addSecs(20)));
+        view.markUnread(t0.addSecs(20)); // même absence : le séparateur ne bouge pas
+        QCOMPARE(model->markerRow(), 1);
+        QCOMPARE(model->entry(1).kind, ChatEntry::Marker);
+        QCOMPARE(model->entry(2).text, QString("non lu 1"));
+        QVERIFY(model->search("Nouveaux").isEmpty()); // pas un message
+
+        view.revealUnreadMarker(); // retour sur la fenêtre : il reste affiché…
+        QCOMPARE(model->markerRow(), 1);
+        view.addMessage(message("plus tard", t0.addSecs(30)));
+        view.markUnread(t0.addSecs(30)); // …et se déplace à la prochaine absence
+        QCOMPARE(model->rowCount(), 5);
+        QCOMPARE(model->markerRow(), 3);
+        QCOMPARE(model->entry(4).text, QString("plus tard"));
+
+        view.clearUnreadMarker(); // on a écrit : plus de séparateur
+        QCOMPARE(model->markerRow(), -1);
+        QCOMPARE(model->rowCount(), 4);
+        view.clearUnreadMarker(); // sans effet
+        QCOMPARE(model->rowCount(), 4);
+    }
+
+    void downButtonCountsNewMessages()
+    {
+        ChatView view;
+        view.resize(480, 300);
+        const QDateTime t0 = QDateTime::currentDateTime();
+        for (int i = 0; i < 30; ++i)
+            view.addMessage(message(QStringLiteral("message %1").arg(i), t0.addSecs(i * 600)));
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        view.scrollToBottom();
+        QTRY_VERIFY(!view.isDownButtonVisible());
+
+        view.scrollToTop(); // on remonte lire l'historique
+        QTRY_VERIFY(view.isDownButtonVisible());
+        QCOMPARE(view.newMessagesBelow(), 0);
+        view.addMessage(message("nouveau", t0.addSecs(30 * 600)));
+        view.addMessage(message("encore", t0.addSecs(31 * 600)));
+        QCOMPARE(view.newMessagesBelow(), 2);
+        QTRY_VERIFY(view.verticalScrollBar()->value() < 100); // pas de défilement forcé
+
+        view.scrollToBottom();
+        QTRY_VERIFY(!view.isDownButtonVisible());
+        QCOMPARE(view.newMessagesBelow(), 0);
+    }
+
+    void clickOnLink()
+    {
+        ChatView view;
+        view.resize(480, 300);
+        view.addMessage(message("Le site : https://exemple.fr/page, à voir", QDateTime::currentDateTime()));
+        QCOMPARE(view.chatModel()->entry(0).links.size(), 1);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+
+        auto *delegate = qobject_cast<ChatDelegate *>(view.itemDelegate());
+        QSignalSpy link(&view, &ChatView::linkClicked);
+        const QModelIndex idx = view.chatModel()->index(0);
+        QStyleOptionViewItem opt;
+        opt.rect = view.visualRect(idx);
+        int hits = 0, misses = 0;
+        for (int y = opt.rect.top(); y < opt.rect.bottom(); y += 2)
+            for (int x = opt.rect.left(); x < opt.rect.right(); x += 4) {
+                const auto kind = delegate->hitTest(idx, opt.rect, QPoint(x, y)).kind;
+                (kind == ChatDelegate::Hit::Link ? hits : misses)++;
+            }
+        QVERIFY(hits > 0);
+        QVERIFY(misses > hits); // seul le lien est cliquable, pas toute la bulle
+
+        // Clic au centre du premier point cliquable trouvé
+        for (int y = opt.rect.top(); y < opt.rect.bottom() && link.isEmpty(); y += 2)
+            for (int x = opt.rect.left(); x < opt.rect.right() && link.isEmpty(); x += 4)
+                if (delegate->hitTest(idx, opt.rect, QPoint(x, y)).kind == ChatDelegate::Hit::Link) {
+                    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), Qt::LeftButton, Qt::NoButton,
+                                        Qt::NoModifier);
+                    delegate->editorEvent(&release, view.model(), opt, idx);
+                }
+        QCOMPARE(link.count(), 1);
+        QCOMPARE(link.first().first().toString(), QString("https://exemple.fr/page"));
     }
 
     void avatarColorIsStable()
