@@ -24,14 +24,18 @@ PeerConnection::PeerConnection(QTcpSocket *socket, bool outgoing, const QByteArr
     socket->setParent(this);
     connect(socket, &QTcpSocket::connected, this, &PeerConnection::onConnected);
     connect(socket, &QTcpSocket::readyRead, this, &PeerConnection::onReadyRead);
-    connect(socket, &QTcpSocket::disconnected, this, [this] { fail(tr("le correspondant s'est déconnecté")); });
-    connect(socket, &QTcpSocket::errorOccurred, this, [this](QAbstractSocket::SocketError err) {
+    // Coupure avant le moindre octet du correspondant : personne n'a répondu (selon le système, une connexion
+    // refusée peut d'abord être annoncée comme établie, sous macOS notamment)
+    auto lost = [this] {
+        return m_state == Connecting || !m_receivedAny ? tr("correspondant injoignable (programme fermé de son côté ?)")
+                                                       : tr("le correspondant s'est déconnecté");
+    };
+    connect(socket, &QTcpSocket::disconnected, this, [this, lost] { fail(lost()); });
+    connect(socket, &QTcpSocket::errorOccurred, this, [this, lost](QAbstractSocket::SocketError err) {
         if (err == QAbstractSocket::ProxyConnectionRefusedError || err == QAbstractSocket::ProxyNotFoundError)
             fail(tr("Tor ne répond pas"));
-        else if (m_state == Connecting)
-            fail(tr("correspondant injoignable (programme fermé de son côté ?)"));
         else
-            fail(tr("le correspondant s'est déconnecté"));
+            fail(lost());
     });
 
     // Via Tor, le premier circuit vers un service onion prend souvent 5 à 20 s, mais une requête
@@ -115,7 +119,9 @@ void PeerConnection::sendHello()
 
 void PeerConnection::onReadyRead()
 {
-    m_buffer += m_socket->readAll();
+    const QByteArray data = m_socket->readAll();
+    m_receivedAny = m_receivedAny || !data.isEmpty();
+    m_buffer += data;
     while (m_state != Closed && m_buffer.size() >= 4) {
         const quint32 len = qFromBigEndian<quint32>(m_buffer.constData());
         if (len > MaxFrame) {

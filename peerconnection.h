@@ -86,6 +86,7 @@ private:
     QList<QByteArray> m_psks;          // ceux de la conversation retenue (ou de l'unique)
     int m_group = -1, m_pskIndex = -1;
     QByteArray m_dh;
+    bool m_receivedAny = false;   // au moins un octet du correspondant (sinon : il n'a jamais répondu)
     bool m_waitPeerHello = false; // secret à deviner d'après le hello du correspondant (sans étiquettes)
     QString m_nick, m_ownOnion, m_peerNick, m_peerOnion;
     QByteArray m_identitySeed, m_peerKey, m_ourEphemeral, m_peerEphemeral;

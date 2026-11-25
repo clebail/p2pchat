@@ -1,4 +1,6 @@
 # Compilation et tests à chaque push et pull request : Linux (avec un passage aux sanitizers), macOS, Windows
+# Caches : ccache sous Linux (seuls les fichiers modifiés sont recompilés), Qt et OpenSSL déjà compilé sous Windows.
+# macOS sans ccache : qmake y appelle les compilateurs de Xcode par leur chemin complet.
 name: CI
 
 on:
@@ -24,6 +26,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qtbase5-dev qtbase5-dev-tools qt5-qmake libssl-dev
           echo /usr/lib/qt5/bin >> "$GITHUB_PATH"
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux
+          create-symlink: true # gcc et g++ passent par ccache
       - name: Application
         run: |
           mkdir build && cd build
@@ -46,6 +52,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qtbase5-dev qtbase5-dev-tools qt5-qmake libssl-dev
           echo /usr/lib/qt5/bin >> "$GITHUB_PATH"
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: sanitizers # options de compilation différentes : cache à part
+          create-symlink: true
       - name: Tests sous sanitizers
         run: tests/run-sanitizers.sh "$PWD/build-asan"
 
@@ -81,9 +91,18 @@ jobs:
           version: '5.15.2'
           arch: win64_msvc2019_64
           cache: true
+      # OpenSSL compilé une fois par vcpkg, puis repris du cache (sinon : plusieurs minutes à chaque fois)
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-cache
+          key: vcpkg-openssl-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: vcpkg-openssl-${{ runner.os }}-
       - name: OpenSSL (vcpkg)
         shell: pwsh
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\vcpkg-cache,readwrite
         run: |
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\vcpkg-cache" | Out-Null
           vcpkg install openssl:x64-windows
           $dir = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
           "OPENSSL_DIR=$dir" >> $env:GITHUB_ENV

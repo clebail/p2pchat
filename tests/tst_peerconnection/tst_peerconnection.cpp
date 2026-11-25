@@ -340,7 +340,12 @@ private slots:
         QSignalSpy closed(&c, &PeerConnection::closed);
         s->connectToHost(QHostAddress::LocalHost, port);
         QTRY_COMPARE(closed.count(), 1);
-        QVERIFY(closed.at(0).at(0).toString().contains("injoignable"));
+        const QString reason = closed.at(0).at(0).toString();
+        QVERIFY2(reason.contains("injoignable"),
+                 qPrintable(QStringLiteral("raison : « %1 », erreur du socket : %2 (%3)")
+                                .arg(reason)
+                                .arg(int(s->error()))
+                                .arg(s->errorString())));
     }
 };
 

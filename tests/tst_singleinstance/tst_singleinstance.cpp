@@ -61,10 +61,13 @@ private slots:
         QVERIFY(lock.open(QIODevice::WriteOnly));
         lock.write("999999\np2pchat\n" + QSysInfo::machineHostName().toUtf8() + "\n");
         lock.close();
-        // …et socket abandonné : lancer quand même
+#ifndef Q_OS_WIN
+        // …et socket abandonné (fichier, sous Unix) : lancer quand même. Sous Windows, le tube nommé d'un
+        // processus planté disparaît avec lui, et un serveur gardé ouvert ici capterait l'appel de « later »
         SingleInstance crashed(dir.path());
         QLocalServer leftover;
         QVERIFY(leftover.listen(crashed.serverName()));
+#endif
 
         SingleInstance next(dir.path());
         QVERIFY(next.acquire());
