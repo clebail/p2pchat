@@ -1,6 +1,9 @@
+#include "conversations.h"
 #include "crypto.h"
 #include "groupstore.h"
 
+#include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -230,6 +233,111 @@ private slots:
         m_store->setSecret("nouveau");
         m_store->migrateLegacy();
         QCOMPARE(m_store->secret(), QByteArray("nouveau"));
+    }
+
+    // ---------------------------------------------------------------- Plusieurs conversations
+
+    void conversationsAreSeparate()
+    {
+        Conversations convs(*m_settings, m_dir.filePath(QString("data%1").arg(m_counter)));
+        const QString x = convs.create(), y = convs.create();
+        QCOMPARE(convs.ids(), QStringList({x, y}));
+        QVERIFY(x != y && x.size() == 16);
+        QVERIFY(QDir(convs.dir(x)).exists());
+        GroupStore gx(*m_settings, x), gy(*m_settings, y);
+        gx.setNickname("Moi");
+        gx.ensureIdentity();
+        gx.setSecret("secret de X");
+        gx.setMembers({{onion('a'), "Alice"}});
+        gx.setClearedBefore(1234);
+        // Identité, pseudo, trousseau : communs ; le reste est propre à chaque conversation
+        QCOMPARE(gy.nickname(), QString("Moi"));
+        QCOMPARE(gy.identityKey(), gx.identityKey());
+        QVERIFY(!gy.inGroup());
+        QVERIFY(gy.members().isEmpty());
+        QCOMPARE(gy.clearedBefore(), 0);
+        QVERIFY(gx.pinKey(onion('a'), QByteArray(32, 'k'), 1000));
+        QCOMPARE(gy.pinnedKey(onion('a')), QByteArray(32, 'k'));
+        QVERIFY(!gy.pinKey(onion('a'), QByteArray(32, 'z'), 2000)); // une autre clé : refusée partout
+        // Première rencontre notée par conversation, même pour une clé déjà connue
+        QCOMPARE(gx.firstSeen(onion('a')), 1000);
+        QVERIFY(gy.pinKey(onion('a'), QByteArray(32, 'k'), 5000));
+        QCOMPARE(gy.firstSeen(onion('a')), 5000);
+        QVERIFY(gx.pinKey(onion('a'), QByteArray(32, 'k'), 9000));
+        QCOMPARE(gx.firstSeen(onion('a')), 1000); // pas réécrite
+        gy.leaveGroup();
+        QCOMPARE(gx.secret(), QByteArray("secret de X"));
+
+        QFile f(convs.historyPath(y));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.close();
+        convs.remove(y);
+        QCOMPARE(convs.ids(), QStringList({x}));
+        QVERIFY(!QDir(convs.dir(y)).exists());
+        QVERIFY(gx.inGroup());
+    }
+
+    void migratesSingleGroupLayout()
+    {
+        const QString data = m_dir.filePath(QString("data%1").arg(m_counter));
+        QDir().mkpath(data + "/fichiers");
+        QFile h(data + "/history.jsonl");
+        QVERIFY(h.open(QIODevice::WriteOnly));
+        h.write("{}\n");
+        h.close();
+        QFile(data + "/fichiers/x").open(QIODevice::WriteOnly);
+        m_store->setSecret("secret");
+        m_store->setMembers({{onion('a'), "Alice"}, {onion('b'), "Bob"}});
+        m_store->appendGovernanceRecord({{"seq", 0}});
+        m_store->setClearedBefore(42);
+        m_store->pinKey(onion('a'), QByteArray(32, 'a'), 777);
+        m_store->pinKey(onion('b'), QByteArray(32, 'b'), 888);
+        // Clé mémorisée avant la notion de première rencontre
+        QJsonObject seen = QJsonDocument::fromJson(m_settings->value("firstSeen").toByteArray()).object();
+        seen.remove(onion('b'));
+        m_settings->setValue("firstSeen", QJsonDocument(seen).toJson());
+
+        Conversations convs(*m_settings, data);
+        const QString id = convs.migrate();
+        QCOMPARE(convs.ids(), QStringList({id}));
+        QVERIFY(!m_settings->contains("group/secret"));
+        QVERIFY(!m_settings->contains("firstSeen"));
+        GroupStore g(*m_settings, id);
+        QCOMPARE(g.secret(), QByteArray("secret"));
+        QCOMPARE(g.members().size(), 2);
+        QCOMPARE(g.governanceRecords().size(), 1);
+        QCOMPARE(g.clearedBefore(), 42);
+        QCOMPARE(g.firstSeen(onion('a')), 777);
+        QCOMPARE(g.firstSeen(onion('b')), 0);
+        QVERIFY(g.pinKey(onion('b'), QByteArray(32, 'b'), 999));
+        QCOMPARE(g.firstSeen(onion('b')), 0); // reste « avant cette notion »
+        QCOMPARE(g.pinnedKey(onion('a')), QByteArray(32, 'a')); // trousseau resté commun
+        QVERIFY(QFile::exists(convs.historyPath(id)));
+        QVERIFY(!QFile::exists(data + "/history.jsonl"));
+        QVERIFY(QFile::exists(convs.dir(id) + "/fichiers/x"));
+
+        // Une seule fois
+        QVERIFY(convs.migrate().isEmpty());
+        QCOMPARE(convs.ids().size(), 1);
+    }
+
+    void migratesNothingOnFreshInstall()
+    {
+        m_store->setNickname("Moi");
+        m_store->ensureIdentity();
+        Conversations convs(*m_settings, m_dir.filePath(QString("data%1").arg(m_counter)));
+        QVERIFY(convs.migrate().isEmpty());
+        QVERIFY(convs.ids().isEmpty());
+    }
+
+    void migratesTwoPartyConfigIntoConversation()
+    {
+        m_settings->setValue("contact/secret", QByteArray("ancien secret"));
+        m_settings->setValue("contact/onion", onion('a'));
+        Conversations convs(*m_settings, m_dir.filePath(QString("data%1").arg(m_counter)));
+        const QString id = convs.migrate();
+        QCOMPARE(GroupStore(*m_settings, id).secret(), QByteArray("ancien secret"));
+        QCOMPARE(GroupStore(*m_settings, id).members().size(), 1);
     }
 };
 

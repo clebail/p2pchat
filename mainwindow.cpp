@@ -86,11 +86,23 @@ QString torInstallHelp()
 
 } // namespace
 
+QString MainWindow::dataDir()
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(dir);
+    return dir;
+}
+
+QString MainWindow::initialConversation()
+{
+    m_conversations.migrate();
+    const QStringList ids = m_conversations.ids();
+    return ids.isEmpty() ? m_conversations.create() : ids.first();
+}
+
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
-    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(dataDir);
-    m_historyPath = dataDir + "/history.jsonl";
+    const QString historyPath = m_conversations.historyPath(m_group.conversation());
 
     m_group.ensureIdentity();
 
@@ -98,14 +110,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     constexpr auto OwnerRW = QFile::ReadOwner | QFile::WriteOwner;
     m_settings.sync();
     QFile::setPermissions(m_settings.fileName(), OwnerRW);
-    QFile::setPermissions(dataDir, OwnerRW | QFile::ExeOwner);
-    if (QFile::exists(m_historyPath))
-        QFile::setPermissions(m_historyPath, OwnerRW);
-
-    m_group.migrateLegacy();
+    QFile::setPermissions(dataDir(), OwnerRW | QFile::ExeOwner);
+    QFile::setPermissions(m_conversations.dir(m_group.conversation()), OwnerRW | QFile::ExeOwner);
+    if (QFile::exists(historyPath))
+        QFile::setPermissions(historyPath, OwnerRW);
 
     // Le groupe : connexions, synchronisation, historique (cf. groupnode.h). Transport : Tor.
-    m_node = new GroupNode(m_group, m_historyPath, this);
+    m_node = new GroupNode(m_group, historyPath, this);
     QString listenError;
     if (!m_node->listen(&listenError))
         QMessageBox::critical(this, tr("P2P Chat"), tr("Écoute locale impossible : %1").arg(listenError));

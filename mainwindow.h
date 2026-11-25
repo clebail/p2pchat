@@ -1,6 +1,7 @@
 #pragma once
 #include "attachment.h"
 #include "chatview.h"
+#include "conversations.h"
 #include "groupnode.h"
 #include "groupstore.h"
 
@@ -134,8 +135,13 @@ private:
     void showSafetyNumber(const QString &onion);
     void resetAll();
 
+    // Conversation ouverte au démarrage : la première (après reprise de l'ancienne disposition), ou une nouvelle
+    static QString dataDir();
+    QString initialConversation();
+
     QSettings m_settings;
-    GroupStore m_group{m_settings};
+    Conversations m_conversations{m_settings, dataDir()};
+    GroupStore m_group{m_settings, initialConversation()};
     GroupNode *m_node = nullptr;
     TorService *m_tor = nullptr;
     QString m_torStatus, m_torError;
@@ -164,7 +170,6 @@ private:
     QLabel *m_searchCount = nullptr;
     QToolButton *m_sendButton = nullptr;
     QLabel *m_title = nullptr, *m_subtitle = nullptr;
-    QString m_historyPath;
 
     QSystemTrayIcon *m_tray = nullptr; // Linux / Windows
     Notifier *m_notifier = nullptr;

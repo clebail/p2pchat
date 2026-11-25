@@ -290,7 +290,8 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 | `safetynumber.*` | Code de sécurité entre deux membres |
 | `links.*` | Détection des liens dans le texte des messages |
 | `mentions.*`, `mentioncompleter.*` | Détection des « @pseudo », autocomplétion dans la zone de saisie |
-| `groupstore.*` | État persistant : pseudo, identité, secret, membres, trousseau des clés |
+| `conversations.*` | Liste des conversations, leurs dossiers, reprise de l'ancienne disposition (un seul groupe) |
+| `groupstore.*` | État persistant : pseudo, identité et trousseau (communs), secret et membres (par conversation) |
 | `governance.*` | Gouvernance du groupe : administrateurs, exclusions, secret en vigueur (enregistrements signés) |
 | `history.*` | Historique local, inventaire et lots de synchronisation |
 | `connectionpolicy.*` | Espacement des appels, appels croisés, présence relayée |
@@ -311,6 +312,7 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 | `icons/` | Icône : `p2pchat.svg` (source), `.icns` (macOS), `.ico` (Windows), `.png` |
 
 La configuration (`p2pchat.ini`) est dans `~/.config/p2pchat/` (Linux), `~/Library/Preferences/p2pchat/` (macOS)
-ou `%APPDATA%\p2pchat\` (Windows). L'historique et les clés Tor sont dans le dossier de données de l'application
-(`~/.local/share/p2pchat/p2pchat/`, `~/Library/Application Support/p2pchat/p2pchat/`…).
+ou `%APPDATA%\p2pchat\` (Windows). Les clés Tor et les conversations sont dans le dossier de données de
+l'application (`~/.local/share/p2pchat/p2pchat/`, `~/Library/Application Support/p2pchat/p2pchat/`…) : un
+sous-dossier `conversations/<identifiant>/` par conversation, avec son historique et ses fichiers.
 Supprimer le sous-dossier `tor/hs` change votre adresse onion.

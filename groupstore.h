@@ -11,16 +11,19 @@ struct Member
     QString onion, nick;
 };
 
-// État persistant du groupe et de l'identité de ce poste, rangé dans les réglages :
-//   nickname, identity/seed, group/{secret, members, shareHistoryUntil},
-//   keyring (onion -> clé Ed25519), firstSeen (onion -> ms), verified (onion -> clé vérifiée),
-//   history/clearedBefore
+// État persistant d'une conversation et de l'identité de ce poste, rangé dans les réglages.
+// Communs à toutes les conversations : nickname, identity/seed, keyring (onion -> clé Ed25519),
+// verified (onion -> clé vérifiée).
+// Propres à la conversation, sous « conversations/<id>/ » (cf. conversations.h) :
+//   group/{secret, members, shareHistoryUntil, records…}, firstSeen (onion -> ms), history/clearedBefore
+// Sans identifiant de conversation : identité seule, ou ancienne disposition (migration).
 class GroupStore
 {
 public:
     static constexpr int MaxMembers = 32; // maillage complet : au-delà, ce n'est plus raisonnable
 
-    explicit GroupStore(QSettings &settings);
+    explicit GroupStore(QSettings &settings, const QString &conversation = {});
+    QString conversation() const { return m_conversation; }
 
     // Reprise de la configuration de la version à deux participants (clés contact/*)
     void migrateLegacy();
@@ -65,7 +68,7 @@ public:
     // Trousseau : clé mémorisée à la première rencontre, conservée même après avoir quitté le
     // groupe (pour vérifier l'historique)
     QByteArray pinnedKey(const QString &onion) const;
-    bool pinKey(const QString &onion, const QByteArray &key, qint64 nowMs); // false si une autre clé est connue
+    bool pinKey(const QString &onion, const QByteArray &pub, qint64 nowMs); // false si une autre clé est connue
     qint64 firstSeen(const QString &onion) const; // 0 : avant cette fonctionnalité, ou historique partagé
 
     // Identité vérifiée de vive voix (code de sécurité comparé) : valable pour la clé mémorisée
@@ -81,5 +84,8 @@ public:
     void setClearedBefore(qint64 ms);
 
 private:
+    QString key(const QString &name) const { return m_prefix + name; } // clé propre à la conversation
+
     QSettings &m_settings;
+    QString m_conversation, m_prefix;
 };

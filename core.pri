@@ -7,6 +7,7 @@ DEPENDPATH += $$PWD
 SOURCES += \
     $$PWD/attachment.cpp \
     $$PWD/connectionpolicy.cpp \
+    $$PWD/conversations.cpp \
     $$PWD/crypto.cpp \
     $$PWD/filestore.cpp \
     $$PWD/governance.cpp \
@@ -27,6 +28,7 @@ SOURCES += \
 HEADERS += \
     $$PWD/attachment.h \
     $$PWD/connectionpolicy.h \
+    $$PWD/conversations.h \
     $$PWD/crypto.h \
     $$PWD/filestore.h \
     $$PWD/governance.h \
