@@ -581,6 +581,7 @@ void GroupNode::setActive(PeerConnection *c)
     // secret reçoit le nouveau
     if (c->peerVersion() >= Governance::Version)
         sendGovernance(c);
+    sendName(c);
     if (isNew)
         broadcast(membersMessage(), c);
     c->send(inventoryMessage()); // après la liste des membres : les clés des auteurs sont connues
@@ -748,6 +749,10 @@ void GroupNode::onReceived(PeerConnection *c, const QJsonObject &o)
         onSecret(c, o);
     } else if (type == "gov-leave") {
         onLeave(c, o);
+    } else if (type == "conv-name") {
+        onName(c, o);
+    } else if (type == "conv-invite") {
+        onDirectInvitation(c, o);
     } else if (type == "typing") {
         onPeerTyping(c);
     } else if (type == "file-have") {
@@ -1445,4 +1450,81 @@ void GroupNode::onLeave(PeerConnection *c, const QJsonObject &o)
     m_group.setMembers(members);
     emit memberLeft(onion, nick);
     emit stateChanged();
+}
+
+// ---------------------------------------------------------------- Conversations : nom partagé, invitations
+
+QString GroupNode::sharedName() const
+{
+    return m_group.nameRecord().value("n").toString();
+}
+
+bool GroupNode::setSharedName(const QString &name, QString *error)
+{
+    if (m_chain.isEmpty() || !isAdmin()) {
+        if (error)
+            *error = tr("seul un administrateur du groupe le peut");
+        return false;
+    }
+    // Strictement plus récent que le nom en vigueur (horloges décalées : on avance d'une milliseconde)
+    const qint64 ts = std::max(now(), qint64(m_group.nameRecord().value("ts").toDouble()) + 1);
+    const QJsonObject r = Governance::createName(m_group.identitySeed(), m_ownOnion, groupId(), name, ts);
+    m_group.setNameRecord(r);
+    for (PeerConnection *p : m_active.values())
+        sendName(p);
+    emit sharedNameChanged(sharedName(), m_group.nickname());
+    emit stateChanged();
+    return true;
+}
+
+void GroupNode::sendName(PeerConnection *c)
+{
+    const QJsonObject r = m_group.nameRecord();
+    if (!r.isEmpty() && c->peerVersion() >= Governance::NameVersion)
+        c->send(r);
+}
+
+void GroupNode::onName(PeerConnection *c, const QJsonObject &o)
+{
+    const auto h = head();
+    const QString author = o.value("a").toString();
+    if (!h || !h->isAdmin(author) || o.value("ts").toDouble() <= m_group.nameRecord().value("ts").toDouble()
+        || !Governance::verifyName(o, keyOf(author), groupId()))
+        return; // pas d'un administrateur, pas plus récent, ou falsifié
+    QJsonObject r = o;
+    r.insert("t", "conv-name");
+    m_group.setNameRecord(r);
+    for (PeerConnection *p : m_active.values()) // relais, pour ceux qui ne sont reliés qu'à nous
+        if (p != c)
+            sendName(p);
+    emit sharedNameChanged(sharedName(), author == m_ownOnion ? m_group.nickname() : m_group.nickOf(author));
+    emit stateChanged();
+}
+
+bool GroupNode::canInviteDirectly(const QString &onion) const
+{
+    const PeerConnection *c = m_active.value(onion);
+    return c && c->peerVersion() >= Governance::NameVersion;
+}
+
+bool GroupNode::inviteDirectly(const QString &onion, const Invitation &invitation, const QString &name)
+{
+    if (!canInviteDirectly(onion) || invitation.onion != m_ownOnion)
+        return false;
+    m_active.value(onion)->send({{"t", "conv-invite"},
+                                 {"c", invitation.toCode()},
+                                 {"n", name.trimmed().left(Governance::MaxNameLength)}});
+    return true;
+}
+
+void GroupNode::onDirectInvitation(PeerConnection *c, const QJsonObject &o)
+{
+    const auto inv = Invitation::fromCode(o.value("c").toString());
+    const QString from = m_active.key(c);
+    // Seulement pour sa propre conversation : son adresse et sa clé d'identité (celle de cette connexion)
+    if (!inv || from.isEmpty() || inv->onion != from || inv->identityKey != c->peerIdentityKey()
+        || m_group.acceptedSecrets(now()).contains(inv->secret))
+        return;
+    emit directInvitation(from, c->peerNickname(), *inv,
+                          o.value("n").toString().trimmed().left(Governance::MaxNameLength));
 }

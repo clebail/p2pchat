@@ -50,8 +50,14 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 - **Plusieurs conversations**, chacune avec ses membres, son code d'invitation et son historique, listées dans
   une colonne à gauche (nom, dernier message, non-lus) ; elle se replie quand la fenêtre est étroite (bouton ☰).
   ＋ → *Nouvelle conversation…* ou *Rejoindre avec un code…* (sans quitter les autres). Une même identité et un
-  seul service Tor pour toutes. ⋮ → *Renommer la conversation…* (nom affiché sur ce poste), *Quitter la
-  conversation…*, puis *Supprimer la conversation…* pour effacer son historique.
+  seul service Tor pour toutes. ⋮ → *Quitter la conversation…*, puis *Supprimer la conversation…* pour
+  effacer son historique.
+- **Invitation directe** : ⋮ → *Nouvelle conversation avec…* (cocher des membres de la conversation affichée),
+  ou *Membres…* → *Conversation privée*. Pas de code à recopier : l'invitation passe par la connexion chiffrée
+  déjà établie avec chacun, qui l'accepte ou non. Elle n'est acceptée que si elle vient bien de son auteur
+  (son adresse et sa clé d'identité). Une conversation privée déjà ouverte avec ce membre est réutilisée.
+- **Nom de la conversation** (⋮ → *Renommer la conversation…*) : choisi par un administrateur, il vaut pour
+  tous (signé, le plus récent l'emporte) ; un autre membre peut en choisir un pour son poste seulement.
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
 - **Au survol d'un message**, une petite barre apparaît au coin de la bulle : réactions rapides et ↩ *Répondre*.
 - **Réactions** (👍 ❤️ 😂 😮 😢 🎉) : clic droit sur un message → *Réagir*, ou clic sur une pastille existante pour

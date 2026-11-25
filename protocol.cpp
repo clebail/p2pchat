@@ -26,7 +26,8 @@ QStringList Protocol::missingFeatures(int peerVersion)
                                                           {7, QT_TRANSLATE_NOOP("Protocol", "les réactions")},
                                                           {8, QT_TRANSLATE_NOOP("Protocol", "les GIF animés")},
                                                           {9, QT_TRANSLATE_NOOP("Protocol", "les fichiers")},
-                                                          {11, QT_TRANSLATE_NOOP("Protocol", "les exclusions et le renouvellement du secret")}};
+                                                          {11, QT_TRANSLATE_NOOP("Protocol", "les exclusions et le renouvellement du secret")},
+                                                          {12, QT_TRANSLATE_NOOP("Protocol", "les invitations directes et le nom des conversations")}};
     QStringList missing;
     for (const auto &f : features)
         if (peerVersion < f.first)

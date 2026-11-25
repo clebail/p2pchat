@@ -124,3 +124,30 @@ Governance::Check Governance::checkNext(const std::optional<Record> &head, const
         return Check::NotAdmin;
     return Check::Ok;
 }
+
+namespace {
+QByteArray nameSigningBytes(const QJsonObject &r, const QString &groupId)
+{
+    return Crypto::pack({"p2pchat-name-v1", groupId.toLatin1(), r.value("n").toString().toUtf8(),
+                         r.value("a").toString().toUtf8(), QByteArray::number(qint64(r.value("ts").toDouble()))});
+}
+} // namespace
+
+QJsonObject Governance::createName(const QByteArray &identitySeed, const QString &authorOnion, const QString &groupId,
+                                   const QString &name, qint64 timestampMs)
+{
+    QJsonObject r{{"t", "conv-name"},
+                  {"n", name.trimmed().left(MaxNameLength)},
+                  {"a", authorOnion},
+                  {"ts", double(timestampMs)}};
+    r.insert("s", Protocol::toB64(Ed25519::sign(identitySeed, nameSigningBytes(r, groupId))));
+    return r;
+}
+
+bool Governance::verifyName(const QJsonObject &r, const QByteArray &authorKey, const QString &groupId)
+{
+    const QString name = r.value("n").toString();
+    return !groupId.isEmpty() && name.size() <= MaxNameLength && name == name.trimmed()
+           && Protocol::isValidOnion(r.value("a").toString()) && r.value("ts").toDouble() > 0
+           && Ed25519::verify(authorKey, nameSigningBytes(r, groupId), Protocol::fromB64(r.value("s")));
+}

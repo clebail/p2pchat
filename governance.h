@@ -53,4 +53,13 @@ enum class Check { Ok, Malformed, BadSignature, NotAdmin, NotNext, WrongGroup };
 Check checkNext(const std::optional<Record> &head, const QJsonObject &candidate, const QByteArray &authorKey,
                 const QString &expectedGroup = {});
 
+// Nom partagé de la conversation (version 12) : message à part, signé par un administrateur ; le plus récent
+// l'emporte. {"t":"conv-name", "n", "a" (auteur), "ts", "s"} — lié à l'identifiant du groupe.
+constexpr int NameVersion = 12;
+constexpr int MaxNameLength = 60;
+QJsonObject createName(const QByteArray &identitySeed, const QString &authorOnion, const QString &groupId,
+                       const QString &name, qint64 timestampMs);
+// Forme et signature (authorKey : clé de son auteur) ; être administrateur se vérifie à part
+bool verifyName(const QJsonObject &record, const QByteArray &authorKey, const QString &groupId);
+
 } // namespace Governance

@@ -6,6 +6,7 @@
 
 #include <QNetworkProxy>
 #include <QFile>
+#include <QDateTime>
 #include <QJsonArray>
 #include <QSettings>
 #include <QSignalSpy>
@@ -112,6 +113,8 @@ private:
                 [pp](const QString &by) { pp->system << "nous exclus par " + by; });
         connect(p.node.get(), &GroupNode::secretRenewed, this,
                 [pp](const QString &by) { pp->system << "secret renouvelé par " + by; });
+        connect(p.node.get(), &GroupNode::sharedNameChanged, this,
+                [pp](const QString &name, const QString &by) { pp->system << "nom " + name + " par " + by; });
         connect(p.node.get(), &GroupNode::memberLeft, this,
                 [pp](const QString &, const QString &nick) { pp->system << "parti " + nick; });
     }
@@ -709,6 +712,70 @@ private slots:
     }
 
     // ---------------------------------------------------------------- Plusieurs conversations
+
+    void sharedNameFromAdmin()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        QTRY_COMPARE(c.node->groupId(), a.node->groupId());
+        const QString group = a.node->groupId();
+        QString error;
+        QVERIFY(!b.node->setSharedName("Coup d'État", &error)); // pas administrateur
+        QVERIFY(a.node->setSharedName("Les amis"));
+        QTRY_COMPARE(b.node->sharedName(), QString("Les amis"));
+        QTRY_COMPARE(c.node->sharedName(), QString("Les amis"));
+        QVERIFY(c.system.contains("nom Les amis par " + a.nick));
+
+        // Signé par un simple membre, ou plus ancien : ignoré
+        const qint64 later = QDateTime::currentMSecsSinceEpoch() + 100000;
+        b.node->sendTo(c.onion, Governance::createName(b.store->identitySeed(), b.onion, group, "Pirate", later));
+        a.node->sendTo(c.onion, Governance::createName(a.store->identitySeed(), a.onion, group, "Ancien", 1));
+        // Signature d'un autre groupe
+        a.node->sendTo(c.onion,
+                       Governance::createName(a.store->identitySeed(), a.onion, QString(64, 'e'), "Ailleurs", later));
+        QTest::qWait(200);
+        QCOMPARE(c.node->sharedName(), QString("Les amis"));
+
+        // Un nouveau venu le reçoit en se connectant
+        Peer &d = peer('d');
+        QCOMPARE(d.node->join(invitation(c)), GroupNode::JoinResult::Joined);
+        d.node->setOnline(d.onion);
+        QTRY_COMPARE(d.node->sharedName(), QString("Les amis"));
+    }
+
+    void directInvitation()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        QObject guard;
+        QList<Invitation> got;
+        QStringList names, senders;
+        connect(b.node.get(), &GroupNode::directInvitation, &guard,
+                [&](const QString &from, const QString &, const Invitation &inv, const QString &name) {
+                    senders << from;
+                    got << inv;
+                    names << name;
+                });
+        // A invite B à une autre conversation, par leur connexion
+        const Invitation other{Crypto::randomBytes(16), a.onion, a.nick, a.store->identityKey(), QString(64, 'e')};
+        QVERIFY(a.node->canInviteDirectly(b.onion));
+        QVERIFY(a.node->inviteDirectly(b.onion, other, "Entre nous"));
+        QTRY_COMPARE(got.size(), 1);
+        QCOMPARE(senders.first(), a.onion);
+        QCOMPARE(got.first().secret, other.secret);
+        QCOMPARE(got.first().groupId, other.groupId);
+        QCOMPARE(names.first(), QString("Entre nous"));
+
+        // Personne ne transmet l'invitation d'un autre, ni ne se fait passer pour lui
+        QVERIFY(!c.node->inviteDirectly(b.onion, other, {}));
+        c.node->sendTo(b.onion, {{"t", "conv-invite"}, {"c", other.toCode()}});
+        const Invitation stolenKey{Crypto::randomBytes(16), c.onion, c.nick, a.store->identityKey(), {}};
+        c.node->sendTo(b.onion, {{"t", "conv-invite"}, {"c", stolenKey.toCode()}});
+        // Ni le code de la conversation où l'on est déjà
+        a.node->sendTo(b.onion, {{"t", "conv-invite"}, {"c", invitation(a).toCode()}});
+        QTest::qWait(200);
+        QCOMPARE(got.size(), 1);
+    }
 
     void conversationsShareOneListener()
     {

@@ -9,6 +9,7 @@
 #include "mentions.h"
 #include "notifications.h"
 #include "notifier.h"
+#include "governance.h"
 #include "groupnode.h"
 #include "protocol.h"
 #include "safetynumber.h"
@@ -271,7 +272,9 @@ bool MainWindow::isBlank(const Conversation *c) const
 QString MainWindow::displayName(const Conversation *c) const
 {
     if (!c->store->name().isEmpty())
-        return c->store->name();
+        return c->store->name(); // choisi sur ce poste
+    if (const QString shared = c->node->sharedName(); !shared.isEmpty())
+        return shared; // choisi par un administrateur
     QStringList names;
     for (const Member &m : c->store->members())
         names << (m.nick.isEmpty() ? tr("?") : m.nick);
@@ -311,13 +314,26 @@ void MainWindow::startConversation()
 
 void MainWindow::renameConversation()
 {
+    // Administrateur : le nom vaut pour tous ; sinon, pour ce poste seulement
+    const bool shared = m_node->isAdmin() && !m_node->groupId().isEmpty();
     bool ok = false;
-    const QString name = QInputDialog::getText(this, tr("Renommer la conversation"),
-                                               tr("Nom affiché sur ce poste (vide : les pseudos des membres) :"),
-                                               QLineEdit::Normal, m_group->name(), &ok);
+    const QString name = QInputDialog::getText(
+        this, tr("Renommer la conversation"),
+        shared ? tr("Nom de la conversation, pour tous les membres (vide : leurs pseudos) :")
+               : tr("Nom affiché sur ce poste seulement (vide : %1) :")
+                     .arg(m_node->sharedName().isEmpty() ? tr("les pseudos des membres")
+                                                         : tr("« %1 »").arg(m_node->sharedName())),
+        QLineEdit::Normal, m_group->name().isEmpty() ? m_node->sharedName() : m_group->name(), &ok);
     if (!ok)
         return;
-    m_group->setName(name);
+    if (shared) {
+        m_group->setName({});
+        QString error;
+        if (!m_node->setSharedName(name, &error))
+            QMessageBox::warning(this, tr("Renommer la conversation"), tr("Impossible : %1.").arg(error));
+    } else {
+        m_group->setName(name);
+    }
     updateConversationItem(m_shown);
     updateStatus();
 }
@@ -398,6 +414,14 @@ void MainWindow::connectNode(Conversation *c)
         box->setAttribute(Qt::WA_DeleteOnClose);
         box->open(); // sans bloquer la boucle d'événements
     }));
+    connect(n, &GroupNode::sharedNameChanged, this, in([this](const QString &name, const QString &by) {
+        appendSystem(name.isEmpty() ? tr("%1 a retiré le nom de la conversation.").arg(by)
+                                    : tr("%1 a nommé la conversation « %2 ».").arg(by, name));
+    }));
+    connect(n, &GroupNode::directInvitation, this,
+            in([this](const QString &, const QString &nick, const Invitation &inv, const QString &name) {
+                askDirectInvitation(nick, inv, name);
+            }));
     connect(n, &GroupNode::stateChanged, this, in([this] { updateStatus(); }));
     connect(n, &GroupNode::typingChanged, this, in([this] { updateStatus(); }));
     connect(n, &GroupNode::fileChanged, this, in([this](const QString &id) { updateFileEntry(id); }));
@@ -683,6 +707,7 @@ void MainWindow::buildUi()
     auto *menu = new QMenu(menuButton);
     QAction *inviteAct = menu->addAction(tr("Inviter quelqu'un…"), this, &MainWindow::invite);
     menu->addAction(tr("Nouvelle conversation…"), this, &MainWindow::startConversation);
+    QAction *withAct = menu->addAction(tr("Nouvelle conversation avec…"), this, &MainWindow::chooseConversationMembers);
     menu->addAction(tr("Rejoindre avec un code…"), this, &MainWindow::join);
     menu->addAction(tr("Se reconnecter maintenant"), this, &MainWindow::reconnectNow);
 #ifdef P2P_TERMINAL
@@ -716,7 +741,8 @@ void MainWindow::buildUi()
     menu->addSeparator();
     QAction *leaveAct = menu->addAction(tr("Quitter la conversation…"), this, &MainWindow::resetAll);
     QAction *deleteAct = menu->addAction(tr("Supprimer la conversation…"), this, &MainWindow::deleteConversation);
-    connect(menu, &QMenu::aboutToShow, this, [this, inviteAct, leaveAct, deleteAct] {
+    connect(menu, &QMenu::aboutToShow, this, [this, inviteAct, leaveAct, deleteAct, withAct] {
+        withAct->setEnabled(m_group->inGroup() && !m_group->members().isEmpty());
         inviteAct->setText(m_group->inGroup() ? tr("Inviter quelqu'un…") : tr("Créer la conversation et inviter…"));
         leaveAct->setVisible(m_group->inGroup());
         deleteAct->setVisible(!m_group->inGroup());
@@ -1352,24 +1378,29 @@ void MainWindow::join()
         QMessageBox::warning(this, tr("Rejoindre"), tr("Ce code n'est pas valide (incomplet ?)."));
         return;
     }
-    if (inv->onion == m_onion) {
+    joinWith(*inv);
+}
+
+void MainWindow::joinWith(const Invitation &inv)
+{
+    if (inv.onion == m_onion) {
         QMessageBox::warning(this, tr("Rejoindre"), tr("C'est votre propre code !"));
         return;
     }
     // Conversation déjà connue (même groupe), sinon la vierge affichée, sinon une nouvelle
     Conversation *target = nullptr;
     for (const auto &c : m_convs) {
-        const bool sameGroup = !inv->groupId.isEmpty() && c->node->groupId() == inv->groupId;
-        if (c->store->inGroup() && (sameGroup || c->node->acceptedSecrets().contains(inv->secret)))
+        const bool sameGroup = !inv.groupId.isEmpty() && c->node->groupId() == inv.groupId;
+        if (c->store->inGroup() && (sameGroup || c->node->acceptedSecrets().contains(inv.secret)))
             target = c.get();
     }
     const bool created = !target && !isBlank(m_shown);
     if (!target)
         target = isBlank(m_shown) ? m_shown : newConversation();
     showConversation(target);
-    const GroupNode::JoinResult result = m_node->join(*inv);
+    const GroupNode::JoinResult result = m_node->join(inv);
     if (result == GroupNode::JoinResult::Joined) {
-        appendSystem(tr("Invitation de %1 enregistrée.").arg(inv->nickname));
+        appendSystem(tr("Invitation de %1 enregistrée.").arg(inv.nickname));
         updateStatus();
         return;
     }
@@ -1382,7 +1413,118 @@ void MainWindow::join()
     else
         QMessageBox::warning(this, tr("Rejoindre"),
                              tr("<p>Ce code présente une clé d'identité différente de celle déjà connue pour %1.<br>"
-                                "Par sécurité, il est refusé.</p>").arg(inv->nickname.toHtmlEscaped()));
+                                "Par sécurité, il est refusé.</p>").arg(inv.nickname.toHtmlEscaped()));
+}
+
+void MainWindow::chooseConversationMembers()
+{
+    QList<Member> members = m_group->members();
+    if (!m_group->inGroup() || members.isEmpty()) {
+        QMessageBox::information(this, tr("Nouvelle conversation avec…"),
+                                 tr("Aucun membre dans cette conversation pour le moment."));
+        return;
+    }
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Nouvelle conversation avec…"));
+    auto *lay = new QVBoxLayout(&dlg);
+    auto *intro = new QLabel(tr("Une nouvelle conversation, avec les membres choisis seulement. L'invitation "
+                                "leur parvient directement (pas de code à envoyer) ; chacun l'accepte ou non."),
+                             &dlg);
+    intro->setWordWrap(true);
+    lay->addWidget(intro);
+    auto *list = new QListWidget(&dlg);
+    for (const Member &m : std::as_const(members)) {
+        auto *item = new QListWidgetItem(m.nick, list);
+        item->setData(Qt::UserRole, m.onion);
+        if (m_node->canInviteDirectly(m.onion)) {
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            item->setCheckState(Qt::Unchecked);
+        } else {
+            item->setFlags(item->flags() & ~Qt::ItemIsEnabled);
+            item->setText(m_node->isConnected(m.onion) ? tr("%1 (ancienne version de P2P Chat)").arg(m.nick)
+                                                       : tr("%1 (pas connecté directement)").arg(m.nick));
+        }
+    }
+    lay->addWidget(list);
+    auto *name = new QLineEdit(&dlg);
+    name->setPlaceholderText(tr("Nom de la conversation (facultatif)"));
+    name->setMaxLength(Governance::MaxNameLength);
+    lay->addWidget(name);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    buttons->button(QDialogButtonBox::Ok)->setText(tr("Créer et inviter"));
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    lay->addWidget(buttons);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    QStringList chosen;
+    for (int i = 0; i < list->count(); ++i)
+        if (list->item(i)->checkState() == Qt::Checked)
+            chosen << list->item(i)->data(Qt::UserRole).toString();
+    if (!chosen.isEmpty())
+        startConversationWith(chosen, name->text());
+}
+
+void MainWindow::startConversationWith(const QStringList &onions, const QString &name)
+{
+    // Conversation privée déjà ouverte avec ce membre : on y retourne
+    if (onions.size() == 1 && name.trimmed().isEmpty()) {
+        for (const auto &c : m_convs) {
+            const QList<Member> members = c->store->members();
+            if (c->store->inGroup() && members.size() == 1 && members.first().onion == onions.first()) {
+                showConversation(c.get());
+                return;
+            }
+        }
+    }
+    if (m_onion.isEmpty()) {
+        QMessageBox::information(this, tr("Nouvelle conversation"), tr("Le réseau n'est pas encore prêt."));
+        return;
+    }
+    Conversation *source = m_ctx;
+    Conversation *c = newConversation();
+    inContext(c, [&] {
+        m_node->createGroup();
+        if (!name.trimmed().isEmpty())
+            m_node->setSharedName(name);
+    });
+    const Invitation inv{c->store->secret(), m_onion, c->store->nickname(), c->store->identityKey(), c->node->groupId()};
+    QStringList sent, failed;
+    for (const QString &onion : onions)
+        (source->node->inviteDirectly(onion, inv, name) ? sent : failed) << source->store->nickOf(onion);
+    showConversation(c);
+    if (!sent.isEmpty())
+        appendSystem(tr("Invitation envoyée à %1 : la conversation commence dès qu'elle est acceptée.")
+                         .arg(sent.join(", ")));
+    if (!failed.isEmpty())
+        appendSystem(tr("⚠ Invitation impossible pour %1 (plus connecté). ⋮ → Inviter quelqu'un… donne un code "
+                        "à envoyer autrement.").arg(failed.join(", ")));
+}
+
+void MainWindow::askDirectInvitation(const QString &nick, const Invitation &invitation, const QString &name)
+{
+    const QString text =
+        (name.isEmpty() ? tr("<b>%1</b> vous propose une conversation privée.").arg(nick.toHtmlEscaped())
+                        : tr("<b>%1</b> vous invite à la conversation « %2 ».")
+                              .arg(nick.toHtmlEscaped(), name.toHtmlEscaped()))
+        + tr("<br><span style='color:#5f6368'>Invitation reçue dans « %1 ».</span>")
+              .arg(displayName(m_ctx).toHtmlEscaped());
+    auto *box = new QMessageBox(QMessageBox::Question, tr("Invitation"), text, QMessageBox::NoButton, this);
+    QPushButton *accept = box->addButton(tr("Rejoindre"), QMessageBox::AcceptRole);
+    box->addButton(tr("Refuser"), QMessageBox::RejectRole);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    connect(box, &QMessageBox::finished, this, [this, box, accept, invitation] {
+        if (box->clickedButton() == accept)
+            joinWith(invitation);
+    });
+    box->open();
+    if (!isVisible() || !isActiveWindow()) {
+        m_lastNotified = m_ctx->id;
+        m_notifier->notify(nick, name.isEmpty() ? tr("vous propose une conversation privée")
+                                                : tr("vous invite à « %1 »").arg(name));
+        if (isVisible())
+            QApplication::alert(this);
+    }
 }
 
 // ---------------------------------------------------------------- Membres et connexions
@@ -1769,10 +1911,13 @@ void MainWindow::showMembers()
     lay->addWidget(info);
     auto *buttons = new QHBoxLayout;
     auto *verifyBtn = new QPushButton(tr("Vérifier l'identité…"), &dlg);
+    auto *privateBtn = new QPushButton(tr("Conversation privée"), &dlg);
+    privateBtn->setToolTip(tr("Nouvelle conversation, avec ce membre seulement (invitation directe)"));
     auto *excludeBtn = new QPushButton(tr("Exclure…"), &dlg);
     auto *renewBtn = new QPushButton(tr("Renouveler le secret…"), &dlg);
     auto *closeBtn = new QPushButton(tr("Fermer"), &dlg);
     buttons->addWidget(verifyBtn);
+    buttons->addWidget(privateBtn);
     buttons->addWidget(excludeBtn);
     buttons->addWidget(renewBtn);
     buttons->addStretch(1);
@@ -1824,8 +1969,9 @@ void MainWindow::showMembers()
         info->setText(text);
         renewBtn->setEnabled(m_node->canGovern());
     };
-    auto updateButtons = [this, list, verifyBtn, excludeBtn] {
+    auto updateButtons = [this, list, verifyBtn, excludeBtn, privateBtn] {
         const QString onion = list->currentItem() ? list->currentItem()->data(Qt::UserRole).toString() : QString();
+        privateBtn->setEnabled(!onion.isEmpty() && m_node->canInviteDirectly(onion));
         verifyBtn->setEnabled(!onion.isEmpty() && !m_group->pinnedKey(onion).isEmpty());
         excludeBtn->setEnabled(!onion.isEmpty() && m_node->canGovern());
     };
@@ -1834,12 +1980,19 @@ void MainWindow::showMembers()
     };
     connect(list, &QListWidget::currentItemChanged, &dlg, updateButtons);
     connect(verifyBtn, &QPushButton::clicked, &dlg, [this, current] { showSafetyNumber(current()); });
+    QString privateWith; // après la fermeture de la fenêtre
+    connect(privateBtn, &QPushButton::clicked, &dlg, [current, &dlg, &privateWith] {
+        privateWith = current();
+        dlg.accept();
+    });
     connect(excludeBtn, &QPushButton::clicked, &dlg, [this, current] { confirmExclude(current()); });
     connect(renewBtn, &QPushButton::clicked, &dlg, [this] { confirmRenewSecret(); });
     connect(m_node, &GroupNode::stateChanged, &dlg, [fill, updateButtons] { fill(); updateButtons(); });
     fill();
     updateButtons();
     dlg.exec();
+    if (!privateWith.isEmpty())
+        startConversationWith({privateWith}, {});
 }
 
 void MainWindow::confirmExclude(const QString &onion)

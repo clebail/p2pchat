@@ -4,6 +4,7 @@
 #include "conversations.h"
 #include "groupnode.h"
 #include "groupstore.h"
+#include "invitation.h"
 
 #include <QDateTime>
 #include <QHash>
@@ -157,6 +158,11 @@ private:
     void invite();
     void showInvitation();
     void join();
+    void joinWith(const Invitation &invitation); // conversation déjà connue, vierge affichée, ou nouvelle
+    // Invitation directe (version 12) : nouvelle conversation avec des membres de celle affichée
+    void chooseConversationMembers();
+    void startConversationWith(const QStringList &onions, const QString &name);
+    void askDirectInvitation(const QString &nick, const Invitation &invitation, const QString &name);
 
     QString memberNick(const QString &onion) const; // « Un membre » si inconnu
     // Message reçu alors que la fenêtre n'est pas au premier plan

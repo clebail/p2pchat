@@ -17,7 +17,9 @@ constexpr int MaxNickLength = 40;
 // 7 : réactions (cf. reactions.h) ; 8 : GIF animés ; 9 : fichiers (cf. filestore.h) ;
 // 10 : morceaux de fichiers en trames binaires (sans base64). Les versions antérieures à MinVersion
 // sont refusées.
-constexpr int Version = 11; // 11 : gouvernance (exclusions, renouvellement du secret, cf. governance.h)
+// 11 : gouvernance (exclusions, renouvellement du secret, cf. governance.h)
+// 12 : invitations directes par une connexion existante, nom partagé des conversations
+constexpr int Version = 12;
 constexpr int FilesVersion = 9;
 constexpr int BinaryVersion = 10;
 // Types de trames binaires (cf. PeerConnection::sendBinary)

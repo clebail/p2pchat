@@ -310,3 +310,13 @@ void GroupStore::setNotifyMode(const QString &mode)
 {
     m_settings.setValue(key("notify/mode"), mode);
 }
+
+QJsonObject GroupStore::nameRecord() const
+{
+    return readObject(m_settings, key("group/nameRecord"));
+}
+
+void GroupStore::setNameRecord(const QJsonObject &record)
+{
+    writeObject(m_settings, key("group/nameRecord"), record);
+}

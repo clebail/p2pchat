@@ -125,6 +125,25 @@ private slots:
         const QJsonObject contradictory = create(m_alice, onion('a'), &g, {onion('a')}, {onion('a')}, "s", 1);
         QCOMPARE(checkNext(g, contradictory, key(m_alice)), Check::Malformed);
     }
+
+    void sharedNameIsSigned()
+    {
+        const QString group(64, 'f');
+        const QJsonObject n = createName(m_alice, onion('a'), group, "  Les amis  ", 5000);
+        QCOMPARE(n.value("n").toString(), QString("Les amis"));
+        QVERIFY(verifyName(n, key(m_alice), group));
+        QVERIFY(!verifyName(n, key(m_bob), group));            // pas sa signature
+        QVERIFY(!verifyName(n, key(m_alice), QString(64, 'e'))); // lié au groupe
+        QVERIFY(!verifyName(n, key(m_alice), QString()));
+        QJsonObject changed = n;
+        changed["n"] = "Autre nom";
+        QVERIFY(!verifyName(changed, key(m_alice), group));
+        changed = n;
+        changed["ts"] = 6000.0;
+        QVERIFY(!verifyName(changed, key(m_alice), group));
+        QCOMPARE(createName(m_alice, onion('a'), group, QString(100, 'n'), 1).value("n").toString().size(),
+                 MaxNameLength);
+    }
 };
 
 QTEST_GUILESS_MAIN(TestGovernance)

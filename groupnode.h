@@ -4,6 +4,7 @@
 #include "governance.h"
 #include "groupstore.h"
 #include "history.h"
+#include "invitation.h"
 #include "protocol.h"
 #include "reactions.h"
 
@@ -19,7 +20,6 @@
 #include <memory>
 #include <optional>
 
-struct Invitation;
 class PeerConnection;
 class QTcpSocket;
 class Switchboard;
@@ -119,6 +119,15 @@ public:
     bool exclude(const QString &onion, QString *error = nullptr);
     bool renewSecret(QString *error = nullptr);
 
+    // ---- Conversations (version 12)
+    // Nom partagé, choisi par un administrateur (vide : aucun)
+    QString sharedName() const;
+    bool setSharedName(const QString &name, QString *error = nullptr);
+    // Invitation à une autre conversation, par la connexion chiffrée avec ce membre ; false s'il n'est pas
+    // connecté directement ou utilise une version précédente
+    bool inviteDirectly(const QString &onion, const Invitation &invitation, const QString &name);
+    bool canInviteDirectly(const QString &onion) const;
+
     // ---- Fichiers (cf. filestore.h) : annonce signée, puis morceaux demandés à qui les a
     void setFilesDir(const QString &dir); // par défaut : « fichiers » à côté de l'historique
     Files::FileStore &files() { return *m_files; }
@@ -173,6 +182,10 @@ signals:
     void excludedFromGroup(const QString &byNick); // nous : connexions fermées, groupe quitté
     void secretRenewed(const QString &byNick);
     void memberLeft(const QString &onion, const QString &nick);
+    void sharedNameChanged(const QString &name, const QString &byNick);
+    // Un membre nous invite à une autre conversation (son code, vérifié : c'est bien le sien)
+    void directInvitation(const QString &fromOnion, const QString &fromNick, const Invitation &invitation,
+                          const QString &name);
     // Console partagée
     void peerReady(const QString &onion);
     void peerLost(const QString &onion);
@@ -216,6 +229,9 @@ private:
     bool integrateRecords(const QJsonArray &records);            // true si la chaîne a avancé
     void applyRecord(const Governance::Record &previousHead, const Governance::Record &record);
     void sendGovernance(PeerConnection *c);                       // chaîne, puis secret si membre non exclu
+    void onName(PeerConnection *c, const QJsonObject &o);
+    void onDirectInvitation(PeerConnection *c, const QJsonObject &o);
+    void sendName(PeerConnection *c);
     void onGovernance(PeerConnection *c, const QJsonObject &o);
     void onSecret(PeerConnection *c, const QJsonObject &o);
     void onLeave(PeerConnection *c, const QJsonObject &o);
