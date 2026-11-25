@@ -1,0 +1,4 @@
+# Fuites connues de Qt 5 lui-même (module d'affichage hors écran des tests graphiques),
+# identiques dans chaque test : 368 octets en 7 allocations, aucune trace de notre code.
+leak:QScreen::QScreen
+leak:libqoffscreen.so

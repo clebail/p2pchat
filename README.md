@@ -208,6 +208,9 @@ Qt Test (module `testlib`, inclus dans `qtbase`) : un exécutable par fichier `t
 mkdir build-tests && cd build-tests && qmake ../tests/tests.pro && make -j && make check
 ```
 
+Sous AddressSanitizer et UndefinedBehaviorSanitizer (accès mémoire, fuites, comportements indéfinis) :
+`tests/run-sanitizers.sh` (compile dans `build-asan/`). `tests/lsan.supp` écarte une fuite connue de Qt 5.
+
 Ils couvrent la cryptographie, les codes d'invitation, la signature des messages, l'état du groupe (membres,
 trousseau), l'historique et sa synchronisation, les règles de reconnexion, la poignée de main entre deux
 `PeerConnection` reliées en local (sans Tor) et le modèle de la liste de messages (rendu hors écran).
