@@ -35,6 +35,9 @@
 #include <QToolButton>
 #include <QMessageBox>
 #include <QNetworkProxy>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+#  include <QNetworkInformation>
+#endif
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -97,7 +100,12 @@ constexpr qint64 NewMemberMarginMs = 3600LL * 1000;      // marge d'horloge pour
 constexpr int MaxInventory = 4000;                       // identifiants annoncés au plus
 constexpr int MaxSyncBatchBytes = 150 * 1024;            // taille d'un lot (trame max : 256 Ko)
 constexpr int PresenceGraceMs = 60 * 1000;               // délai avant d'annoncer une déconnexion
-constexpr int BackoffMinSec = 10, BackoffMaxSec = 5 * 60; // espacement des appels sans réponse
+// Espacement des appels sans réponse. Un appel raté via Tor ne coûte presque rien : plafond bas.
+constexpr int BackoffMinSec = 10, BackoffMaxSec = 90;
+constexpr qint64 FastRetryMs = 2 * 60 * 1000; // après un (re)démarrage : essais toutes les 10 s
+constexpr qint64 WakeGapMs = 45 * 1000;       // tic de 10 s arrivé si tard : sortie de veille
+// Au-delà du délai d'inactivité du correspondant (100 s), il nous a déjà fermé la connexion
+constexpr qint64 SleepKillsLinksMs = 110 * 1000;
 
 } // namespace
 
@@ -142,6 +150,34 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
             broadcast(inventoryMessage());
     });
     m_syncTimer.start();
+
+    m_presenceTimer.setSingleShot(true);
+    m_presenceTimer.setInterval(1000);
+    connect(&m_presenceTimer, &QTimer::timeout, this, [this] { broadcast(presenceMessage()); });
+
+    // Les minuteurs sont suspendus pendant la veille : un tic très en retard signale le réveil
+    m_wakeTimer.setInterval(10000);
+    connect(&m_wakeTimer, &QTimer::timeout, this, [this] {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const qint64 gap = now - m_lastTick;
+        m_lastTick = now;
+        if (gap > WakeGapMs)
+            onWake(gap);
+    });
+    m_lastTick = QDateTime::currentMSecsSinceEpoch();
+    m_wakeTimer.start();
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+    // Changement de réseau (Wi-Fi, 4G, câble) : inutile d'attendre la fin des délais d'attente
+    if (QNetworkInformation::loadBackendByFeatures(QNetworkInformation::Feature::Reachability)) {
+        connect(QNetworkInformation::instance(), &QNetworkInformation::reachabilityChanged, this,
+                [this](QNetworkInformation::Reachability r) {
+                    qInfo().noquote() << "[réseau] joignabilité :" << int(r);
+                    if (r == QNetworkInformation::Reachability::Online)
+                        QTimer::singleShot(3000, this, &MainWindow::retrySoon); // laisse Tor s'en apercevoir
+                });
+    }
+#endif
 
     buildUi();
     setupTray();
@@ -472,6 +508,7 @@ void MainWindow::updateStatus()
     m_title->setText(names.isEmpty() ? tr("P2P Chat") : names.join(", "));
 
     const QString dot = QStringLiteral("<span style='color:%1'>●</span> ");
+    const QHash<QString, QString> relayed = relayedOnline();
     QString sub;
     if (!m_torError.isEmpty()) {
         sub = dot.arg("#d93025") + tr("Tor : %1").arg(m_torError.toHtmlEscaped());
@@ -482,13 +519,20 @@ void MainWindow::updateStatus()
     } else if (list.isEmpty()) {
         sub = dot.arg("#e37400") + tr("En attente de la première personne invitée…");
     } else {
+        // Les membres vus en ligne par un autre sont joignables : nos messages passent par lui
         QStringList online;
-        for (const Member &m : list)
-            if (m_active.contains(m.onion))
+        bool allDirect = true;
+        for (const Member &m : list) {
+            if (m_active.contains(m.onion)) {
                 online << m.nick.toHtmlEscaped();
+            } else if (relayed.contains(m.onion)) {
+                online << tr("%1 (via %2)").arg(m.nick, memberNick(relayed.value(m.onion))).toHtmlEscaped();
+                allDirect = false;
+            }
+        }
         if (online.isEmpty())
             sub = dot.arg("#9aa0a6") + tr("Personne n'est en ligne");
-        else if (online.size() == list.size())
+        else if (online.size() == list.size() && allDirect)
             sub = dot.arg("#188038") + (list.size() == 1 ? tr("En ligne") : tr("Tout le monde est en ligne"));
         else
             sub = dot.arg("#188038") + tr("En ligne : %1").arg(online.join(", "));
@@ -499,8 +543,11 @@ void MainWindow::updateStatus()
     QStringList tips;
     for (const Member &m : list) {
         QString state = m_active.contains(m.onion)     ? tr("en ligne")
+                        : relayed.contains(m.onion)    ? tr("en ligne via %1").arg(memberNick(relayed.value(m.onion)))
                         : m_attempts.contains(m.onion) ? tr("connexion…")
                                                        : tr("hors ligne");
+        if (relayed.contains(m.onion) && m_attempts.contains(m.onion))
+            state += tr(", connexion directe…");
         if (!m_active.contains(m.onion) && m_lastError.contains(m.onion))
             state += " — " + m_lastError.value(m.onion);
         if (!m_active.contains(m.onion) && !m_attempts.contains(m.onion)
@@ -650,6 +697,7 @@ void MainWindow::startTor()
         }
         // Juste après le démarrage, Tor peut encore compléter ses informations d'annuaire
         m_backoff.clear();
+        m_fastRetryUntil = QDateTime::currentMSecsSinceEpoch() + FastRetryMs;
         QTimer::singleShot(5000, this, &MainWindow::connectToMembers);
         m_retryTimer.start();
         updateStatus();
@@ -976,10 +1024,12 @@ void MainWindow::watch(PeerConnection *c)
         if (!attemptKey.isEmpty()) {
             m_attempts.remove(attemptKey);
             m_lastError.insert(attemptKey, reason);
-            // Échec : prochain essai de plus en plus espacé (10 s, 20 s, 40 s… jusqu'à 5 min)
+            // Échec : prochain essai de plus en plus espacé (10 s, 20 s, 40 s… jusqu'à 90 s),
+            // sauf juste après un (re)démarrage, où Tor n'a pas encore tout ce qu'il lui faut
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
             Backoff &b = m_backoff[attemptKey];
-            b.delay = b.delay == 0 ? BackoffMinSec : qMin(b.delay * 2, BackoffMaxSec);
-            b.nextTry = QDateTime::currentMSecsSinceEpoch() + qint64(b.delay) * 1000;
+            b.delay = (b.delay == 0 || now < m_fastRetryUntil) ? BackoffMinSec : qMin(b.delay * 2, BackoffMaxSec);
+            b.nextTry = now + qint64(b.delay) * 1000;
         }
         const QString activeKey = m_active.key(c);
         if (!activeKey.isEmpty()) {
@@ -987,6 +1037,9 @@ void MainWindow::watch(PeerConnection *c)
             m_lastError.insert(activeKey, reason);
             m_backoff.remove(activeKey); // il était là il y a un instant : on le rappelle tout de suite
             terminalPeerLost(activeKey);
+            m_peerPresence.remove(activeKey); // ceux qu'il voyait ne sont plus joignables par lui
+            m_presenceTimer.start();
+            checkQuietDrops();
             // La déconnexion n'est annoncée que si le membre ne revient pas dans le délai de grâce
             const quint64 token = ++m_dropToken;
             m_dropped.insert(activeKey, {reason, token});
@@ -996,7 +1049,12 @@ void MainWindow::watch(PeerConnection *c)
                     return;
                 const QString why = it->reason;
                 m_dropped.erase(it);
-                if (!m_active.contains(activeKey))
+                if (m_active.contains(activeKey))
+                    return;
+                // Toujours joignable par un autre membre : annoncé seulement quand il ne l'est plus
+                if (relayedOnline().contains(activeKey))
+                    m_quietDrops.insert(activeKey, why);
+                else
                     m_chat->addPresence(memberNick(activeKey), false, why);
             });
             QTimer::singleShot(5000, this, &MainWindow::connectToMembers);
@@ -1036,7 +1094,9 @@ void MainWindow::setActive(PeerConnection *c)
     // Deux membres peuvent s'appeler en même temps. Règle identique des deux côtés :
     // on garde la connexion ouverte par l'adresse onion la plus petite.
     // Revenu pendant le délai de grâce : la coupure passe inaperçue
-    const bool wasOnline = m_active.contains(onion) || m_dropped.remove(onion) > 0;
+    const bool graceReturn = m_dropped.remove(onion) > 0;
+    const bool quietReturn = m_quietDrops.remove(onion) > 0;
+    const bool wasOnline = m_active.contains(onion) || graceReturn || quietReturn;
     if (PeerConnection *old = m_active.value(onion); old && old != c) {
         auto initiator = [this](PeerConnection *p) { return p->isOutgoing() ? m_myOnion : p->peerOnion(); };
         const QString keep = initiator(old), other = initiator(c);
@@ -1066,6 +1126,16 @@ void MainWindow::setActive(PeerConnection *c)
     if (m_term && m_term->peerOnion() == onion)
         m_term->setLinkUp(); // reprise de la console partagée
 #endif
+    c->send(presenceMessage());
+    if (!wasOnline) {
+        m_presenceTimer.start(); // les autres apprennent qu'on le voit
+        // Une connexion vient d'aboutir : Tor et le réseau fonctionnent, inutile de faire attendre les autres
+        if (!m_backoff.isEmpty()) {
+            m_backoff.clear();
+            connectToMembers();
+            return; // connectToMembers met l'état à jour
+        }
+    }
     updateStatus();
 }
 
@@ -1212,6 +1282,33 @@ void MainWindow::onReceived(PeerConnection *c, const QJsonObject &o)
             connectToMembers();
         }
         updateStatus(); // un pseudo a pu changer
+    } else if (type == "presence") {
+        const QString from = m_active.key(c);
+        if (from.isEmpty())
+            return; // connexion remplacée entre-temps
+        QSet<QString> known;
+        for (const Member &m : members())
+            known.insert(m.onion);
+        QSet<QString> seen;
+        for (const QJsonValue &v : o.value("on").toArray()) {
+            const QString onion = v.toString();
+            if (known.contains(onion) && onion != from)
+                seen.insert(onion);
+        }
+        const QSet<QString> before = m_peerPresence.value(from);
+        m_peerPresence.insert(from, seen);
+        // Un membre vient d'apparaître chez un autre : il est en ligne, on l'appelle sans attendre
+        bool redial = false;
+        for (const QString &onion : std::as_const(seen))
+            if (!before.contains(onion) && !m_active.contains(onion) && !m_attempts.contains(onion)) {
+                m_backoff.remove(onion);
+                redial = true;
+            }
+        checkQuietDrops();
+        if (redial)
+            connectToMembers();
+        else
+            updateStatus();
     } else if (type == "inv") {
         sendMissing(c, o.value("ids").toArray());
     } else if (type == "sync") {
@@ -1264,6 +1361,8 @@ void MainWindow::closeAll()
     m_pending.clear();
     m_dropped.clear();
     m_backoff.clear();
+    m_peerPresence.clear();
+    m_quietDrops.clear();
     for (const PeerConnection *c : std::as_const(all))
         if (c->isReady())
             terminalPeerLost(c->peerOnion());
@@ -1273,6 +1372,62 @@ void MainWindow::closeAll()
 #endif
     for (PeerConnection *c : all)
         c->close();
+}
+
+void MainWindow::onWake(qint64 gapMs)
+{
+    qInfo().noquote() << "[réseau] reprise après une pause de" << gapMs / 1000 << "s";
+    if (m_myOnion.isEmpty())
+        return;
+    // Pendant la pause, nos pings ne sont pas partis : les correspondants nous ont fermé la porte,
+    // mais on ne s'en apercevrait qu'au bout du délai d'inactivité. On repart tout de suite.
+    if (gapMs > SleepKillsLinksMs) {
+        const QList<PeerConnection *> dead = m_active.values();
+        for (PeerConnection *c : dead)
+            c->close();
+    }
+    retrySoon();
+}
+
+void MainWindow::retrySoon()
+{
+    if (m_myOnion.isEmpty())
+        return; // Tor pas prêt : il rappellera tout le monde lui-même
+    m_fastRetryUntil = QDateTime::currentMSecsSinceEpoch() + FastRetryMs;
+    reconnectNow();
+}
+
+QJsonObject MainWindow::presenceMessage() const
+{
+    QJsonArray on;
+    for (auto it = m_active.cbegin(); it != m_active.cend(); ++it)
+        on.append(it.key());
+    return {{"t", "presence"}, {"on", on}};
+}
+
+QHash<QString, QString> MainWindow::relayedOnline() const
+{
+    QHash<QString, QString> via;
+    for (auto it = m_peerPresence.cbegin(); it != m_peerPresence.cend(); ++it)
+        for (const QString &onion : it.value())
+            if (onion != m_myOnion && !m_active.contains(onion) && !via.contains(onion))
+                via.insert(onion, it.key());
+    return via;
+}
+
+void MainWindow::checkQuietDrops()
+{
+    if (m_quietDrops.isEmpty())
+        return;
+    const QHash<QString, QString> relayed = relayedOnline();
+    for (auto it = m_quietDrops.begin(); it != m_quietDrops.end();) {
+        if (!m_active.contains(it.key()) && !relayed.contains(it.key())) {
+            m_chat->addPresence(memberNick(it.key()), false, it.value());
+            it = m_quietDrops.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 void MainWindow::sendCurrent()

@@ -51,9 +51,12 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 - Clic droit sur un message → copier
 - Menu ⋮ : inviter, rejoindre, se reconnecter, **partager ma console**, changer de pseudo,
   **vider la conversation** (efface l'historique local), quitter le groupe
-- Survoler la ligne d'état sous le titre affiche l'état de chaque membre (dernière erreur, heure du prochain essai)
+- Survoler la ligne d'état sous le titre affiche l'état de chaque membre (dernière erreur, heure du prochain essai).
+  Un membre pas encore relié directement, mais connecté à un autre membre, apparaît « en ligne (via …) » : les
+  messages passent par celui-ci.
 - Arrivées et départs regroupés : les « X est en ligne » / « X s'est déconnecté(e) » consécutifs tiennent sur une
-  seule ligne (un clic la déplie). Une coupure n'est annoncée que si le membre n'est pas revenu au bout de 60 s.
+  seule ligne (un clic la déplie). Une coupure n'est annoncée que si le membre n'est pas revenu au bout de 60 s,
+  et qu'aucun autre membre ne le voit encore en ligne.
 - **Notifications natives** avec l'icône de l'application quand un message arrive et que la fenêtre n'est pas
   au premier plan. Un clic sur la notification rouvre la fenêtre.
 - **Linux / Windows** : icône dans la zone de notification, avec une pastille rouge s'il y a des messages non lus.
@@ -70,9 +73,17 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 Un membre est « en ligne » quand une connexion directe et authentifiée est ouverte avec lui. Chaque côté
 envoie un ping chiffré toutes les 30 s ; sans nouvelles pendant 100 s, la connexion est fermée.
 
-Les membres hors ligne sont rappelés de plus en plus espacé (10 s, 20 s, 40 s… jusqu'à 5 min), pour ne pas
-solliciter Tor en permanence. Le délai repart de zéro quand le membre se connecte à nous, quand un message de
-lui nous parvient par relais, ou avec ⋮ → *Se reconnecter maintenant*.
+Chacun annonce aussi aux autres la liste des membres avec qui il est connecté directement. Un membre que l'on
+n'a pas encore joint, mais qu'un autre voit en ligne, est affiché « en ligne (via …) » : les messages lui
+parviennent par relais.
+
+Les membres hors ligne sont rappelés de plus en plus espacé (10 s, 20 s, 40 s… jusqu'à 90 s), pour ne pas
+solliciter Tor en permanence. Pendant les 2 minutes qui suivent le démarrage de Tor, un retour du réseau ou une
+sortie de veille, les essais restent toutes les 10 s. Le délai repart de zéro quand le membre se connecte à nous,
+quand un message de lui nous parvient par relais, quand un autre membre le voit en ligne, dès qu'une connexion
+aboutit (Tor fonctionne), quand le réseau revient (Qt 6.4 et plus), à la sortie de veille, ou avec
+⋮ → *Se reconnecter maintenant*. Après une veille de plus de 110 s, les connexions sont rouvertes sans attendre
+le délai d'inactivité.
 
 ### Console partagée (Linux, macOS)
 

@@ -99,6 +99,13 @@ private:
     void onReceived(PeerConnection *c, const QJsonObject &obj);
     void broadcast(const QJsonObject &obj, PeerConnection *except = nullptr);
     void closeAll();
+    void onWake(qint64 gapMs);          // l'ordinateur sort de veille (ou le programme était figé)
+    void retrySoon();                   // le réseau est revenu : on rappelle tout le monde
+
+    // Présence relayée : chaque membre annonce à qui il est connecté directement
+    QJsonObject presenceMessage() const;
+    QHash<QString, QString> relayedOnline() const; // onion -> onion du membre qui le voit en ligne
+    void checkQuietDrops();
     void sendCurrent();
 
     // Console partagée (Linux, macOS) : un membre ouvre sa console à un autre, cf. terminalsession.h
@@ -139,6 +146,14 @@ private:
         qint64 nextTry = 0;  // ms depuis l'époque
     };
     QHash<QString, Backoff> m_backoff;
+    qint64 m_fastRetryUntil = 0; // jusque-là, essais à intervalle fixe (Tor vient de (re)démarrer)
+    // Présence relayée
+    QHash<QString, QSet<QString>> m_peerPresence; // membre connecté -> membres qu'il voit en ligne
+    QHash<QString, QString> m_quietDrops;         // coupure directe non annoncée (joignable via un autre)
+    QTimer m_presenceTimer;                       // regroupe les annonces de présence
+    // Détection de sortie de veille : écart anormal entre deux tics
+    QTimer m_wakeTimer;
+    qint64 m_lastTick = 0;
     QSet<QString> m_seenIds;                     // anti-doublon des messages relayés
     QSet<QString> m_identityWarned;              // avertissements d'identité déjà affichés
     QHash<QString, QJsonObject> m_store;         // historique signé : id -> message
