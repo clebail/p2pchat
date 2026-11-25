@@ -14,6 +14,7 @@ SUBDIRS += \
     tst_reactions \
     tst_safetynumber \
     tst_singleinstance \
+    tst_filestore \
     tst_groupnode \
     tst_groupstore \
     tst_history \

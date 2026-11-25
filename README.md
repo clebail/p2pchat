@@ -265,6 +265,7 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 | `protocol.*` | Formats communs (adresse onion, base64), messages signés |
 | `invitation.*` | Encodage / décodage du code d'invitation |
 | `attachment.*` | Images jointes : chargement, réduction et compression, décodage sûr à la réception |
+| `filestore.*` | Fichiers joints : découpage en morceaux, empreintes, stockage, reprise, ménage à 30 jours |
 | `reactions.*` | Réactions : enregistrements signés, état (le plus récent l'emporte) |
 | `markup.*` | Repérage de `code` et des blocs ``` dans le texte |
 | `notifications.*` | Réglage des notifications (lesquelles, pause) |
