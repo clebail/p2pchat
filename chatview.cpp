@@ -3,6 +3,16 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QContextMenuEvent>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFile>
+#include <QFileDialog>
+#include <QLabel>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QScreen>
+#include <QStandardPaths>
+#include <QVBoxLayout>
 #include <QMouseEvent>
 #include <QHash>
 #include <QLocale>
@@ -30,6 +40,8 @@ constexpr int RBig = 20, RSmall = 5;
 constexpr int GroupGapSec = 5 * 60;
 // Citation (réponse) : encadré en haut de la bulle
 constexpr int QuoteMargin = 8, QuoteGap = 6, QuotePadL = 11, QuotePadR = 8, QuotePadV = 5;
+// Image : marge dans la bulle, taille d'affichage maximale, arrondi
+constexpr int ImageMargin = 4, ImageMaxSide = 300, ImageRadius = 16;
 
 QFont messageFont()
 {
@@ -203,7 +215,7 @@ void ChatModel::resolveReply(ChatEntry &e) const
         return;
     const ChatEntry &quoted = m_entries.at(row);
     e.replyAuthor = quoted.mine ? QObject::tr("Vous") : quoted.author;
-    e.replyText = quoted.text;
+    e.replyText = quoted.text.isEmpty() && !quoted.image.isNull() ? QObject::tr("📷 Image") : quoted.text;
     e.replyFound = true;
 }
 
@@ -272,6 +284,7 @@ struct ChatDelegate::Geometry
     int textTop = PadV;     // position du texte dans la bulle
     int quoteH = 0;         // 0 : pas de citation
     QString quoteText;      // extrait, coupé à la largeur disponible
+    int imageTop = 0, imageW = 0, imageH = 0; // imageH = 0 : pas d'image
     int height = 0;
 };
 
@@ -301,14 +314,16 @@ ChatDelegate::Geometry ChatDelegate::compute(const QModelIndex &index, int width
         return g;
     }
 
+    // Contenu de la bulle, de haut en bas : citation, image, texte (chacun facultatif)
     const int maxBubble = qMax(120, qMin(int(width * 0.75), width - 2 * Side - Avatar - AvatarGap - 24));
+    const bool hasText = !e.text.isEmpty() || e.image.isNull();
     QTextLayout tl;
     prepareMessageLayout(tl, e);
     qreal used = 0;
-    const qreal h = layoutText(tl, maxBubble - 2 * PadH, &used);
+    const qreal h = hasText ? layoutText(tl, maxBubble - 2 * PadH, &used) : 0;
     g.textW = int(std::ceil(used));
-    g.bubbleW = g.textW + 2 * PadH;
-    g.bubbleH = int(std::ceil(h)) + 2 * PadV;
+    int bubbleW = hasText ? g.textW + 2 * PadH : 0;
+    int y = 0; // bas du contenu déjà placé
     if (!e.replyTo.isEmpty()) {
         const QFontMetrics bold(smallFont(true));
         const QString author = e.replyFound ? e.replyAuthor : QObject::tr("Message cité");
@@ -319,10 +334,29 @@ ChatDelegate::Geometry ChatDelegate::compute(const QModelIndex &index, int width
         const int quoteW = qMin(wanted, maxQuote);
         g.quoteText = small.elidedText(full, Qt::ElideRight, quoteW - QuotePadL - QuotePadR);
         g.quoteH = bold.height() + small.height() + 2 * QuotePadV;
-        g.bubbleW = qMax(g.bubbleW, quoteW + 2 * QuoteMargin);
-        g.textTop = QuoteMargin + g.quoteH + QuoteGap;
-        g.bubbleH = g.textTop + int(std::ceil(h)) + PadV;
+        bubbleW = qMax(bubbleW, quoteW + 2 * QuoteMargin);
+        y = QuoteMargin + g.quoteH;
     }
+    if (!e.image.isNull()) {
+        // Jamais agrandie ; réduite pour tenir dans la bulle et dans ImageMaxSide
+        const int side = qMin(ImageMaxSide, maxBubble - 2 * ImageMargin);
+        QSize s = e.image.size();
+        if (s.width() > side || s.height() > side)
+            s.scale(side, side, Qt::KeepAspectRatio);
+        g.imageW = qMax(1, s.width());
+        g.imageH = qMax(1, s.height());
+        g.imageTop = y ? y + QuoteGap : ImageMargin;
+        y = g.imageTop + g.imageH;
+        bubbleW = qMax(bubbleW, g.imageW + 2 * ImageMargin);
+    }
+    if (hasText) {
+        g.textTop = y ? y + QuoteGap : PadV;
+        y = g.textTop + int(std::ceil(h)) + PadV;
+    } else {
+        y += ImageMargin; // image seule : bordure fine tout autour
+    }
+    g.bubbleW = bubbleW;
+    g.bubbleH = y;
     g.nameH = (!e.mine && g.first) ? small.height() + 4 : 0;
     g.timeH = (g.last || e.trust != ChatEntry::Verified) ? small.height() + 4 : 0;
     g.height = g.top + g.nameH + g.bubbleH + g.timeH;
@@ -341,6 +375,11 @@ QRectF ChatDelegate::bubbleRect(const ChatEntry &e, const Geometry &g, const QRe
     return QRectF(left, r.top() + g.top + g.nameH, g.bubbleW, g.bubbleH);
 }
 
+QRectF ChatDelegate::imageRect(const Geometry &g, const QRectF &bubble) const
+{
+    return QRectF(bubble.left() + ImageMargin, bubble.top() + g.imageTop, g.imageW, g.imageH);
+}
+
 QRectF ChatDelegate::quoteRect(const Geometry &g, const QRectF &bubble) const
 {
     return QRectF(bubble.left() + QuoteMargin, bubble.top() + QuoteMargin, bubble.width() - 2 * QuoteMargin, g.quoteH);
@@ -352,10 +391,15 @@ bool ChatDelegate::editorEvent(QEvent *event, QAbstractItemModel *model, const Q
     if (event->type() == QEvent::MouseButtonRelease) {
         const auto *mouse = static_cast<QMouseEvent *>(event);
         const ChatEntry &e = static_cast<const ChatModel *>(index.model())->entry(index.row());
-        if (mouse->button() == Qt::LeftButton && e.kind == ChatEntry::Message && !e.replyTo.isEmpty()) {
+        if (mouse->button() == Qt::LeftButton && e.kind == ChatEntry::Message) {
             const Geometry g = compute(index, option.rect.width());
-            if (quoteRect(g, bubbleRect(e, g, option.rect)).contains(mouse->pos())) {
+            const QRectF bubble = bubbleRect(e, g, option.rect);
+            if (g.quoteH && quoteRect(g, bubble).contains(mouse->pos())) {
                 emit quoteClicked(e.replyTo);
+                return true;
+            }
+            if (g.imageH && imageRect(g, bubble).contains(mouse->pos())) {
+                emit imageClicked(index.row());
                 return true;
             }
         }
@@ -438,11 +482,25 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
                     Qt::AlignLeft | Qt::AlignVCenter, g.quoteText);
     }
 
-    QTextLayout tl;
-    prepareMessageLayout(tl, e);
-    layoutText(tl, g.bubbleW - 2 * PadH + 1, nullptr);
-    p->setPen(e.mine ? MineText : OtherText);
-    tl.draw(p, QPointF(bubble.left() + PadH, bubble.top() + g.textTop));
+    // Image aux coins arrondis
+    if (g.imageH) {
+        const QRectF ir = imageRect(g, bubble);
+        QPainterPath clip;
+        clip.addRoundedRect(ir, ImageRadius, ImageRadius);
+        p->save();
+        p->setClipPath(clip);
+        p->setRenderHint(QPainter::SmoothPixmapTransform);
+        p->drawImage(ir, e.image);
+        p->restore();
+    }
+
+    if (!e.text.isEmpty() || !g.imageH) {
+        QTextLayout tl;
+        prepareMessageLayout(tl, e);
+        layoutText(tl, g.bubbleW - 2 * PadH + 1, nullptr);
+        p->setPen(e.mine ? MineText : OtherText);
+        tl.draw(p, QPointF(bubble.left() + PadH, bubble.top() + g.textTop));
+    }
 
     // Avatar (dernier message d'un groupe reçu)
     if (!e.mine && g.last) {
@@ -486,6 +544,7 @@ ChatView::ChatView(QWidget *parent) : QListView(parent), m_model(new ChatModel(t
     auto *delegate = new ChatDelegate(this);
     setItemDelegate(delegate);
     connect(delegate, &ChatDelegate::quoteClicked, this, &ChatView::showMessage);
+    connect(delegate, &ChatDelegate::imageClicked, this, &ChatView::openImage);
     m_flashTimer = new QTimer(this);
     m_flashTimer->setSingleShot(true);
     m_flashTimer->setInterval(1600);
@@ -621,11 +680,86 @@ void ChatView::contextMenuEvent(QContextMenuEvent *event)
     const ChatEntry &e = m_model->entry(idx.row());
     // Seuls les messages authentiques ont un identifiant reconnu par les autres membres
     if (e.kind == ChatEntry::Message && !e.id.isEmpty() && e.trust == ChatEntry::Verified) {
-        const QString id = e.id, author = e.author, text = e.text;
+        const QString id = e.id, author = e.author;
+        const QString text = e.text.isEmpty() && !e.image.isNull() ? tr("📷 Image") : e.text;
         menu.addAction(tr("Répondre"), this, [this, id, author, text] { emit replyRequested(id, author, text); });
     }
-    menu.addAction(tr("Copier le message"), this, [this, idx] {
-        QGuiApplication::clipboard()->setText(m_model->entry(idx.row()).text);
-    });
+    const int row = idx.row();
+    if (!e.image.isNull()) {
+        menu.addAction(tr("Ouvrir l'image"), this, [this, row] { openImage(row); });
+        menu.addAction(tr("Enregistrer l'image…"), this, [this, row] { saveImage(row); });
+        menu.addAction(tr("Copier l'image"), this, [this, row] {
+            const ChatEntry &entry = m_model->entry(row);
+            const QImage full = QImage::fromData(entry.imageData);
+            QGuiApplication::clipboard()->setImage(full.isNull() ? entry.image : full);
+        });
+    }
+    if (!e.text.isEmpty())
+        menu.addAction(tr("Copier le message"), this, [this, row] {
+            QGuiApplication::clipboard()->setText(m_model->entry(row).text);
+        });
     menu.exec(event->globalPos());
+}
+
+// ---------------------------------------------------------------- Images
+
+void ChatView::openImage(int row)
+{
+    if (row < 0 || row >= m_model->rowCount() || m_model->entry(row).image.isNull())
+        return;
+    const ChatEntry &e = m_model->entry(row);
+    QImage full = QImage::fromData(e.imageData);
+    if (full.isNull())
+        full = e.image;
+
+    auto *dlg = new QDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->setWindowTitle(e.mine ? tr("Votre image") : tr("Image de %1").arg(e.author));
+    auto *lay = new QVBoxLayout(dlg);
+    auto *label = new QLabel(dlg);
+    label->setAlignment(Qt::AlignCenter);
+    // Au plus 85 % de l'écran, jamais agrandie
+    const QSize avail = (screen() ? screen()->availableSize() : QSize(1280, 800)) * 0.85;
+    QPixmap pm = QPixmap::fromImage(full);
+    if (pm.width() > avail.width() || pm.height() > avail.height())
+        pm = pm.scaled(avail, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    label->setPixmap(pm);
+    lay->addWidget(label, 1);
+    if (!e.text.isEmpty()) {
+        auto *caption = new QLabel(e.text, dlg);
+        caption->setTextFormat(Qt::PlainText);
+        caption->setWordWrap(true);
+        lay->addWidget(caption);
+    }
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dlg);
+    QPushButton *save = buttons->addButton(tr("Enregistrer…"), QDialogButtonBox::ActionRole);
+    QPushButton *copy = buttons->addButton(tr("Copier"), QDialogButtonBox::ActionRole);
+    connect(save, &QPushButton::clicked, this, [this, row] { saveImage(row); });
+    connect(copy, &QPushButton::clicked, dlg, [full, copy] {
+        QGuiApplication::clipboard()->setImage(full);
+        copy->setText(tr("Copiée ✔"));
+    });
+    connect(buttons, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
+    lay->addWidget(buttons);
+    dlg->open();
+}
+
+void ChatView::saveImage(int row)
+{
+    if (row < 0 || row >= m_model->rowCount() || m_model->entry(row).image.isNull())
+        return;
+    const ChatEntry &e = m_model->entry(row);
+    const bool png = e.imageData.startsWith("\x89PNG");
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    const QString name = QStringLiteral("p2pchat-%1.%2").arg(e.ts.toString("yyyyMMdd-HHmmss"), png ? "png" : "jpg");
+    const QString path = QFileDialog::getSaveFileName(this, tr("Enregistrer l'image"), dir + "/" + name,
+                                                      png ? tr("Image PNG (*.png)") : tr("Image JPEG (*.jpg *.jpeg)"));
+    if (path.isEmpty())
+        return;
+    // Le fichier reçu tel quel (pas de recompression) ; sinon l'image affichée
+    QFile file(path);
+    const bool ok = e.imageData.isEmpty() ? e.image.save(path)
+                                          : file.open(QIODevice::WriteOnly) && file.write(e.imageData) == e.imageData.size();
+    if (!ok)
+        QMessageBox::warning(this, tr("Enregistrer l'image"), tr("Impossible d'enregistrer %1.").arg(path));
 }

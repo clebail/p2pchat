@@ -208,6 +208,38 @@ private slots:
         view.grab(); // dessin de la citation (trouvée ou non) : ne doit pas planter
     }
 
+    void imageMessage()
+    {
+        ChatView view;
+        view.resize(480, 600);
+        const QDateTime t0 = QDateTime::currentDateTime();
+        ChatEntry photo = message(QString(), t0); // image sans légende
+        photo.id = "p";
+        photo.image = QImage(800, 600, QImage::Format_RGB32);
+        photo.image.fill(Qt::darkGreen);
+        view.addMessage(photo);
+        ChatEntry reply = message("Belle photo", t0.addSecs(5));
+        reply.replyTo = "p";
+        view.addMessage(reply);
+        QCOMPARE(view.chatModel()->entry(1).replyText, QString("📷 Image")); // citation d'une image
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+
+        // La bulle est à la taille de l'image réduite (300 px au plus), et un clic dessus l'ouvre
+        const QModelIndex idx = view.chatModel()->index(0);
+        QStyleOptionViewItem opt;
+        opt.rect = view.visualRect(idx);
+        QVERIFY(opt.rect.height() >= 225 && opt.rect.height() < 300);
+        auto *delegate = qobject_cast<ChatDelegate *>(view.itemDelegate());
+        QSignalSpy clicked(delegate, &ChatDelegate::imageClicked);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(opt.rect.left() + 150, opt.rect.center().y()),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QVERIFY(delegate->editorEvent(&release, view.model(), opt, idx));
+        QCOMPARE(clicked.count(), 1);
+        QCOMPARE(clicked.first().first().toInt(), 0);
+        view.grab(); // dessin de l'image arrondie
+    }
+
     void avatarColorIsStable()
     {
         QCOMPARE(ChatView::colorFor("Alice"), ChatView::colorFor("Alice"));

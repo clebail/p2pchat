@@ -1,6 +1,7 @@
 #pragma once
 #include <QAbstractListModel>
 #include <QDateTime>
+#include <QImage>
 #include <QListView>
 #include <QStyledItemDelegate>
 #include <QTimer>
@@ -35,6 +36,9 @@ struct ChatEntry
     QString id, replyTo;
     QString replyAuthor, replyText;
     bool replyFound = false;
+    // Image jointe : version réduite pour l'affichage, et fichier d'origine (JPEG ou PNG reçu)
+    QImage image;
+    QByteArray imageData;
     // Presence : évènements consécutifs regroupés en une seule ligne, dépliable d'un clic
     QList<PresenceEvent> events;
     bool expanded = false;
@@ -73,12 +77,14 @@ public:
 
 signals:
     void quoteClicked(const QString &id); // clic sur la citation d'une réponse
+    void imageClicked(int row);           // clic sur une image
 
 private:
     struct Geometry;
     Geometry compute(const QModelIndex &index, int width) const;
     QRectF bubbleRect(const ChatEntry &e, const Geometry &g, const QRect &r) const;
     QRectF quoteRect(const Geometry &g, const QRectF &bubble) const;
+    QRectF imageRect(const Geometry &g, const QRectF &bubble) const;
     QListView *m_view;
 };
 
@@ -104,6 +110,9 @@ public:
     static QColor colorFor(const QString &name);
     // Extrait d'un message pour une citation : une ligne, espaces regroupés, coupé à maxChars
     static QString excerpt(const QString &text, int maxChars = 120);
+    // Image en grand, avec « Enregistrer… » et « Copier »
+    void openImage(int row);
+    void saveImage(int row);
 
 signals:
     // Menu contextuel « Répondre » sur un message

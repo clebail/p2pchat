@@ -1,6 +1,7 @@
 # Tests unitaires : qmake ../tests/tests.pro && make && make check
 TEMPLATE = subdirs
 SUBDIRS += \
+    tst_attachment \
     tst_crypto \
     tst_invitation \
     tst_mentions \

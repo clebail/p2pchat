@@ -1,10 +1,11 @@
 # Cœur de P2P Chat sans interface graphique : utilisé par l'application et par les tests (tests/)
-QT += network
+QT += network gui # gui : QImage (attachment)
 CONFIG += c++17
 INCLUDEPATH += $$PWD
 DEPENDPATH += $$PWD
 
 SOURCES += \
+    $$PWD/attachment.cpp \
     $$PWD/connectionpolicy.cpp \
     $$PWD/crypto.cpp \
     $$PWD/groupstore.cpp \
@@ -15,6 +16,7 @@ SOURCES += \
     $$PWD/protocol.cpp
 
 HEADERS += \
+    $$PWD/attachment.h \
     $$PWD/connectionpolicy.h \
     $$PWD/crypto.h \
     $$PWD/groupstore.h \

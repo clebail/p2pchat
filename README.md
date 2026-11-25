@@ -48,6 +48,12 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 ### Interface
 
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
+- **Images** : bouton 🖼 à gauche de la zone de saisie, glisser-déposer d'un fichier ou d'une image n'importe où
+  sur la fenêtre, ou collage (Ctrl+V) d'une capture d'écran. Un aperçu apparaît au-dessus de la zone de saisie
+  (✕ pour retirer) ; on peut ajouter une légende avant d'envoyer. L'image est réduite (1600 px au plus) et
+  recompressée en JPEG de 150 Ko au plus, puis envoyée dans le message lui-même : chiffrée, signée par son auteur,
+  synchronisée et relayée comme le texte. Clic sur une image : affichage en grand, « Enregistrer… », « Copier ».
+  Les versions précédentes de P2P Chat affichent « 📷 Image (mettez à jour P2P Chat pour la voir) ».
 - Clic droit sur un message → copier, ou **répondre** : un bandeau « Réponse à … » apparaît au-dessus de la zone
   de saisie (✕ ou Échap pour annuler). La réponse affiche une citation du message d'origine ; un clic dessus y
   ramène. La citation porte sa propre signature de l'auteur : personne ne peut la changer ni en ajouter une
@@ -224,6 +230,7 @@ trousseau), l'historique et sa synchronisation, les règles de reconnexion, la p
 | `crypto.*` | X25519, Ed25519, HKDF, ChaCha20-Poly1305 (OpenSSL) |
 | `protocol.*` | Formats communs (adresse onion, base64), messages signés |
 | `invitation.*` | Encodage / décodage du code d'invitation |
+| `attachment.*` | Images jointes : chargement, réduction et compression, décodage sûr à la réception |
 | `mentions.*`, `mentioncompleter.*` | Détection des « @pseudo », autocomplétion dans la zone de saisie |
 | `groupstore.*` | État persistant : pseudo, identité, secret, membres, trousseau des clés |
 | `history.*` | Historique local, inventaire et lots de synchronisation |

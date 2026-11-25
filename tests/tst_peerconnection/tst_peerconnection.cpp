@@ -1,4 +1,5 @@
 #include "crypto.h"
+#include "attachment.h"
 #include "peerconnection.h"
 #include "protocol.h"
 
@@ -111,6 +112,15 @@ private slots:
         QTRY_COMPARE(received.count(), 2);
         QCOMPARE(received.at(0).at(0).toJsonObject().value("x").toString(), QString("bonjour"));
         QCOMPARE(received.at(1).at(0).toJsonObject().value("x").toString().size(), 200000);
+
+        // Message avec une image de taille maximale : doit tenir dans une trame
+        const QByteArray image = Crypto::randomBytes(Attachment::MaxBytes);
+        const QJsonObject withImage = Protocol::Message::create(a.seed, a.onion, a.nick, QString(4000, QChar(0x20AC)), // légende la plus lourde en UTF-8
+                                                                1, {QString(64, 'r'), image});
+        out->send(withImage);
+        QTRY_COMPARE(received.count(), 3);
+        QCOMPARE(Protocol::Message::verifiedImage(received.at(2).at(0).toJsonObject(), Ed25519::publicKey(a.seed)),
+                 image);
 
         QSignalSpy back(out, &PeerConnection::received);
         m_incoming->send({{"t", "reply"}});

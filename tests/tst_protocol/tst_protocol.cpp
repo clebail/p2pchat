@@ -95,7 +95,7 @@ private slots:
         const QByteArray seed = Ed25519::generateSeed();
         const QByteArray key = Ed25519::publicKey(seed);
         const QString onion = QString(56, 'b') + ".onion";
-        const QJsonObject m = Message::create(seed, onion, "Bob", "d'accord", 5, "id-cite");
+        const QJsonObject m = Message::create(seed, onion, "Bob", "d'accord", 5, {"id-cite", {}});
         QVERIFY(Message::verify(m, key));
         QCOMPARE(Message::verifiedReplyTo(m, key), QString("id-cite"));
         QVERIFY(Message::verifiedReplyTo(m, Ed25519::publicKey(Ed25519::generateSeed())).isEmpty());
@@ -120,7 +120,7 @@ private slots:
     {
         // Les versions précédentes vérifient "s" sur ces six parties, sans regarder "r" ni "sr"
         const QByteArray seed = Ed25519::generateSeed();
-        const QJsonObject m = Message::create(seed, "a", "n", "x", 42, "cite");
+        const QJsonObject m = Message::create(seed, "a", "n", "x", 42, {"cite", {}});
         const QByteArray legacy = Crypto::pack({"p2pchat-msg-v1", Message::id(m).toUtf8(), "a", "n", "x", "42"});
         QCOMPARE(Message::signingBytes(m), legacy);
         QVERIFY(Ed25519::verify(Ed25519::publicKey(seed), legacy, fromB64(m.value("s"))));
@@ -128,8 +128,37 @@ private slots:
         const QJsonObject plain{{"id", "i"}, {"a", "a"}, {"n", "n"}, {"x", "x"}, {"ts", 42.0}};
         QVERIFY(!Message::create(seed, "a", "n", "x", 1).contains("sr"));
         QVERIFY(Message::verifiedReplyTo(plain, Ed25519::publicKey(seed)).isEmpty());
-        QCOMPARE(Message::create(seed, "a", "n", "x", 1, QString(100, 'r')).value("r").toString().size(),
+        QCOMPARE(Message::create(seed, "a", "n", "x", 1, {QString(100, 'r'), {}}).value("r").toString().size(),
                  Message::MaxIdLength);
+    }
+
+    void imageIsSigned()
+    {
+        const QByteArray seed = Ed25519::generateSeed();
+        const QByteArray key = Ed25519::publicKey(seed);
+        const QString onion = QString(56, 'b') + ".onion";
+        const QByteArray image("\xff\xd8 faux jpeg", 12);
+        const QJsonObject m = Message::create(seed, onion, "Bob", QString(), 5, {QString(), image});
+        QVERIFY(Message::verify(m, key));
+        QCOMPARE(Message::verifiedImage(m, key), image);
+        // Sans légende : les versions précédentes voient un texte explicite, nous une légende vide
+        QCOMPARE(m.value("x").toString(), Message::ImagePlaceholder);
+        QCOMPARE(Message::caption(m, true), QString());
+        QCOMPARE(Message::caption(m, false), Message::ImagePlaceholder); // image refusée : on montre le texte
+        const QJsonObject captioned = Message::create(seed, onion, "Bob", "Regardez", 5, {QString(), image});
+        QCOMPARE(Message::caption(captioned, true), QString("Regardez"));
+
+        // Image remplacée, ou signature reprise d'un autre message : refusée
+        QJsonObject swapped = m;
+        swapped["img"] = toB64("autre image");
+        QVERIFY(Message::verify(swapped, key));
+        QVERIFY(Message::verifiedImage(swapped, key).isEmpty());
+        QJsonObject stolen = Message::create(seed, onion, "Bob", "x", 6);
+        stolen["img"] = m.value("img");
+        stolen["si"] = m.value("si");
+        QVERIFY(Message::verifiedImage(stolen, key).isEmpty());
+        QVERIFY(Message::verifiedImage(m, Ed25519::publicKey(Ed25519::generateSeed())).isEmpty());
+        QVERIFY(!Message::create(seed, onion, "Bob", "x", 6).contains("img"));
     }
 
     void extraFieldsAreNotSigned()

@@ -2,6 +2,7 @@
 
 #include "crypto.h"
 
+#include <QCryptographicHash>
 #include <QJsonValue>
 #include <QRegularExpression>
 
@@ -9,6 +10,8 @@ namespace {
 constexpr auto B64Options = QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals;
 const QByteArray MessageContext("p2pchat-msg-v1");
 const QByteArray ReplyContext("p2pchat-reply-v1");
+const QByteArray ImageContext("p2pchat-image-v1");
+constexpr int MaxImageB64 = 300 * 1024; // garde-fou avant décodage (l'image envoyée fait ≤ 150 Ko)
 } // namespace
 
 bool Protocol::isValidOnion(const QString &s)
@@ -46,20 +49,34 @@ QByteArray Protocol::Message::replySigningBytes(const QJsonObject &m)
                          QByteArray::number(timestamp(m)), m.value("r").toString().toUtf8()});
 }
 
+const QString Protocol::Message::ImagePlaceholder =
+    QStringLiteral("📷 Image (mettez à jour P2P Chat pour la voir)");
+
+QByteArray Protocol::Message::imageSigningBytes(const QJsonObject &m, const QByteArray &image)
+{
+    return Crypto::pack({ImageContext, m.value("id").toString().toUtf8(), m.value("a").toString().toUtf8(),
+                         QCryptographicHash::hash(image, QCryptographicHash::Sha256)});
+}
+
 QJsonObject Protocol::Message::create(const QByteArray &identitySeed, const QString &authorOnion,
                                       const QString &nick, const QString &text, qint64 timestampMs,
-                                      const QString &replyTo)
+                                      const Extras &extras)
 {
+    const QString shown = text.isEmpty() && !extras.image.isEmpty() ? ImagePlaceholder : text;
     QJsonObject m{{"t", "msg"},
                   {"id", QString::fromLatin1(Crypto::randomBytes(12).toHex())},
                   {"a", authorOnion},
                   {"n", nick},
-                  {"x", text},
+                  {"x", shown},
                   {"ts", double(timestampMs)}};
     m.insert("s", toB64(Ed25519::sign(identitySeed, signingBytes(m))));
-    if (!replyTo.isEmpty()) {
-        m.insert("r", replyTo.left(MaxIdLength));
+    if (!extras.replyTo.isEmpty()) {
+        m.insert("r", extras.replyTo.left(MaxIdLength));
         m.insert("sr", toB64(Ed25519::sign(identitySeed, replySigningBytes(m))));
+    }
+    if (!extras.image.isEmpty()) {
+        m.insert("img", toB64(extras.image));
+        m.insert("si", toB64(Ed25519::sign(identitySeed, imageSigningBytes(m, extras.image))));
     }
     return m;
 }
@@ -85,4 +102,19 @@ QString Protocol::Message::verifiedReplyTo(const QJsonObject &m, const QByteArra
     if (r.isEmpty() || r.size() > MaxIdLength || !m.contains("sr"))
         return {};
     return Ed25519::verify(authorKey, replySigningBytes(m), fromB64(m.value("sr"))) ? r : QString();
+}
+
+QByteArray Protocol::Message::verifiedImage(const QJsonObject &m, const QByteArray &authorKey)
+{
+    const QString encoded = m.value("img").toString();
+    if (encoded.isEmpty() || encoded.size() > MaxImageB64 || !m.contains("si"))
+        return {};
+    const QByteArray image = fromB64(encoded);
+    return Ed25519::verify(authorKey, imageSigningBytes(m, image), fromB64(m.value("si"))) ? image : QByteArray();
+}
+
+QString Protocol::Message::caption(const QJsonObject &m, bool hasImage)
+{
+    const QString x = m.value("x").toString();
+    return hasImage && x == ImagePlaceholder ? QString() : x;
 }

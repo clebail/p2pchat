@@ -25,6 +25,9 @@ class QTcpSocket;
 class QStackedWidget;
 class QSystemTrayIcon;
 class MentionCompleter;
+class QDragEnterEvent;
+class QDropEvent;
+class QMimeData;
 class Notifier;
 class QToolButton;
 class TerminalSession;
@@ -41,6 +44,10 @@ public:
 protected:
     void changeEvent(QEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
+    // Glisser-déposer d'une image n'importe où sur la fenêtre, et collage dans la zone de saisie
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     // Interface
@@ -58,6 +65,12 @@ private:
     // Réponse avec citation : bandeau au-dessus de la zone de saisie
     void startReply(const QString &id, const QString &author, const QString &text);
     void cancelReply();
+    // Image jointe au message en cours d'écriture (aperçu au-dessus de la zone de saisie)
+    void chooseImage();
+    bool attachFromMime(const QMimeData *mime); // false : rien d'utilisable
+    void attachImage(const QImage &image, const QString &error = {});
+    void cancelImage();
+    QString notificationBody(const QJsonObject &msg) const;
     void loadHistory();
     void clearConversation();
     void setupTray();
@@ -177,6 +190,10 @@ private:
     QWidget *m_replyBar = nullptr;
     QLabel *m_replyLabel = nullptr;
     QString m_replyTo; // identifiant du message cité par le message en cours d'écriture
+    QToolButton *m_attachButton = nullptr;
+    QWidget *m_imageBar = nullptr;
+    QLabel *m_imagePreview = nullptr, *m_imageInfo = nullptr;
+    QByteArray m_pendingImage; // JPEG prêt à partir avec le prochain message
     QToolButton *m_sendButton = nullptr;
     QLabel *m_title = nullptr, *m_subtitle = nullptr;
     QString m_historyPath;

@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 
+#include "attachment.h"
 #include "chatview.h"
 #include "crypto.h"
 #include "invitation.h"
@@ -17,6 +18,10 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QCloseEvent>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QKeyEvent>
+#include <QMimeData>
 #include <QComboBox>
 #include <QSystemTrayIcon>
 #include <QDesktopServices>
@@ -269,6 +274,9 @@ QLineEdit#composer:disabled { color: #9aa0a6; }
 QToolButton#sendButton { background: #0b57d0; border: none; border-radius: 24px; }
 QToolButton#sendButton:hover { background: #0842a0; }
 QToolButton#sendButton:disabled { background: #c4c7c5; }
+QToolButton#attachButton { border: none; border-radius: 24px; background: transparent; }
+QToolButton#attachButton:hover { background: #e9eef6; }
+QLabel#imagePreview { border-radius: 6px; }
 QMenu { background: #f0f4f9; border: 1px solid #e1e3e1; border-radius: 8px; padding: 6px 0; }
 QMenu::item { padding: 9px 28px 9px 20px; color: #1f1f1f; }
 QMenu::item:selected { background: #dde3ea; }
@@ -285,6 +293,31 @@ QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }
 QScrollBar::handle:vertical { background: #c4c7c5; border-radius: 4px; min-height: 30px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 )";
+
+// Icône « joindre une image » (cadre, montagne et soleil)
+QIcon imageIcon()
+{
+    QPixmap pm(48, 48);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QColor c("#444746");
+    p.setPen(QPen(c, 3.5));
+    p.setBrush(Qt::NoBrush);
+    p.drawRoundedRect(QRectF(7, 9, 34, 30), 5, 5);
+    p.setPen(Qt::NoPen);
+    p.setBrush(c);
+    p.drawEllipse(QPointF(31, 18), 3.5, 3.5);
+    QPainterPath m;
+    m.moveTo(11, 35);
+    m.lineTo(20, 23);
+    m.lineTo(26, 30);
+    m.lineTo(30, 26);
+    m.lineTo(37, 35);
+    m.closeSubpath();
+    p.drawPath(m);
+    return QIcon(pm);
+}
 
 // Icône « envoyer » (avion en papier Material) dessinée en blanc
 QIcon sendIcon()
@@ -470,6 +503,35 @@ void MainWindow::buildUi()
     m_replyBar->setVisible(false);
     layout->addWidget(m_replyBar);
 
+    // Aperçu de l'image jointe au message en cours d'écriture
+    m_imageBar = new QWidget(central);
+    auto *imageRowLayout = new QHBoxLayout(m_imageBar);
+    imageRowLayout->setContentsMargins(12, 6, 12, 0);
+    auto *imageBox = new QWidget(m_imageBar);
+    imageBox->setObjectName("replyBar"); // même aspect que le bandeau de réponse
+    imageBox->setAttribute(Qt::WA_StyledBackground);
+    auto *imageLayout = new QHBoxLayout(imageBox);
+    imageLayout->setContentsMargins(8, 6, 6, 6);
+    m_imagePreview = new QLabel(imageBox);
+    m_imagePreview->setObjectName("imagePreview");
+    m_imagePreview->setFixedSize(56, 56);
+    m_imagePreview->setAlignment(Qt::AlignCenter);
+    m_imageInfo = new QLabel(imageBox);
+    m_imageInfo->setObjectName("replyLabel");
+    auto *imageClose = new QToolButton(imageBox);
+    imageClose->setObjectName("replyClose");
+    imageClose->setText(QStringLiteral("✕"));
+    imageClose->setFixedSize(24, 24);
+    imageClose->setCursor(Qt::PointingHandCursor);
+    imageClose->setToolTip(tr("Retirer l'image"));
+    connect(imageClose, &QToolButton::clicked, this, &MainWindow::cancelImage);
+    imageLayout->addWidget(m_imagePreview);
+    imageLayout->addWidget(m_imageInfo, 1);
+    imageLayout->addWidget(imageClose, 0, Qt::AlignTop);
+    imageRowLayout->addWidget(imageBox);
+    m_imageBar->setVisible(false);
+    layout->addWidget(m_imageBar);
+
     // Zone de saisie
     auto *composerBar = new QWidget(central);
     composerBar->setObjectName("composerBar");
@@ -482,6 +544,15 @@ void MainWindow::buildUi()
     m_input->setMaxLength(4000);
     m_input->setPlaceholderText(tr("Message"));
     m_mentions = new MentionCompleter(m_input);
+    m_input->installEventFilter(this); // collage et dépôt d'images
+    m_attachButton = new QToolButton(composerBar);
+    m_attachButton->setObjectName("attachButton");
+    m_attachButton->setIcon(imageIcon());
+    m_attachButton->setIconSize(QSize(24, 24));
+    m_attachButton->setFixedSize(48, 48);
+    m_attachButton->setCursor(Qt::PointingHandCursor);
+    m_attachButton->setToolTip(tr("Joindre une image (ou la glisser dans la fenêtre, ou la coller)"));
+    connect(m_attachButton, &QToolButton::clicked, this, &MainWindow::chooseImage);
     m_sendButton = new QToolButton(composerBar);
     m_sendButton->setObjectName("sendButton");
     m_sendButton->setIcon(sendIcon());
@@ -489,8 +560,10 @@ void MainWindow::buildUi()
     m_sendButton->setFixedSize(48, 48);
     m_sendButton->setCursor(Qt::PointingHandCursor);
     m_sendButton->setToolTip(tr("Envoyer"));
+    row->addWidget(m_attachButton);
     row->addWidget(m_input, 1);
     row->addWidget(m_sendButton);
+    setAcceptDrops(true);
     layout->addWidget(composerBar);
     setCentralWidget(central);
 
@@ -560,7 +633,8 @@ void MainWindow::updateStatus()
         if (relayed.contains(m.onion) && m_attempts.contains(m.onion))
             state += tr(", connexion directe…");
         if (const PeerConnection *c = m_active.value(m.onion); c && c->peerVersion() < Protocol::Version)
-            state += tr(" — ancienne version de P2P Chat (ne voit pas les citations)");
+            state += c->peerVersion() < 5 ? tr(" — ancienne version de P2P Chat (ne voit ni les citations ni les images)")
+                                          : tr(" — ancienne version de P2P Chat (ne voit pas les images)");
         if (!m_active.contains(m.onion) && m_lastError.contains(m.onion))
             state += " — " + m_lastError.value(m.onion);
         if (!m_active.contains(m.onion) && !m_attempts.contains(m.onion)
@@ -575,6 +649,7 @@ void MainWindow::updateStatus()
     const bool canWrite = inGroup && !list.isEmpty() && !m_myOnion.isEmpty();
     m_input->setEnabled(canWrite);
     m_sendButton->setEnabled(canWrite);
+    m_attachButton->setEnabled(canWrite);
     m_input->setPlaceholderText(online ? tr("Message") : tr("Message (transmis à la prochaine connexion)"));
     if (canWrite && !m_input->hasFocus())
         m_input->setFocus();
@@ -584,7 +659,15 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
 {
     const qint64 ms = qint64(msg.value("ts").toDouble());
     const QDateTime ts = ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms) : QDateTime::currentDateTime();
-    const QString text = msg.value("x").toString();
+    // Image : seulement si elle est bien signée par l'auteur et décodable sans risque
+    QByteArray imageData;
+    QImage image;
+    if (trust == ChatEntry::Verified && msg.contains("img")) {
+        const QByteArray key = mine ? m_group.identityKey() : m_group.pinnedKey(msg.value("a").toString());
+        imageData = Protocol::Message::verifiedImage(msg, key);
+        image = Attachment::decode(imageData);
+    }
+    const QString text = Protocol::Message::caption(msg, !image.isNull());
     QList<QPair<int, int>> spans;
     const QList<Mentions::Span> found = Mentions::find(text, mentionNames());
     for (const Mentions::Span &m : found)
@@ -601,6 +684,10 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
     if (trust == ChatEntry::Verified) { // identifiants et citations : seulement pour les messages authentiques
         e.id = id;
         e.replyTo = replyTo(msg, mine);
+        if (!image.isNull()) {
+            e.image = Attachment::thumbnail(image);
+            e.imageData = imageData;
+        }
     }
     m_chat->addMessage(e);
     if (!id.isEmpty() && trust == ChatEntry::Verified) { // seuls les messages authentiques sont resynchronisés
@@ -707,6 +794,7 @@ void MainWindow::clearConversation()
         return;
     m_chat->clearAll();
     cancelReply();
+    cancelImage();
     QFile::remove(m_historyPath);
     m_store.clear();
     m_group.setClearedBefore(QDateTime::currentMSecsSinceEpoch());
@@ -1144,7 +1232,7 @@ void MainWindow::receiveSync(PeerConnection *from, const QJsonArray &messages)
             ++received;
             mentioned += (mentionsMe(m) || repliesToMe(m)) ? 1 : 0;
             lastTitle = notificationTitle(m);
-            lastText = m.value("x").toString();
+            lastText = notificationBody(m);
         }
     }
     // Relais aux autres membres connectés, qui ont pu manquer ces messages eux aussi
@@ -1264,7 +1352,7 @@ void MainWindow::onChatMessage(PeerConnection *c, const QJsonObject &o)
     // Relais : au cas où un membre ne serait pas encore relié directement à l'auteur
     broadcast(o, c);
 
-    notifyUnread(1, notificationTitle(o), o.value("x").toString());
+    notifyUnread(1, notificationTitle(o), notificationBody(o));
     if (isVisible() && !isActiveWindow())
         QApplication::alert(this);
 }
@@ -1354,15 +1442,133 @@ void MainWindow::sendCurrent()
     if (m_mentions->isPopupVisible())
         return; // Entrée choisit un pseudo dans la liste
     const QString text = m_input->text().trimmed();
-    if (text.isEmpty() || !m_group.inGroup() || m_group.members().isEmpty() || m_myOnion.isEmpty())
+    if ((text.isEmpty() && m_pendingImage.isEmpty()) || !m_group.inGroup() || m_group.members().isEmpty()
+        || m_myOnion.isEmpty())
         return; // sans personne en ligne, le message partira à la prochaine synchronisation
     const QJsonObject msg = Protocol::Message::create(m_group.identitySeed(), m_myOnion, m_group.nickname(), text,
-                                                      QDateTime::currentMSecsSinceEpoch(), m_replyTo);
+                                                      QDateTime::currentMSecsSinceEpoch(), {m_replyTo, m_pendingImage});
     m_seenIds.insert(Protocol::Message::id(msg));
     broadcast(msg);
     appendMessage(msg, true, ChatEntry::Verified);
     m_input->clear();
     cancelReply();
+    cancelImage();
+}
+
+// ---------------------------------------------------------------- Images
+
+void MainWindow::chooseImage()
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("Joindre une image"), dir, tr("Images (*.jpg *.jpeg *.png *.gif *.bmp *.webp *.heic *.tif *.tiff)"));
+    if (path.isEmpty())
+        return;
+    QString error;
+    const QImage image = Attachment::load(path, &error);
+    attachImage(image, error);
+}
+
+bool MainWindow::attachFromMime(const QMimeData *mime)
+{
+    if (!mime || !m_input->isEnabled())
+        return false;
+    // Fichier (gestionnaire de fichiers) : on relit le fichier pour garder la qualité et l'orientation
+    for (const QUrl &url : mime->urls()) {
+        if (url.isLocalFile() && Attachment::isImageFile(url.toLocalFile())) {
+            QString error;
+            const QImage image = Attachment::load(url.toLocalFile(), &error);
+            attachImage(image, error);
+            return true;
+        }
+    }
+    // Image copiée depuis un navigateur ou une capture d'écran
+    if (mime->hasImage()) {
+        attachImage(qvariant_cast<QImage>(mime->imageData()));
+        return true;
+    }
+    return false;
+}
+
+void MainWindow::attachImage(const QImage &image, const QString &error)
+{
+    const QByteArray jpeg = image.isNull() ? QByteArray() : Attachment::encode(image);
+    if (jpeg.isEmpty()) {
+        QMessageBox::warning(this, tr("Joindre une image"),
+                             tr("Impossible de joindre cette image%1.").arg(error.isEmpty() ? QString() : " : " + error));
+        return;
+    }
+    m_pendingImage = jpeg;
+    const QImage sent = QImage::fromData(jpeg);
+    m_imagePreview->setPixmap(QPixmap::fromImage(
+        sent.scaled(m_imagePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+    m_imageInfo->setText(tr("<b>Image</b> · %1 × %2 · %3 Ko<br><span style='color:#5f6368'>"
+                            "Ajoutez une légende si vous voulez, puis Entrée</span>")
+                             .arg(sent.width())
+                             .arg(sent.height())
+                             .arg((jpeg.size() + 1023) / 1024));
+    m_imageBar->setVisible(true);
+    m_input->setFocus();
+}
+
+void MainWindow::cancelImage()
+{
+    m_pendingImage.clear();
+    m_imagePreview->clear();
+    m_imageBar->setVisible(false);
+}
+
+QString MainWindow::notificationBody(const QJsonObject &msg) const
+{
+    if (!msg.contains("img"))
+        return msg.value("x").toString();
+    const QString caption = Protocol::Message::caption(msg, true);
+    return caption.isEmpty() ? tr("📷 Image") : tr("📷 %1").arg(caption);
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent *event)
+{
+    const QMimeData *mime = event->mimeData();
+    bool usable = mime->hasImage();
+    for (const QUrl &url : mime->urls())
+        usable = usable || (url.isLocalFile() && Attachment::isImageFile(url.toLocalFile()));
+    if (usable && m_input->isEnabled())
+        event->acceptProposedAction();
+}
+
+void MainWindow::dropEvent(QDropEvent *event)
+{
+    if (attachFromMime(event->mimeData()))
+        event->acceptProposedAction();
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_input) {
+        // La zone de saisie accepte les dépôts de texte : une image déposée dessus serait collée comme
+        // un chemin de fichier. On la traite comme un dépôt sur la fenêtre.
+        if (event->type() == QEvent::DragEnter) {
+            auto *drag = static_cast<QDragEnterEvent *>(event);
+            dragEnterEvent(drag);
+            if (drag->isAccepted())
+                return true;
+        } else if (event->type() == QEvent::Drop) {
+            auto *drop = static_cast<QDropEvent *>(event);
+            if (attachFromMime(drop->mimeData())) {
+                drop->acceptProposedAction();
+                return true;
+            }
+        } else if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->matches(QKeySequence::Paste)) {
+            const QMimeData *clip = QGuiApplication::clipboard()->mimeData();
+            const QList<QUrl> urls = clip ? clip->urls() : QList<QUrl>();
+            const bool hasImageFile = std::any_of(urls.cbegin(), urls.cend(), [](const QUrl &u) {
+                return u.isLocalFile() && Attachment::isImageFile(u.toLocalFile());
+            });
+            if (clip && (clip->hasImage() || hasImageFile) && attachFromMime(clip))
+                return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 // ---------------------------------------------------------------- Réglages
