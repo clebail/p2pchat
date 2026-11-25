@@ -60,6 +60,11 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
   tous (signé, le plus récent l'emporte) ; un autre membre peut en choisir un pour son poste seulement.
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
 - **Au survol d'un message**, une petite barre apparaît au coin de la bulle : réactions rapides et ↩ *Répondre*.
+- **Modifier ou supprimer un message** (clic droit → *Modifier*, *Supprimer*) : la modification est signée,
+  synchronisée avec les absents, et le message affiche « modifié » ; supprimé, il devient « Message supprimé »,
+  sans image ni fichier. Un administrateur peut aussi modifier ou supprimer les messages des autres (son nom
+  apparaît alors : « modifié par X », « Message supprimé par X »). Les versions antérieures à la 13 ne voient
+  pas ces changements, et rien ne garantit qu'un message supprimé disparaisse de tous les disques.
 - **Réactions** (👍 ❤️ 😂 😮 😢 🎉) : clic droit sur un message → *Réagir*, ou clic sur une pastille existante pour
   ajouter ou retirer la vôtre ; survoler une pastille montre qui a réagi. Chaque réaction est signée par son
   auteur, synchronisée et relayée comme les messages (pas envoyée aux versions précédentes, qui l'ignoreraient).
@@ -269,8 +274,9 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
   quelqu'un qui possède le code ne peut pas se faire passer pour un autre membre.
 - **Messages** : l'auteur signe chaque message (identifiant, adresse, pseudo, texte, heure). Un message
   modifié en route ou attribué à quelqu'un d'autre est rejeté.
-- **Exclusion et secret** (⋮ → *Membres…* : rôles, présence, *Exclure…*, *Renouveler le secret…*) : le
-  créateur du groupe en est l'administrateur. Les décisions (exclusions,
+- **Exclusion et secret** (⋮ → *Membres…* : rôles, présence, *Nommer administrateur*, *Exclure…*,
+  *Renouveler le secret…*) : le créateur du groupe en est le premier administrateur ; un administrateur peut en
+  nommer d'autres, retirer ce rôle ou s'en retirer, tant qu'il en reste un (sans changer le secret). Les décisions (exclusions,
   nouveau secret) forment une chaîne d'enregistrements signés par un administrateur, que tous les membres
   vérifient et se transmettent ; l'empreinte du premier identifie le groupe et figure dans les codes
   d'invitation. Exclure un membre renouvelle le secret : le nouveau ne voyage que par les connexions

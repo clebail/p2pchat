@@ -92,6 +92,38 @@ bool ChatModel::setReactions(const QString &id, const QList<ChatEntry::Reaction>
     return true;
 }
 
+bool ChatModel::applyEdit(const QString &id, const ChatEntry &updated)
+{
+    const int row = rowOf(id);
+    if (row < 0)
+        return false;
+    ChatEntry &e = m_entries[row];
+    e.text = updated.text;
+    e.markup = updated.markup;
+    e.links = updated.links;
+    e.mentions = updated.mentions;
+    e.mentionsMe = updated.mentionsMe;
+    e.edited = updated.edited;
+    e.deleted = updated.deleted;
+    e.editedBy = updated.editedBy;
+    if (e.deleted) { // plus d'image ni de fichier
+        e.image = QImage();
+        e.imageData.clear();
+        e.animated = false;
+        e.file = {};
+    }
+    emit dataChanged(index(row), index(row));
+    // Les réponses qui le citent reprennent le nouveau texte
+    for (int i = 0; i < m_entries.size(); ++i) {
+        ChatEntry &other = m_entries[i];
+        if (other.replyTo == id) {
+            resolveReply(other);
+            emit dataChanged(index(i), index(i));
+        }
+    }
+    return true;
+}
+
 void ChatModel::setAuthorVerified(const QString &onion, bool verified)
 {
     for (int i = 0; i < m_entries.size(); ++i) {

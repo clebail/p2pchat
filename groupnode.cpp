@@ -256,6 +256,11 @@ void GroupNode::loadHistory()
                 acceptReaction(row.msg, row.mine, false);
             continue;
         }
+        if (Edits::isEdit(row.msg)) {
+            if (Edits::verify(row.msg, authorKey(row.msg, row.mine)))
+                acceptEdit(row.msg, row.mine, false);
+            continue;
+        }
         const Trust trust = row.legacy ? Trust::Unsigned : verify(row.msg, row.mine);
         if (i >= firstShown) {
             addMessage(row.msg, row.mine, trust, false);
@@ -272,6 +277,7 @@ void GroupNode::clearHistory()
     QFile::remove(m_historyPath);
     m_store.clear();
     m_reactions.clear();
+    m_edits.clear();
     m_files->clear(); // fichiers reçus et envoyés : effacés avec la conversation
     m_fileInfos.clear();
     m_downloads.clear();
@@ -682,6 +688,8 @@ void GroupNode::sendBatches(PeerConnection *c, const QList<QJsonObject> &message
     QList<QJsonObject> toSend = messages;
     if (c->peerVersion() < Reactions::Version) // il ne saurait pas quoi en faire
         toSend.erase(std::remove_if(toSend.begin(), toSend.end(), &Reactions::isReaction), toSend.end());
+    if (c->peerVersion() < Edits::Version)
+        toSend.erase(std::remove_if(toSend.begin(), toSend.end(), &Edits::isEdit), toSend.end());
     for (const QJsonArray &batch : History::batches(toSend, cutoff))
         c->send({{"t", "sync"}, {"m", batch}});
 }
@@ -698,6 +706,11 @@ void GroupNode::receiveSync(PeerConnection *from, const QJsonArray &messages)
         const bool mine = !m_ownOnion.isEmpty() && m.value("a").toString() == m_ownOnion;
         if (Reactions::isReaction(m)) {
             if (verifyReaction(m, mine) && acceptReaction(m, mine, true))
+                accepted.append(m);
+            continue;
+        }
+        if (Edits::isEdit(m)) {
+            if (Edits::verify(m, authorKey(m, mine)) && acceptEdit(m, mine, true))
                 accepted.append(m);
             continue;
         }
@@ -741,6 +754,12 @@ void GroupNode::onReceived(PeerConnection *c, const QJsonObject &o)
             return;
         acceptReaction(o, false, true);
         broadcastReaction(o, c); // relais, comme les messages
+    } else if (type == "edit") {
+        const QString id = Protocol::Message::id(o);
+        if (id.isEmpty() || m_store.contains(id) || !Edits::verify(o, authorKey(o, false)))
+            return;
+        acceptEdit(o, false, true);
+        broadcastEdit(o, c); // relais, comme les messages
     } else if (type == "gov") {
         onGovernance(c, o);
     } else if (type == "gov-secret") {
@@ -893,6 +912,79 @@ void GroupNode::broadcastReaction(const QJsonObject &r, PeerConnection *except)
 {
     for (PeerConnection *p : std::as_const(m_active))
         if (p != except && p->peerVersion() >= Reactions::Version)
+            p->send(r);
+}
+
+// ---------------------------------------------------------------- Modifications et suppressions
+
+bool GroupNode::canEdit(const QString &id) const
+{
+    const QJsonObject stored = m_store.value(id);
+    if (id.isEmpty() || stored.isEmpty() || Reactions::isReaction(stored) || Edits::isEdit(stored)
+        || (!stored.value("mine").toBool() && !isAdmin()))
+        return false;
+    const auto latest = latestEdit(stored);
+    return !latest || !latest->deleted;
+}
+
+bool GroupNode::editMessage(const QString &id, const QString &text)
+{
+    const QString trimmed = text.trimmed();
+    if (m_ownOnion.isEmpty() || !m_group.inGroup() || !canEdit(id) || trimmed.isEmpty()
+        || trimmed.size() > Edits::MaxTextLength)
+        return false;
+    const QJsonObject r = Edits::create(m_group.identitySeed(), m_ownOnion, id, trimmed, false, now());
+    acceptEdit(r, true, true);
+    broadcastEdit(r);
+    return true;
+}
+
+bool GroupNode::deleteMessage(const QString &id)
+{
+    if (m_ownOnion.isEmpty() || !m_group.inGroup() || !canEdit(id))
+        return false;
+    const QJsonObject r = Edits::create(m_group.identitySeed(), m_ownOnion, id, {}, true, now());
+    acceptEdit(r, true, true);
+    broadcastEdit(r);
+    return true;
+}
+
+std::optional<Edits::Latest> GroupNode::latestEdit(const QJsonObject &msg) const
+{
+    // Seules comptent les modifications de l'auteur du message et des administrateurs (signatures vérifiées)
+    return m_edits.latest(Protocol::Message::id(msg), editors(msg));
+}
+
+QStringList GroupNode::editors(const QJsonObject &msg) const
+{
+    // Administrateur à un moment de la chaîne : une modération reste valable s'il est retiré ensuite, et
+    // tous les membres en jugent de la même façon
+    QStringList out{msg.value("a").toString()};
+    for (const Governance::Record &r : m_chain)
+        for (const QString &a : r.admins)
+            if (!out.contains(a))
+                out << a;
+    return out;
+}
+
+bool GroupNode::acceptEdit(const QJsonObject &r, bool mine, bool save)
+{
+    const QString id = Protocol::Message::id(r);
+    if (id.isEmpty() || m_store.contains(id))
+        return false;
+    m_store.insert(id, History::stored(r, mine)); // synchronisée comme les messages
+    m_seenIds.insert(id);
+    if (m_edits.apply(r))
+        emit messageEdited(Edits::target(r));
+    if (save)
+        appendToHistoryFile(r, mine);
+    return true;
+}
+
+void GroupNode::broadcastEdit(const QJsonObject &r, PeerConnection *except)
+{
+    for (PeerConnection *p : std::as_const(m_active))
+        if (p != except && p->peerVersion() >= Edits::Version)
             p->send(r);
 }
 
@@ -1359,15 +1451,38 @@ bool GroupNode::exclude(const QString &onion, QString *error)
     QStringList excluded = excludedMembers();
     if (!excluded.contains(onion))
         excluded << onion;
-    return newRecord(excluded, error);
+    return newRecord(excluded, {}, true, error);
 }
 
 bool GroupNode::renewSecret(QString *error)
 {
-    return newRecord(excludedMembers(), error);
+    return newRecord(excludedMembers(), {}, true, error);
 }
 
-bool GroupNode::newRecord(const QStringList &excluded, QString *error)
+bool GroupNode::setAdmin(const QString &onion, bool admin, QString *error)
+{
+    auto fail = [error](const QString &why) {
+        if (error)
+            *error = why;
+        return false;
+    };
+    if (!Protocol::isValidOnion(onion) || (onion != m_ownOnion && !m_group.isMember(onion)))
+        return fail(tr("membre inconnu"));
+    if (m_chain.isEmpty() && !admin)
+        return fail(tr("ce groupe n'a pas encore d'administrateur"));
+    QStringList admins = m_chain.isEmpty() ? QStringList{m_ownOnion} : head()->admins;
+    if (admin == admins.contains(onion))
+        return fail(admin ? tr("déjà administrateur") : tr("pas administrateur"));
+    if (admin)
+        admins << onion;
+    else
+        admins.removeAll(onion);
+    if (admins.isEmpty())
+        return fail(tr("il faut au moins un administrateur"));
+    return newRecord(excludedMembers(), admins, false, error);
+}
+
+bool GroupNode::newRecord(const QStringList &excluded, QStringList admins, bool renew, QString *error)
 {
     if (!canGovern()) {
         if (error)
@@ -1382,22 +1497,26 @@ bool GroupNode::newRecord(const QStringList &excluded, QString *error)
         m_group.appendGovernanceRecord(g);
     }
     const Governance::Record previous = m_chain.last();
-    const QByteArray secret = Crypto::randomBytes(16);
-    QStringList admins = previous.admins;
+    const QByteArray secret = renew ? Crypto::randomBytes(16) : m_group.secret();
+    if (admins.isEmpty())
+        admins = previous.admins;
     for (const QString &e : excluded)
         admins.removeAll(e);
     const QJsonObject r =
         Governance::create(m_group.identitySeed(), m_ownOnion, &previous, admins, excluded, secret, now());
     m_chain << *Governance::parse(r);
     m_group.appendGovernanceRecord(r);
-    // L'ancien secret reste accepté un moment : les absents reviendront avec, et recevront le nouveau
-    m_group.retireSecret(m_group.secret(), now() + Governance::SecretGraceMs);
-    m_group.setSecret(secret);
+    if (renew) {
+        // L'ancien secret reste accepté un moment : les absents reviendront avec, et recevront le nouveau
+        m_group.retireSecret(m_group.secret(), now() + Governance::SecretGraceMs);
+        m_group.setSecret(secret);
+    }
     applyRecord(previous, m_chain.last());
     for (PeerConnection *p : m_active.values())
         if (p->peerVersion() >= Governance::Version)
             sendGovernance(p);
-    emit secretRenewed(m_group.nickname());
+    if (renew)
+        emit secretRenewed(m_group.nickname());
     emit stateChanged();
     return true;
 }
@@ -1477,6 +1596,14 @@ void GroupNode::applyRecord(const Governance::Record &previous, const Governance
             c->close();
         emit memberExcluded(onion, nick, by);
     }
+    // Administrateurs nommés ou retirés (un exclu perd son rôle sans que ce soit annoncé à part)
+    auto nickOf = [this](const QString &onion) { return onion == m_ownOnion ? m_group.nickname() : m_group.nickOf(onion); };
+    for (const QString &onion : record.admins)
+        if (!previous.isAdmin(onion))
+            emit adminChanged(onion, nickOf(onion), true, by);
+    for (const QString &onion : previous.admins)
+        if (!record.isAdmin(onion) && !record.isExcluded(onion))
+            emit adminChanged(onion, nickOf(onion), false, by);
 }
 
 void GroupNode::onGovernance(PeerConnection *c, const QJsonObject &o)
@@ -1485,6 +1612,9 @@ void GroupNode::onGovernance(PeerConnection *c, const QJsonObject &o)
         return;
     if (!m_group.inGroup())
         return; // exclus
+    // Nouveaux administrateurs : leurs modérations reçues avant cet enregistrement comptent désormais
+    for (const QString &target : m_edits.targets())
+        emit messageEdited(target);
     // Transmis aux autres membres connectés (ceux qui ne sont reliés qu'à nous l'apprennent ainsi)
     for (PeerConnection *p : m_active.values())
         if (p != c && p->peerVersion() >= Governance::Version)

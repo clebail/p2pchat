@@ -160,7 +160,7 @@ ChatDelegate::Geometry ChatDelegate::compute(const QModelIndex &index, int width
     g.bubbleH = y;
     g.nameH = (!e.mine && g.first) ? small.height() + 4 : 0;
     g.reactH = e.reactions.isEmpty() ? 0 : ReactGap + reactionPillHeight();
-    g.timeH = (g.last || e.trust != ChatEntry::Verified) ? small.height() + 4 : 0;
+    g.timeH = (g.last || e.trust != ChatEntry::Verified || e.edited) ? small.height() + 4 : 0;
     g.height = g.top + g.nameH + g.bubbleH + g.reactH + g.timeH;
     return g;
 }
@@ -487,6 +487,8 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
             label += QObject::tr(" · ⚠ signature invalide");
         } else {
             p->setPen(Muted);
+            if (e.edited)
+                label += e.editedBy.isEmpty() ? QObject::tr(" · modifié") : QObject::tr(" · modifié par %1").arg(e.editedBy);
         }
         const QRect tr(int(bubble.left()) + 6, int(bubble.bottom()) + g.reactH + 3, g.bubbleW - 12, g.timeH);
         p->drawText(e.mine ? tr.adjusted(-300, 0, 0, 0) : tr.adjusted(0, 0, 300, 0),

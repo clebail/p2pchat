@@ -210,6 +210,8 @@ Conversation *MainWindow::openConversation(const QString &id)
                 askDirectInvitation(c, nick, inv, name);
             });
     connect(c, &Conversation::replyRequested, this, &MainWindow::startReply);
+    connect(c, &Conversation::editRequested, this, &MainWindow::startEdit);
+    connect(c, &Conversation::deleteRequested, this, &MainWindow::confirmDelete);
     connect(c, &Conversation::linkClicked, this, &MainWindow::openLink);
     connect(c, &Conversation::openFileRequested, this, &MainWindow::openFile);
     connect(c, &Conversation::saveFileRequested, this, &MainWindow::saveFileAs);
@@ -267,8 +269,8 @@ void MainWindow::showConversation(Conversation *c)
         return;
     const bool changed = m_shown != c;
     if (m_shown && changed) {
+        cancelReply(); // d'abord : une modification en cours n'est pas un brouillon
         m_shown->draft = m_input->text();
-        cancelReply();
         cancelImage();
         closeSearch();
     }
@@ -847,6 +849,8 @@ void MainWindow::updateStatus()
 
 void MainWindow::startReply(const QString &id, const QString &author, const QString &text)
 {
+    if (!m_editId.isEmpty())
+        cancelReply(); // on ne répond pas en modifiant
     const bool mine = m_node->isMine(id);
     m_replyTo = id;
     m_replyLabel->setText(tr("Réponse à <b>%1</b><br><span style='color:#5f6368'>%2</span>")
@@ -856,8 +860,46 @@ void MainWindow::startReply(const QString &id, const QString &author, const QStr
     m_input->setFocus();
 }
 
+void MainWindow::startEdit(const QString &id, const QString &text)
+{
+    cancelReply();
+    cancelImage();
+    m_editId = id;
+    const QJsonObject msg = m_node->storedMessage(id);
+    const QString whose = msg.value("mine").toBool()
+                              ? tr("Modification de votre message")
+                              : tr("Modification du message de %1 (modération)").arg(memberNick(msg.value("a").toString()));
+    m_replyLabel->setText(tr("<b>%1</b><br><span style='color:#5f6368'>Entrée : enregistrer · Échap : annuler</span>")
+                              .arg(whose.toHtmlEscaped()));
+    m_replyBar->setVisible(true);
+    m_input->setText(text);
+    m_input->setFocus();
+}
+
+void MainWindow::confirmDelete(const QString &id)
+{
+    const QJsonObject msg = m_node->storedMessage(id);
+    const QString question = msg.value("mine").toBool()
+                                 ? tr("Supprimer ce message pour tout le monde ?")
+                                 : tr("Supprimer le message de %1 pour tout le monde (modération) ? Votre nom "
+                                      "apparaîtra à sa place.").arg(memberNick(msg.value("a").toString()));
+    if (QMessageBox::question(this, tr("Supprimer le message"),
+                              question + tr("\n\n"
+                                 "Il est remplacé par « Message supprimé » chez les membres à jour. Ceux qui "
+                                 "utilisent une version précédente de P2P Chat le voient encore, et rien ne "
+                                 "garantit qu'il disparaisse de leur disque."))
+        != QMessageBox::Yes)
+        return;
+    if (!m_node->deleteMessage(id))
+        QMessageBox::warning(this, tr("Supprimer le message"), tr("Impossible de supprimer ce message pour l'instant."));
+}
+
 void MainWindow::cancelReply()
 {
+    if (!m_editId.isEmpty()) {
+        m_editId.clear();
+        m_input->clear(); // le texte était celui du message modifié
+    }
     m_replyTo.clear();
     m_replyBar->setVisible(false);
 }
@@ -1147,6 +1189,14 @@ void MainWindow::sendCurrent()
     if (m_mentions->isPopupVisible())
         return; // Entrée choisit un pseudo dans la liste
     const QString text = m_input->text().trimmed();
+    if (!m_editId.isEmpty()) { // modification d'un message
+        if (text.isEmpty() || !m_node->editMessage(m_editId, text))
+            return;
+        m_editId.clear();
+        m_input->clear();
+        cancelReply();
+        return;
+    }
     // Sans personne en ligne, le message partira à la prochaine synchronisation
     if (!m_pendingFile.isEmpty()) {
         QString error;

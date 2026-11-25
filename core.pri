@@ -1,6 +1,9 @@
 # Cœur de P2P Chat sans interface graphique : utilisé par l'application et par les tests (tests/)
 QT += network gui # gui : QImage (attachment)
 CONFIG += c++17
+# Sources en UTF-8 : sans cette option, MSVC les lit en Windows-1252 et abîme les littéraux larges
+# (QStringLiteral, u"…") qui contiennent des accents ou des émojis
+win32-msvc*: QMAKE_CXXFLAGS += /utf-8
 INCLUDEPATH += $$PWD
 DEPENDPATH += $$PWD
 
@@ -9,6 +12,7 @@ SOURCES += \
     $$PWD/connectionpolicy.cpp \
     $$PWD/conversations.cpp \
     $$PWD/crypto.cpp \
+    $$PWD/edits.cpp \
     $$PWD/filestore.cpp \
     $$PWD/governance.cpp \
     $$PWD/groupnode.cpp \
@@ -31,6 +35,7 @@ HEADERS += \
     $$PWD/connectionpolicy.h \
     $$PWD/conversations.h \
     $$PWD/crypto.h \
+    $$PWD/edits.h \
     $$PWD/filestore.h \
     $$PWD/governance.h \
     $$PWD/groupnode.h \

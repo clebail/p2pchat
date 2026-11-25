@@ -1,5 +1,6 @@
 #include "crypto.h"
 #include "groupnode.h"
+#include "edits.h"
 #include "governance.h"
 #include "invitation.h"
 #include "switchboard.h"
@@ -113,6 +114,10 @@ private:
                 [pp](const QString &by) { pp->system << "nous exclus par " + by; });
         connect(p.node.get(), &GroupNode::secretRenewed, this,
                 [pp](const QString &by) { pp->system << "secret renouvelé par " + by; });
+        connect(p.node.get(), &GroupNode::adminChanged, this,
+                [pp](const QString &, const QString &nick, bool admin, const QString &by) {
+                    pp->system << (admin ? "admin " : "plus admin ") + nick + " par " + by;
+                });
         connect(p.node.get(), &GroupNode::sharedNameChanged, this,
                 [pp](const QString &name, const QString &by) { pp->system << "nom " + name + " par " + by; });
         connect(p.node.get(), &GroupNode::memberLeft, this,
@@ -774,6 +779,128 @@ private slots:
     }
 
     // ---------------------------------------------------------------- Plusieurs conversations
+
+    void messagesAreEditedAndDeleted()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        const QJsonObject msg = a.node->sendMessage("Rendez-vous à 18 h");
+        const QString id = Protocol::Message::id(msg);
+        QTRY_COMPARE(countId(b.added, id), 1);
+        QVERIFY(a.node->canEdit(id));
+        QVERIFY(!b.node->canEdit(id)); // pas le sien
+        QVERIFY(!b.node->editMessage(id, "Piraté"));
+
+        QVERIFY(a.node->editMessage(id, "Rendez-vous à 19 h"));
+        QTRY_VERIFY(b.node->latestEdit(b.node->storedMessage(id)).has_value());
+        QCOMPARE(b.node->latestEdit(b.node->storedMessage(id))->text, QString("Rendez-vous à 19 h"));
+        QTRY_VERIFY(c.node->latestEdit(c.node->storedMessage(id)).has_value());
+
+        // Une « modification » signée par B ne compte pas : seule celle de l'auteur du message
+        b.node->sendTo(c.onion, Edits::create(b.store->identitySeed(), b.onion, id, "Faux", false,
+                                              QDateTime::currentMSecsSinceEpoch() + 1000));
+        QTest::qWait(150);
+        QCOMPARE(c.node->latestEdit(c.node->storedMessage(id))->text, QString("Rendez-vous à 19 h"));
+
+        // Suppression, définitive ; C, absent, la reçoit à son retour
+        c.node->setOffline();
+        QTRY_VERIFY(!a.node->isConnected(c.onion));
+        QVERIFY(a.node->deleteMessage(id));
+        QVERIFY(!a.node->canEdit(id));
+        QVERIFY(!a.node->editMessage(id, "Revenu"));
+        QTRY_VERIFY(b.node->latestEdit(b.node->storedMessage(id))->deleted);
+        c.node->setOnline(c.onion);
+        QTRY_VERIFY(c.node->latestEdit(c.node->storedMessage(id))->deleted);
+
+        // Conservé dans l'historique : après redémarrage, toujours supprimé
+        start(c, 'c');
+        c.node->loadHistory();
+        QVERIFY(c.node->latestEdit(c.node->storedMessage(id))->deleted);
+    }
+
+    void adminsModerateMessages()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        QTRY_COMPARE(c.node->groupId(), a.node->groupId());
+        const QString fromB = Protocol::Message::id(b.node->sendMessage("Message de B"));
+        const QString fromA = Protocol::Message::id(a.node->sendMessage("Message de A"));
+        QTRY_COMPARE(countId(c.added, fromB), 1);
+        QTRY_COMPARE(countId(c.added, fromA), 1);
+        QTRY_COMPARE(countId(a.added, fromB), 1);
+
+        // A, administrateur, modère le message de B ; C, simple membre, ne peut pas toucher à celui de A
+        QVERIFY(a.node->canEdit(fromB));
+        QVERIFY(!c.node->canEdit(fromA));
+        QVERIFY(a.node->deleteMessage(fromB));
+        QTRY_VERIFY(c.node->latestEdit(c.node->storedMessage(fromB)).has_value());
+        const auto l = c.node->latestEdit(c.node->storedMessage(fromB));
+        QVERIFY(l->deleted);
+        QCOMPARE(l->author, a.onion);
+        QTRY_VERIFY(b.node->latestEdit(b.node->storedMessage(fromB)).has_value()); // chez l'auteur aussi
+
+        // Une « modération » signée par C (pas administrateur) ne compte pas
+        c.node->sendTo(b.onion, Edits::create(c.store->identitySeed(), c.onion, fromA, {}, true,
+                                              QDateTime::currentMSecsSinceEpoch()));
+        QTest::qWait(150);
+        QVERIFY(!b.node->latestEdit(b.node->storedMessage(fromA)).has_value());
+        // … jusqu'à ce que C soit nommé : ses modérations reçues avant comptent alors
+        QVERIFY(a.node->setAdmin(c.onion, true));
+        QTRY_VERIFY(b.node->latestEdit(b.node->storedMessage(fromA)).has_value());
+    }
+
+    void previousVersionGetsNoEdits()
+    {
+        Peer &a = peer('a'), &b = peer('b');
+        b.node->setAdvertisedVersion(12);
+        a.node->createGroup();
+        a.node->setOnline(a.onion);
+        b.node->join(invitation(a));
+        b.node->setOnline(b.onion);
+        QTRY_VERIFY(linked(a, b));
+        const QString id = Protocol::Message::id(a.node->sendMessage("Bonjour"));
+        QTRY_COMPARE(countId(b.added, id), 1);
+        QVERIFY(a.node->editMessage(id, "Bonjour à tous"));
+        QTest::qWait(200);
+        QVERIFY(!b.node->latestEdit(b.node->storedMessage(id)).has_value()); // il ne saurait pas l'afficher
+    }
+
+    void adminsAreNamedAndRemoved()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        QTRY_COMPARE(c.node->groupId(), a.node->groupId());
+        QString error;
+        QVERIFY(!b.node->setAdmin(c.onion, true, &error)); // pas administrateur
+        QVERIFY(!a.node->setAdmin(a.onion, false, &error)); // le dernier
+        QVERIFY(error.contains("au moins un"));
+        QVERIFY(!a.node->setAdmin(QString(56, 'z') + ".onion", true, &error)); // inconnu
+
+        // A nomme B : sans nouveau secret
+        const QByteArray secret = a.store->secret();
+        QVERIFY(a.node->setAdmin(b.onion, true));
+        QTRY_VERIFY(c.node->isAdmin(b.onion));
+        QTRY_VERIFY(b.node->canGovern());
+        QCOMPARE(a.store->secret(), secret);
+        QCOMPARE(c.store->secret(), secret);
+        QVERIFY(c.system.contains("admin " + b.nick + " par " + a.nick));
+        QVERIFY(!c.system.contains("secret renouvelé par " + a.nick));
+
+        // B retire A, qui ne peut plus rien ; B, seul administrateur, ne peut pas partir
+        QVERIFY(b.node->setAdmin(a.onion, false));
+        QTRY_VERIFY(!a.node->isAdmin());
+        QVERIFY(!a.node->canGovern());
+        QVERIFY(!a.node->setAdmin(c.onion, true, &error));
+        QTRY_VERIFY(c.system.contains("plus admin " + a.nick + " par " + b.nick));
+        QVERIFY(!b.node->setAdmin(b.onion, false, &error));
+
+        // Un administrateur exclu perd son rôle
+        QVERIFY(b.node->setAdmin(c.onion, true));
+        QTRY_VERIFY(a.node->isAdmin(c.onion));
+        QVERIFY(b.node->exclude(c.onion));
+        QTRY_VERIFY(!a.node->isAdmin(c.onion));
+        QCOMPARE(a.node->admins(), QStringList{b.onion});
+    }
 
     void sharedNameFromAdmin()
     {

@@ -23,6 +23,12 @@ public:
                     ChatEntry::Trust trust = ChatEntry::Verified, const QList<QPair<int, int>> &mentions = {},
                     bool mentionsMe = false);
     void addMessage(ChatEntry e); // kind = Message
+    // Message modifié ou supprimé par son auteur (mentions : comme pour addMessage)
+    // editedBy : administrateur qui l'a modifié (vide : son auteur)
+    void applyEdit(const QString &id, const QString &text, bool deleted, const QList<QPair<int, int>> &mentions,
+                   bool mentionsMe, const QString &editedBy = {});
+    // Administrateur : « Modifier » et « Supprimer » aussi sur les messages des autres
+    void setModerator(bool moderator) { m_moderator = moderator; }
     void addSystem(const QString &text);
     // « X est en ligne » / « X s'est déconnecté(e) » : fusionné avec la ligne de présence
     // précédente tant qu'aucun autre message ne s'est intercalé (même jour)
@@ -85,6 +91,9 @@ signals:
     void fileRequested(const QString &fileId, ChatView::FileAction action);
     // Clic sur une pastille de réaction, ou « Réagir » dans le menu contextuel : ajoute ou retire la nôtre
     void reactionToggled(const QString &id, const QString &emoji);
+    // Menu contextuel sur l'un de nos messages
+    void editRequested(const QString &id, const QString &text);
+    void deleteRequested(const QString &id);
     void searchResultChanged(int current, int total); // current : 1 = plus récent ; 0 si aucun résultat
 
 protected:
@@ -120,4 +129,5 @@ private:
     mutable QHash<QString, Animation> m_animations;
     QTimer *m_animationPrune;
     int m_newBelow = 0;
+    bool m_moderator = false;
 };

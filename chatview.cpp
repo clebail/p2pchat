@@ -211,7 +211,8 @@ void ChatView::showHoverBar(const QModelIndex &index)
     // Seulement pour les messages authentiques (les seuls auxquels on peut répondre ou réagir)
     const bool usable = index.isValid() && m_model->entry(index.row()).kind == ChatEntry::Message
                         && !m_model->entry(index.row()).id.isEmpty()
-                        && m_model->entry(index.row()).trust == ChatEntry::Verified;
+                        && m_model->entry(index.row()).trust == ChatEntry::Verified
+                        && !m_model->entry(index.row()).deleted; // supprimé : ni réponse ni réaction
     if (!usable) {
         hideHoverBarSoon();
         return;
@@ -324,6 +325,22 @@ void ChatView::addMessage(const QString &author, const QString &text, const QDat
     e.mentions = mentions;
     e.mentionsMe = mentionsMe;
     addMessage(e);
+}
+
+void ChatView::applyEdit(const QString &id, const QString &text, bool deleted,
+                         const QList<QPair<int, int>> &mentions, bool mentionsMe, const QString &editedBy)
+{
+    ChatEntry e;
+    e.text = text;
+    e.markup = Markup::parse(text);
+    e.links = deleted ? QList<Links::Span>() : Links::find(text);
+    e.mentions = deleted ? QList<QPair<int, int>>() : mentions;
+    e.mentionsMe = mentionsMe && !deleted;
+    e.edited = !deleted;
+    e.deleted = deleted;
+    e.editedBy = editedBy;
+    if (m_model->applyEdit(id, e))
+        viewport()->update();
 }
 
 void ChatView::addMessage(ChatEntry e)
@@ -506,7 +523,7 @@ void ChatView::contextMenuEvent(QContextMenuEvent *event)
     QMenu menu(this);
     const ChatEntry &e = m_model->entry(idx.row());
     // Seuls les messages authentiques ont un identifiant reconnu par les autres membres
-    if (e.kind == ChatEntry::Message && !e.id.isEmpty() && e.trust == ChatEntry::Verified) {
+    if (e.kind == ChatEntry::Message && !e.id.isEmpty() && e.trust == ChatEntry::Verified && !e.deleted) {
         const QString id = e.id, author = e.author;
         const QString text = quotedText(e);
         menu.addAction(tr("Répondre"), this, [this, id, author, text] { emit replyRequested(id, author, text); });
@@ -518,6 +535,13 @@ void ChatView::contextMenuEvent(QContextMenuEvent *event)
             a->setFont(emojiFont(react->font(), 1.25 * EmojiBoost)); // libellé : l'émoji seul
             a->setCheckable(true);
             a->setChecked(mine); // cochée : la nôtre, la choisir la retire
+        }
+        if (e.mine || m_moderator) { // les siens, ou tous pour un administrateur (modération)
+            menu.addSeparator();
+            const QString current = e.text;
+            menu.addAction(tr("Modifier"), this, [this, id, current] { emit editRequested(id, current); });
+            menu.addAction(tr("Supprimer"), this, [this, id] { emit deleteRequested(id); });
+            menu.addSeparator();
         }
     }
     const int row = idx.row();

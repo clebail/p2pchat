@@ -48,6 +48,7 @@ Conversation::~Conversation()
 
 void Conversation::loadHistory()
 {
+    m_view->setModerator(m_node->isAdmin());
     m_node->loadHistory();
     m_view->scrollToBottom();
     rememberName();
@@ -113,6 +114,12 @@ void Conversation::connectNode()
         emit excludedFromGroup(by);
         emit changed();
     });
+    connect(n, &GroupNode::adminChanged, this,
+            [this](const QString &, const QString &nick, bool admin, const QString &by) {
+                appendSystem(admin ? tr("%1 est maintenant administrateur (nommé par %2).").arg(nick, by)
+                         : nick == by ? tr("%1 n'est plus administrateur.").arg(nick)
+                                      : tr("%1 n'est plus administrateur (décision de %2).").arg(nick, by));
+            });
     connect(n, &GroupNode::sharedNameChanged, this, [this](const QString &name, const QString &by) {
         appendSystem(name.isEmpty() ? tr("%1 a retiré le nom de la conversation.").arg(by)
                                     : tr("%1 a nommé la conversation « %2 ».").arg(by, name));
@@ -122,11 +129,13 @@ void Conversation::connectNode()
                 emit directInvitation(nick, inv, name);
             });
     connect(n, &GroupNode::stateChanged, this, [this] {
+        m_view->setModerator(m_node->isAdmin());
         rememberName();
         emit changed();
     });
     connect(n, &GroupNode::typingChanged, this, &Conversation::changed);
     connect(n, &GroupNode::fileChanged, this, &Conversation::updateFileEntry);
+    connect(n, &GroupNode::messageEdited, this, &Conversation::onMessageEdited);
 }
 
 void Conversation::connectView()
@@ -148,6 +157,8 @@ void Conversation::connectView()
         }
     });
     connect(m_view, &ChatView::replyRequested, this, &Conversation::replyRequested);
+    connect(m_view, &ChatView::editRequested, this, &Conversation::editRequested);
+    connect(m_view, &ChatView::deleteRequested, this, &Conversation::deleteRequested);
     connect(m_view, &ChatView::linkClicked, this, &Conversation::linkClicked);
     connect(m_view, &ChatView::reactionToggled, this,
             [this](const QString &id, const QString &emoji) { m_node->react(id, emoji); });
@@ -319,6 +330,9 @@ void Conversation::appendMessage(const QJsonObject &msg, bool mine, GroupNode::T
     e.reactions = reactionSummary(e.id); // réactions arrivées avant le message (synchronisation)
     m_view->addMessage(e);
     m_preview = mine ? tr("Vous : %1").arg(notificationBody(msg)) : tr("%1 : %2").arg(e.author, notificationBody(msg));
+    m_previewId = e.id;
+    if (!e.id.isEmpty() && m_node->latestEdit(msg))
+        onMessageEdited(e.id); // modifié avant même d'arriver ici (synchronisation, historique)
     emit changed();
 }
 
@@ -427,4 +441,31 @@ QString Conversation::memberNick(const QString &onion) const
 {
     const QString nick = m_store->nickOf(onion);
     return nick.isEmpty() ? tr("Un membre") : nick;
+}
+
+void Conversation::onMessageEdited(const QString &id)
+{
+    const QJsonObject msg = m_node->storedMessage(id);
+    const auto latest = msg.isEmpty() ? std::nullopt : m_node->latestEdit(msg);
+    if (!latest)
+        return; // message pas (encore) là : appliqué à son arrivée
+    const bool mine = msg.value("mine").toBool();
+    // Modération : modifié ou supprimé par un administrateur, pas par son auteur
+    QString by;
+    if (latest->author != msg.value("a").toString())
+        by = latest->author == m_node->ownOnion() ? tr("vous") : memberNick(latest->author);
+    const QString text = !latest->deleted ? latest->text
+                         : by.isEmpty()   ? tr("🚫 Message supprimé")
+                                          : tr("🚫 Message supprimé par %1").arg(by);
+    QList<QPair<int, int>> spans;
+    const QList<Mentions::Span> found = Mentions::find(text, mentionNames());
+    for (const Mentions::Span &m : found)
+        spans.append({m.start, m.length});
+    const bool forMe = !mine && (Mentions::mentions(found, m_store->nickname()) || repliesToMe(msg));
+    m_view->applyEdit(id, text, latest->deleted, spans, forMe, by);
+    if (id == m_previewId) {
+        const QString author = msg.value("n").toString().left(Protocol::MaxNickLength);
+        m_preview = mine ? tr("Vous : %1").arg(text) : tr("%1 : %2").arg(author, text);
+        emit changed();
+    }
 }

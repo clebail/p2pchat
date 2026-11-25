@@ -19,7 +19,8 @@ constexpr int MaxNickLength = 40;
 // sont refusées.
 // 11 : gouvernance (exclusions, renouvellement du secret, cf. governance.h)
 // 12 : invitations directes par une connexion existante, nom partagé des conversations
-constexpr int Version = 12;
+// 13 : modification et suppression de ses messages (cf. edits.h)
+constexpr int Version = 13;
 constexpr int FilesVersion = 9;
 constexpr int BinaryVersion = 10;
 // Types de trames binaires (cf. PeerConnection::sendBinary)

@@ -1,5 +1,6 @@
 #pragma once
 #include "connectionpolicy.h"
+#include "edits.h"
 #include "filestore.h"
 #include "governance.h"
 #include "groupstore.h"
@@ -105,6 +106,16 @@ public:
     // vide si impossible (pas de groupe, pas de réseau, rien à envoyer)
     QJsonObject sendMessage(const QString &text, const Protocol::Message::Extras &extras = {});
     void react(const QString &id, const QString &emoji); // ajoute ou retire la nôtre
+    // Modification et suppression de nos messages (cf. edits.h) ; false si ce n'est pas possible
+    // Notre message, ou celui d'un autre si nous sommes administrateur (modération) ; authentique, pas supprimé
+    bool canEdit(const QString &id) const;
+    bool editMessage(const QString &id, const QString &text);
+    bool deleteMessage(const QString &id);
+    // Dernière version d'un message par son auteur (aucune : jamais modifié)
+    std::optional<Edits::Latest> latestEdit(const QJsonObject &msg) const;
+    // Qui peut modifier ce message : son auteur, et quiconque a été administrateur du groupe
+    QStringList editors(const QJsonObject &msg) const;
+    QJsonObject storedMessage(const QString &id) const { return m_store.value(id); } // vide : inconnu
     void typing();                                       // au plus toutes les Timing::typingSendMs
     void sendTo(const QString &onion, const QJsonObject &obj); // console partagée
 
@@ -118,6 +129,8 @@ public:
     bool canGovern() const;
     bool exclude(const QString &onion, QString *error = nullptr);
     bool renewSecret(QString *error = nullptr);
+    // Nomme un membre administrateur, ou lui retire ce rôle (nous compris) ; il en reste toujours un
+    bool setAdmin(const QString &onion, bool admin, QString *error = nullptr);
 
     // ---- Conversations (version 12)
     // Nom partagé, choisi par un administrateur (vide : aucun)
@@ -170,6 +183,7 @@ signals:
     // Messages des autres, authentiques, pour les notifications (catchUp : rattrapés par synchronisation)
     void messagesReceived(const QList<QJsonObject> &messages, bool catchUp);
     void reactionsChanged(const QString &id);
+    void messageEdited(const QString &id); // modifié ou supprimé (cf. latestEdit)
     void memberAdded(const QString &onion, const QString &nick, bool direct); // direct : il s'est connecté à nous
     void presenceChanged(const QString &onion, const QString &nick, bool online, const QString &reason);
     void identityRejected(const QString &onion, const QString &nick); // clé différente de celle connue
@@ -182,6 +196,7 @@ signals:
     void excludedFromGroup(const QString &byNick); // nous : connexions fermées, groupe quitté
     void secretRenewed(const QString &byNick);
     void memberLeft(const QString &onion, const QString &nick);
+    void adminChanged(const QString &onion, const QString &nick, bool admin, const QString &byNick);
     void sharedNameChanged(const QString &name, const QString &byNick);
     // Un membre nous invite à une autre conversation (son code, vérifié : c'est bien le sien)
     void directInvitation(const QString &fromOnion, const QString &fromNick, const Invitation &invitation,
@@ -225,7 +240,9 @@ private:
     // Gouvernance
     std::optional<Governance::Record> head() const;
     void ensureGenesis();
-    bool newRecord(const QStringList &excluded, QString *error); // nouveau secret ; nous devons être administrateur
+    // Nouvel enregistrement de gouvernance (nous devons être administrateur) ; admins vide : ceux en place,
+    // moins les exclus. renew : nouveau secret (obligatoire dès qu'on exclut quelqu'un)
+    bool newRecord(const QStringList &excluded, QStringList admins, bool renew, QString *error);
     bool integrateRecords(const QJsonArray &records);            // true si la chaîne a avancé
     void applyRecord(const Governance::Record &previousHead, const Governance::Record &record);
     void sendGovernance(PeerConnection *c);                       // chaîne, puis secret si membre non exclu
@@ -255,6 +272,9 @@ private:
     // Réactions (cf. reactions.h)
     bool acceptReaction(const QJsonObject &r, bool mine, bool save); // false : déjà connue
     bool verifyReaction(const QJsonObject &r, bool mine) const;
+    // Modifications (cf. edits.h)
+    bool acceptEdit(const QJsonObject &r, bool mine, bool save); // false : déjà connue
+    void broadcastEdit(const QJsonObject &r, PeerConnection *except = nullptr);
     void broadcastReaction(const QJsonObject &r, PeerConnection *except = nullptr);
 
     GroupStore &m_group;
@@ -285,6 +305,7 @@ private:
     QSet<QString> m_identityWarned;               // avertissements d'identité déjà émis
     History::Store m_store;                       // historique signé : id -> message ou réaction
     Reactions::State m_reactions;
+    Edits::State m_edits;
     QHash<QString, qint64> m_typing;              // onion -> fin de l'indication « écrit… »
     qint64 m_lastTypingSent = 0;
     qint64 m_lastTick = 0;

@@ -194,11 +194,13 @@ void MainWindow::showMembers()
     auto *verifyBtn = new QPushButton(tr("Vérifier l'identité…"), &dlg);
     auto *privateBtn = new QPushButton(tr("Conversation privée"), &dlg);
     privateBtn->setToolTip(tr("Nouvelle conversation, avec ce membre seulement (invitation directe)"));
+    auto *adminBtn = new QPushButton(tr("Nommer administrateur"), &dlg);
     auto *excludeBtn = new QPushButton(tr("Exclure…"), &dlg);
     auto *renewBtn = new QPushButton(tr("Renouveler le secret…"), &dlg);
     auto *closeBtn = new QPushButton(tr("Fermer"), &dlg);
     buttons->addWidget(verifyBtn);
     buttons->addWidget(privateBtn);
+    buttons->addWidget(adminBtn);
     buttons->addWidget(excludeBtn);
     buttons->addWidget(renewBtn);
     buttons->addStretch(1);
@@ -223,7 +225,10 @@ void MainWindow::showMembers()
         QFont bold = me->font();
         bold.setBold(true);
         me->setFont(bold);
+        me->setData(Qt::UserRole, m_node->ownOnion());
         list->addItem(me);
+        if (!selected.isEmpty() && selected == m_node->ownOnion())
+            list->setCurrentItem(me);
         for (const Member &m : m_group->members()) {
             QStringList r = roles(m.onion);
             r.prepend(m_node->isConnected(m.onion) ? tr("en ligne") : tr("hors ligne"));
@@ -238,7 +243,8 @@ void MainWindow::showMembers()
             text = tr("Ce groupe n'a pas encore d'administrateur : le premier membre qui exclut quelqu'un ou "
                       "renouvelle le secret le deviendra.");
         else if (m_node->isAdmin())
-            text = tr("Vous administrez ce groupe : vous pouvez exclure un membre et renouveler le secret.");
+            text = tr("Vous administrez ce groupe : vous pouvez nommer d'autres administrateurs, exclure un "
+                      "membre, renouveler le secret et nommer la conversation.");
         else {
             QStringList names;
             for (const QString &a : m_node->admins())
@@ -250,11 +256,18 @@ void MainWindow::showMembers()
         info->setText(text);
         renewBtn->setEnabled(m_node->canGovern());
     };
-    auto updateButtons = [this, list, verifyBtn, excludeBtn, privateBtn] {
+    auto updateButtons = [this, list, verifyBtn, excludeBtn, privateBtn, adminBtn] {
         const QString onion = list->currentItem() ? list->currentItem()->data(Qt::UserRole).toString() : QString();
-        privateBtn->setEnabled(!onion.isEmpty() && m_node->canInviteDirectly(onion));
-        verifyBtn->setEnabled(!onion.isEmpty() && !m_group->pinnedKey(onion).isEmpty());
-        excludeBtn->setEnabled(!onion.isEmpty() && m_node->canGovern());
+        const bool other = !onion.isEmpty() && onion != m_node->ownOnion();
+        privateBtn->setEnabled(other && m_node->canInviteDirectly(onion));
+        verifyBtn->setEnabled(other && !m_group->pinnedKey(onion).isEmpty());
+        excludeBtn->setEnabled(other && m_node->canGovern());
+        // Nommer, retirer (un autre, ou nous-même), sans jamais laisser le groupe sans administrateur
+        const bool admin = m_node->isAdmin(onion);
+        adminBtn->setText(!admin ? tr("Nommer administrateur")
+                          : other ? tr("Retirer l'administration") : tr("Quitter l'administration"));
+        adminBtn->setEnabled(!onion.isEmpty() && m_node->canGovern() && (!admin || m_node->admins().size() > 1)
+                             && (other || admin));
     };
     auto current = [list] {
         return list->currentItem() ? list->currentItem()->data(Qt::UserRole).toString() : QString();
@@ -267,6 +280,7 @@ void MainWindow::showMembers()
         dlg.accept();
     });
     connect(excludeBtn, &QPushButton::clicked, &dlg, [this, current] { confirmExclude(current()); });
+    connect(adminBtn, &QPushButton::clicked, &dlg, [this, current] { confirmAdmin(current()); });
     connect(renewBtn, &QPushButton::clicked, &dlg, [this] { confirmRenewSecret(); });
     connect(m_node, &GroupNode::stateChanged, &dlg, [fill, updateButtons] { fill(); updateButtons(); });
     fill();
@@ -274,6 +288,23 @@ void MainWindow::showMembers()
     dlg.exec();
     if (!privateWith.isEmpty())
         startConversationWith({privateWith}, {});
+}
+
+void MainWindow::confirmAdmin(const QString &onion)
+{
+    const bool self = onion == m_node->ownOnion(), admin = !m_node->isAdmin(onion);
+    const QString nick = self ? m_group->nickname() : memberNick(onion);
+    const QString question =
+        admin ? tr("Nommer %1 administrateur ?\n\nComme vous, il pourra nommer ou retirer des administrateurs, "
+                   "exclure un membre, renouveler le secret et nommer la conversation.").arg(nick)
+        : self ? tr("Ne plus être administrateur de ce groupe ?\n\nSeul un autre administrateur pourra vous "
+                    "nommer de nouveau.")
+               : tr("Retirer à %1 le rôle d'administrateur ?").arg(nick);
+    if (QMessageBox::question(this, tr("Administration"), question) != QMessageBox::Yes)
+        return;
+    QString error;
+    if (!m_node->setAdmin(onion, admin, &error))
+        QMessageBox::warning(this, tr("Administration"), tr("Impossible : %1.").arg(error));
 }
 
 void MainWindow::confirmExclude(const QString &onion)

@@ -139,6 +139,38 @@ private slots:
         QCOMPARE(model.rowOf(QString()), -1);
     }
 
+    void editUpdatesMessageAndQuotes()
+    {
+        ChatModel model;
+        const QDateTime t0 = QDateTime::currentDateTime();
+        ChatEntry original = message("Version 1", t0);
+        original.id = "q";
+        original.imageData = "image";
+        model.insertSorted(original);
+        ChatEntry reply = message("Réponse", t0.addSecs(5));
+        reply.replyTo = "q";
+        model.insertSorted(reply);
+
+        ChatEntry updated;
+        updated.text = "Version 2";
+        updated.edited = true;
+        QVERIFY(model.applyEdit("q", updated));
+        QCOMPARE(model.entry(0).text, QString("Version 2"));
+        QVERIFY(model.entry(0).edited);
+        QCOMPARE(model.entry(1).replyText, QString("Version 2")); // la citation suit
+        QVERIFY(!model.applyEdit("absent", updated));
+
+        ChatEntry gone;
+        gone.text = "🚫 Message supprimé par Bob";
+        gone.deleted = true;
+        gone.editedBy = "Bob";
+        QVERIFY(model.applyEdit("q", gone));
+        QVERIFY(model.entry(0).deleted);
+        QVERIFY(model.entry(0).imageData.isEmpty()); // plus d'image ni de fichier
+        QCOMPARE(model.entry(0).editedBy, QString("Bob"));
+        QCOMPARE(model.entry(1).replyText, gone.text);
+    }
+
     void replyArrivingBeforeOriginal()
     {
         // Synchronisation dans le désordre : la citation se complète quand l'original arrive

@@ -4,6 +4,7 @@ SUBDIRS += \
     tst_attachment \
     tst_composer \
     tst_crypto \
+    tst_edits \
     tst_invitation \
     tst_links \
     tst_markup \

@@ -39,12 +39,14 @@ private slots:
         QCOMPARE(Protocol::missingFeatures(4),
                  QStringList({"les citations", "les images", "les réactions", "les GIF animés", "les fichiers",
                               "les exclusions et le renouvellement du secret",
-                              "les invitations directes et le nom des conversations"}));
+                              "les invitations directes et le nom des conversations",
+                              "les messages modifiés ou supprimés"}));
         const QString v11("les exclusions et le renouvellement du secret"),
-            v12("les invitations directes et le nom des conversations");
-        QCOMPARE(Protocol::missingFeatures(7), QStringList({"les GIF animés", "les fichiers", v11, v12}));
-        QCOMPARE(Protocol::missingFeatures(9), QStringList({v11, v12})); // la 10 n'apporte rien de visible
-        QCOMPARE(Protocol::missingFeatures(11), QStringList({v12}));
+            v12("les invitations directes et le nom des conversations"), v13("les messages modifiés ou supprimés");
+        QCOMPARE(Protocol::missingFeatures(7), QStringList({"les GIF animés", "les fichiers", v11, v12, v13}));
+        QCOMPARE(Protocol::missingFeatures(9), QStringList({v11, v12, v13})); // la 10 n'apporte rien de visible
+        QCOMPARE(Protocol::missingFeatures(11), QStringList({v12, v13}));
+        QCOMPARE(Protocol::missingFeatures(12), QStringList({v13}));
     }
 
     void base64()

@@ -63,6 +63,8 @@ signals:
     void directInvitation(const QString &fromNick, const Invitation &invitation, const QString &name);
     // Actions de la vue qui demandent la fenêtre (citation, dialogues)
     void replyRequested(const QString &id, const QString &author, const QString &text);
+    void editRequested(const QString &id, const QString &text);
+    void deleteRequested(const QString &id);
     void linkClicked(const QString &url);
     void openFileRequested(const QString &fileId);
     void saveFileRequested(const QString &fileId);
@@ -77,6 +79,7 @@ private:
     QString notificationTitle(const QJsonObject &msg) const;
     QList<ChatEntry::Reaction> reactionSummary(const QString &id) const;
     void updateFileEntry(const QString &fileId);
+    void onMessageEdited(const QString &id); // modifié ou supprimé : la vue (et l'aperçu) suivent
     void rememberName(); // nom affiché tant qu'on est membre, gardé quand on ne l'est plus
     void keepName();
 
@@ -85,6 +88,6 @@ private:
     std::unique_ptr<GroupNode> m_node;
     QPointer<ChatView> m_view; // sans parent : rangée ensuite dans la fenêtre, supprimée avec nous
     int m_unread = 0;
-    QString m_preview;
+    QString m_preview, m_previewId; // dernier message affiché, et son identifiant
     QString m_knownName;
 };

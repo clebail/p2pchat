@@ -31,6 +31,9 @@ struct ChatEntry
     Trust trust = Verified;
     // Mentions « @pseudo » : (position, longueur) dans text ; mentionsMe : nous sommes mentionnés
     QList<QPair<int, int>> mentions;
+    bool edited = false;  // modifié par son auteur : « modifié » à côté de l'heure
+    bool deleted = false; // supprimé par son auteur : texte remplacé, sans image ni fichier
+    QString editedBy;     // administrateur qui l'a modifié ou supprimé (vide : son auteur)
     bool mentionsMe = false; // mis en avant : nous sommes mentionnés, ou c'est une réponse à l'un de nos messages
     // Réponse avec citation : identifiants du message et du message cité. La citation (auteur, extrait)
     // est retrouvée dans la liste par le modèle, y compris si le message cité arrive après la réponse.
@@ -91,6 +94,9 @@ public:
     void setFileState(const QString &fileId, ChatEntry::File::State state, int received, int total,
                       const QString &sources = {});
     void setAuthorVerified(const QString &onion, bool verified);
+    // Message modifié ou supprimé : texte (déjà préparé : mise en forme, liens, mentions) et citations qui le
+    // reprennent ; false s'il n'est pas affiché
+    bool applyEdit(const QString &id, const ChatEntry &updated);
     void removeRow(int row);
     // Recherche : lignes des messages contenant term (sans tenir compte de la casse ni des accents)
     QList<int> search(const QString &term) const;

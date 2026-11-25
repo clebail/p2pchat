@@ -85,7 +85,10 @@ private:
     void updateStatus(); // en-tête et zone de saisie, pour la conversation affichée
     // Réponse avec citation : bandeau au-dessus de la zone de saisie
     void startReply(const QString &id, const QString &author, const QString &text);
-    void cancelReply();
+    void cancelReply(); // annule aussi une modification en cours
+    // Modification d'un de nos messages : bandeau au-dessus de la zone de saisie, Entrée enregistre
+    void startEdit(const QString &id, const QString &text);
+    void confirmDelete(const QString &id);
     // Image jointe au message en cours d'écriture (aperçu au-dessus de la zone de saisie)
     void chooseAttachment();
     void attachPath(const QString &path); // image, ou fichier joint
@@ -146,6 +149,7 @@ private:
     // Membres (⋮ → Membres…) : rôles, présence, exclusion et renouvellement du secret (administrateurs)
     void showMembers();
     void confirmExclude(const QString &onion);
+    void confirmAdmin(const QString &onion); // nommer, ou retirer le rôle (à un autre ou à nous)
     void confirmRenewSecret();
     void showSafetyNumber(const QString &onion);
     void resetAll();
@@ -186,6 +190,7 @@ private:
     QWidget *m_replyBar = nullptr;
     QLabel *m_replyLabel = nullptr;
     QString m_replyTo; // identifiant du message cité par le message en cours d'écriture
+    QString m_editId;  // ou identifiant du message en cours de modification
     QToolButton *m_attachButton = nullptr;
     QWidget *m_imageBar = nullptr;
     QLabel *m_imagePreview = nullptr, *m_imageInfo = nullptr;

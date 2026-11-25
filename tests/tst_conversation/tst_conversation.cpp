@@ -178,6 +178,49 @@ private slots:
         QCOMPARE(arrived.last().at(4).toBool(), true);
     }
 
+    void editedAndDeletedMessages()
+    {
+        pair();
+        Person &a = person('a'), &b = person('b');
+        const QString id = Protocol::Message::id(b.conv->node().sendMessage("Coucou @" + a.nick));
+        QTRY_VERIFY(lastMessage(*a.conv) && lastMessage(*a.conv)->id == id);
+        QVERIFY(lastMessage(*a.conv)->mentionsMe);
+
+        QVERIFY(b.conv->node().editMessage(id, "Coucou tout le monde"));
+        QTRY_COMPARE(lastMessage(*a.conv)->text, QString("Coucou tout le monde"));
+        QVERIFY(lastMessage(*a.conv)->edited);
+        QVERIFY(!lastMessage(*a.conv)->mentionsMe); // la mention a disparu
+        QCOMPARE(a.conv->preview(), b.nick + " : Coucou tout le monde");
+        QCOMPARE(lastMessage(*b.conv)->text, QString("Coucou tout le monde")); // chez l'auteur aussi
+
+        QVERIFY(b.conv->node().deleteMessage(id));
+        QTRY_VERIFY(lastMessage(*a.conv)->deleted);
+        QCOMPARE(lastMessage(*a.conv)->text, QString("🚫 Message supprimé"));
+        QVERIFY(!lastMessage(*a.conv)->edited);
+        QCOMPARE(a.conv->preview(), b.nick + " : 🚫 Message supprimé");
+
+        // Rechargé depuis l'historique : déjà supprimé à l'affichage
+        Conversation reloaded(*a.settings, QString(16, '1'), m_dir->filePath("a.jsonl"), fastTiming());
+        reloaded.node().setFilesDir(m_dir->filePath("a-fichiers-2"));
+        reloaded.loadHistory();
+        QVERIFY(lastMessage(reloaded) && lastMessage(reloaded)->deleted);
+    }
+
+    void moderationIsNamed()
+    {
+        pair();
+        Person &a = person('a'), &b = person('b');
+        QTRY_COMPARE(b.conv->node().groupId(), a.conv->node().groupId());
+        const QString id = Protocol::Message::id(b.conv->node().sendMessage("Hors sujet"));
+        QTRY_VERIFY(lastMessage(*a.conv) && lastMessage(*a.conv)->id == id);
+        QVERIFY(a.conv->node().editMessage(id, "[modéré]"));
+        QTRY_COMPARE(lastMessage(*b.conv)->text, QString("[modéré]"));
+        QCOMPARE(lastMessage(*b.conv)->editedBy, a.nick);
+        QVERIFY(lastMessage(*a.conv)->editedBy == "vous");
+        QVERIFY(a.conv->node().deleteMessage(id));
+        QTRY_COMPARE(lastMessage(*b.conv)->text, "🚫 Message supprimé par " + a.nick);
+    }
+
     void unreadAndNotificationSettings()
     {
         Person &a = person('a');
