@@ -229,6 +229,13 @@ void MainWindow::setupTray()
 void MainWindow::showAndRaise()
 {
     show();
+    // Wayland interdit à une application de s'activer elle-même
+    // (QWindow::requestActivate() n'y est pas supporté et produit un
+    // avertissement) : on se contente d'afficher/dé-minimiser la fenêtre.
+    if (QGuiApplication::platformName().startsWith(QLatin1String("wayland"))) {
+        setWindowState(windowState() & ~Qt::WindowMinimized);
+        return;
+    }
     setWindowState((windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
     raise();
     activateWindow();
