@@ -103,7 +103,8 @@ void ChatModel::setAuthorVerified(const QString &onion, bool verified)
     }
 }
 
-void ChatModel::setFileState(const QString &fileId, ChatEntry::File::State state, int received, int total)
+void ChatModel::setFileState(const QString &fileId, ChatEntry::File::State state, int received, int total,
+                             const QString &sources)
 {
     for (int i = 0; i < m_entries.size(); ++i) {
         ChatEntry::File &f = m_entries[i].file;
@@ -112,6 +113,7 @@ void ChatModel::setFileState(const QString &fileId, ChatEntry::File::State state
         f.state = state;
         f.received = received;
         f.total = total;
+        f.sources = sources;
         emit dataChanged(index(i), index(i));
     }
 }

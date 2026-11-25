@@ -605,8 +605,9 @@ private slots:
         QVERIFY(clickCard()); // pas encore là : télécharger
         QCOMPARE(requested.last(), QVariantList({m.file.id, QVariant::fromValue(ChatView::FileAction::Download)}));
 
-        view.setFileState(m.file.id, ChatEntry::File::Downloading, 7, 20);
+        view.setFileState(m.file.id, ChatEntry::File::Downloading, 7, 20, "Alice, Bob");
         QCOMPARE(view.chatModel()->entry(0).file.received, 7);
+        QCOMPARE(view.chatModel()->entry(0).file.sources, QString("Alice, Bob")); // affichées sous le nom
         const int before = requested.count();
         QVERIFY(clickCard()); // en cours : rien de plus
         QCOMPARE(requested.count(), before);

@@ -536,6 +536,68 @@ private slots:
         QCOMPARE(b.node->binaryChunksReceived(), 0);
     }
 
+    void multipleSourcesShareTheWork()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        const QByteArray content = Crypto::randomBytes(3 * 1024 * 1024); // 20 morceaux, pas automatique
+        const QString id = fileId(a.node->sendFile(sourceFile("gros.bin", content)));
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::NotDownloaded); // annonce reçue
+        QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::NotDownloaded);
+        b.node->download(id);
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
+        // A et B l'ont : C le demande aux deux à la fois
+        QSet<QString> seen; // sources vues pendant le téléchargement
+        QObject guard;
+        connect(c.node.get(), &GroupNode::fileChanged, &guard, [&](const QString &changed) {
+            if (changed == id)
+                for (const QString &source : c.node->fileState(id).sources)
+                    seen.insert(source);
+        });
+        c.node->download(id);
+        QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QCOMPARE(contentOf(c, id), content);
+        QVERIFY(seen.contains(a.onion));
+        QVERIFY(seen.contains(b.onion));
+    }
+
+    void partialHolderIsASource()
+    {
+        // B n'a qu'un morceau sur deux et ne joint pas A ; C joint les deux
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        const QByteArray content = Crypto::randomBytes(3 * 1024 * 1024);
+        const QString id = fileId(a.node->sendFile(sourceFile("gros.bin", content)));
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::NotDownloaded);
+        const auto info = a.node->files().info(id);
+        QVERIFY(info && b.node->files().begin(*info));
+        for (int i = 0; i < info->chunkCount(); i += 2)
+            b.node->files().writeChunk(id, i, a.node->files().readChunk(id, i));
+        m_cut.insert({a.onion, b.onion});
+        b.node->setOffline();
+        QTRY_VERIFY(!a.node->isConnected(b.onion));
+        start(b, 'b');
+        b.node->download(id); // reprise : rien de neuf à attendre de C, mais B annonce ce qu'il a
+        b.node->setOnline(b.onion);
+        QTRY_VERIFY(linked(b, c));
+        QVERIFY(!b.node->isConnected(a.onion));
+
+        QSet<QString> seen; // sources vues pendant le téléchargement
+        QObject guard;
+        connect(c.node.get(), &GroupNode::fileChanged, &guard, [&](const QString &changed) {
+            if (changed == id)
+                for (const QString &source : c.node->fileState(id).sources)
+                    seen.insert(source);
+        });
+        c.node->download(id);
+        QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QCOMPARE(contentOf(c, id), content);
+        QVERIFY(seen.contains(b.onion)); // des morceaux pairs sont venus de B
+        // Et B termine grâce à C, devenu source à son tour
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QCOMPARE(contentOf(b, id), content);
+    }
+
     void fileLimitsAndClearing()
     {
         mesh();

@@ -1790,7 +1790,11 @@ ChatEntry::File::State MainWindow::fileEntryState(int kind)
 void MainWindow::updateFileEntry(const QString &fileId)
 {
     const GroupNode::FileState s = m_node->fileState(fileId);
-    m_chat->setFileState(fileId, fileEntryState(s.kind), s.received, s.total);
+    QStringList names;
+    for (const QString &onion : s.sources)
+        names << memberNick(onion);
+    names.sort(Qt::CaseInsensitive);
+    m_chat->setFileState(fileId, fileEntryState(s.kind), s.received, s.total, names.join(", "));
 }
 
 void MainWindow::onFileRequested(const QString &fileId, ChatView::FileAction action)

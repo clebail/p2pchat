@@ -26,6 +26,8 @@ QString fileStatusLine(const ChatEntry &e)
         break;
     case ChatEntry::File::Downloading:
         status = QObject::tr("Téléchargement… %1 %").arg(f.total ? 100 * f.received / f.total : 0);
+        if (!f.sources.isEmpty())
+            status += QObject::tr(" · depuis %1").arg(f.sources);
         break;
     case ChatEntry::File::Waiting:
         status = QObject::tr("En attente d'un membre qui l'a");

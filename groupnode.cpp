@@ -474,11 +474,8 @@ void GroupNode::onClosed(PeerConnection *c, const QString &reason)
         m_peerPresence.remove(activeKey); // ceux qu'il voyait ne sont plus joignables par lui
         m_peerFiles.remove(activeKey);
         m_serveQueue.remove(activeKey);
-        for (auto it = m_downloads.begin(); it != m_downloads.end(); ++it)
-            if (it->source == activeKey && it->chunk >= 0) {
-                it->chunk = -1; // un autre membre prendra le relais
-                emit fileChanged(it.key());
-            }
+        dropRequests(activeKey); // les autres sources prennent le relais
+        m_chunkMs.remove(activeKey);
         QTimer::singleShot(0, this, &GroupNode::pumpDownloads);
         if (m_typing.remove(activeKey) > 0)
             emit typingChanged();
@@ -625,7 +622,8 @@ void GroupNode::closeAll()
     m_peerFiles.clear();
     m_serveQueue.clear();
     for (Download &d : m_downloads)
-        d.chunk = -1;
+        d.inFlight.clear();
+    m_chunkMs.clear();
     for (const PeerConnection *c : all)
         if (c->isReady())
             emit peerLost(c->peerOnion());
@@ -994,9 +992,11 @@ GroupNode::FileState GroupNode::fileState(const QString &fileId) const
     const auto d = m_downloads.constFind(fileId);
     if (d == m_downloads.cend()) {
         state.kind = FileState::NotDownloaded;
-    } else if (d->chunk >= 0) {
+    } else if (!d->inFlight.isEmpty()) {
         state.kind = FileState::Downloading;
-        state.source = d->source;
+        for (const Request &r : d->inFlight)
+            if (!state.sources.contains(r.source))
+                state.sources << r.source;
     } else {
         state.kind = FileState::Waiting; // aucun membre connecté ne l'a pour l'instant
     }
@@ -1125,12 +1125,31 @@ void GroupNode::handleChunk(PeerConnection *c, const QString &id, int index, con
 {
     const QString peer = m_active.key(c);
     const auto it = m_downloads.find(id);
-    if (peer.isEmpty() || it == m_downloads.end() || it->source != peer || it->chunk != index)
+    if (peer.isEmpty() || it == m_downloads.end())
+        return;
+    const auto req = std::find_if(it->inFlight.begin(), it->inFlight.end(),
+                                  [&](const Request &r) { return r.source == peer && r.chunk == index; });
+    if (req == it->inFlight.end())
         return; // pas demandé (ou plus attendu)
-    it->chunk = -1;
+    const qint64 took = now() - req->at;
+    it->inFlight.erase(req);
     switch (data.size() > Files::ChunkBytes ? Files::FileStore::ChunkResult::Rejected
                                             : m_files->writeChunk(id, index, data)) {
-    case Files::FileStore::ChunkResult::Accepted:
+    case Files::FileStore::ChunkResult::Accepted: {
+        // Débit de cette source (moyenne glissante), et le même morceau demandé ailleurs n'est plus attendu
+        const double ms = double(std::max<qint64>(took, 1));
+        m_chunkMs[peer] = m_chunkMs.contains(peer) ? 0.7 * m_chunkMs.value(peer) + 0.3 * ms : ms;
+        it->inFlight.erase(std::remove_if(it->inFlight.begin(), it->inFlight.end(),
+                                          [&](const Request &r) { return r.chunk == index; }),
+                           it->inFlight.end());
+        // Notre progression : nous devenons source pour les autres
+        if (++it->sinceAnnounce >= 8 || now() - it->announcedAt > 5000) {
+            it->sinceAnnounce = 0;
+            it->announcedAt = now();
+            advertiseFiles({id});
+        }
+        break;
+    }
     case Files::FileStore::ChunkResult::Duplicate:
         break;
     case Files::FileStore::ChunkResult::Completed:
@@ -1140,6 +1159,7 @@ void GroupNode::handleChunk(PeerConnection *c, const QString &id, int index, con
     case Files::FileStore::ChunkResult::Rejected:
         qWarning().noquote() << "[fichiers] morceau faux reçu de" << peer.left(8) << ": source écartée";
         it->bad.insert(peer);
+        dropRequests(peer, id);
         break;
     case Files::FileStore::ChunkResult::Unknown:
         m_downloads.erase(it); // fiche perdue (magasin vidé) : abandon
@@ -1157,48 +1177,102 @@ void GroupNode::onFileNone(PeerConnection *c, const QJsonObject &o)
         return;
     if (m_peerFiles.contains(peer))
         m_peerFiles[peer].remove(id);
-    const auto it = m_downloads.find(id);
-    if (it != m_downloads.end() && it->source == peer) {
-        it->chunk = -1;
-        emit fileChanged(id);
-    }
+    dropRequests(peer, id);
     pumpDownloads();
+}
+
+void GroupNode::dropRequests(const QString &peer, const QString &fileId)
+{
+    for (auto it = m_downloads.begin(); it != m_downloads.end(); ++it) {
+        if (!fileId.isEmpty() && it.key() != fileId)
+            continue;
+        const auto before = it->inFlight.size();
+        it->inFlight.erase(std::remove_if(it->inFlight.begin(), it->inFlight.end(),
+                                          [&](const Request &r) { return r.source == peer; }),
+                           it->inFlight.end());
+        if (it->inFlight.size() != before)
+            emit fileChanged(it.key());
+    }
 }
 
 void GroupNode::pumpDownloads()
 {
-    // Membres à qui un morceau est déjà demandé : un seul à la fois chacun
-    QSet<QString> busy;
+    // Morceaux en vol par membre, tous fichiers confondus
+    QHash<QString, int> load;
     for (const Download &d : std::as_const(m_downloads))
-        if (d.chunk >= 0)
-            busy.insert(d.source);
+        for (const Request &r : d.inFlight)
+            ++load[r.source];
+    // Les plus rapides d'abord ; une source trois fois plus lente que la meilleure n'a qu'un morceau en vol
+    QStringList peers;
+    for (PeerConnection *p : fileCapablePeers())
+        peers << m_active.key(p);
+    std::sort(peers.begin(), peers.end(), [this](const QString &a, const QString &b) {
+        return m_chunkMs.value(a, 0) < m_chunkMs.value(b, 0); // inconnue : essayée en priorité
+    });
+    double best = 0;
+    for (const QString &p : std::as_const(peers))
+        if (m_chunkMs.contains(p) && (best == 0 || m_chunkMs.value(p) < best))
+            best = m_chunkMs.value(p);
+    auto capacity = [&](const QString &peer) {
+        const bool slow = best > 0 && m_chunkMs.value(peer, 0) > 3 * best;
+        return (slow ? 1 : PerSource) - load.value(peer);
+    };
 
     for (auto it = m_downloads.begin(); it != m_downloads.end(); ++it) {
-        if (it->chunk >= 0)
-            continue;
         const QString id = it.key();
         const QBitArray have = m_files->received(id);
         if (have.isEmpty())
             continue;
-        bool requested = false;
-        for (PeerConnection *p : fileCapablePeers()) {
-            const QString peer = m_active.key(p);
-            if (busy.contains(peer) || it->bad.contains(peer))
-                continue;
-            for (int i = 0; i < have.size() && !requested; ++i) {
-                if (have.testBit(i) || !peerHasChunk(peer, id, i))
-                    continue;
-                p->send({{"t", "file-want"}, {"f", id}, {"i", i}});
-                it->source = peer;
-                it->chunk = i;
-                it->requestedAt = now();
-                busy.insert(peer);
-                requested = true;
-            }
-            if (requested)
-                break;
+        QHash<int, int> requested; // morceau -> demandes en vol
+        QSet<QString> sources;
+        for (const Request &r : std::as_const(it->inFlight)) {
+            ++requested[r.chunk];
+            sources.insert(r.source);
         }
-        if (requested)
+        // Rareté de chaque morceau manquant : combien de membres connectés l'ont
+        QHash<int, int> holders;
+        for (int i = 0; i < have.size(); ++i)
+            if (!have.testBit(i))
+                for (const QString &p : std::as_const(peers))
+                    if (!it->bad.contains(p) && peerHasChunk(p, id, i))
+                        ++holders[i];
+        bool sent = false;
+        for (const QString &peer : std::as_const(peers)) {
+            if (it->bad.contains(peer))
+                continue;
+            while (capacity(peer) > 0 && (sources.contains(peer) || sources.size() < MaxSources)) {
+                // Le plus rare de ceux qu'il a et que personne n'envoie encore ; à défaut (fin du
+                // téléchargement), un morceau déjà demandé à un autre, une seule fois de plus
+                int pick = -1, pickHolders = 0, pickRequests = 0;
+                for (auto h = holders.cbegin(); h != holders.cend(); ++h) {
+                    const int i = h.key(), asked = requested.value(i);
+                    if (asked >= 2 || !peerHasChunk(peer, id, i))
+                        continue;
+                    bool mine = false;
+                    for (const Request &r : std::as_const(it->inFlight))
+                        mine = mine || (r.source == peer && r.chunk == i);
+                    if (mine)
+                        continue;
+                    const bool better = pick < 0 || asked < pickRequests
+                                        || (asked == pickRequests && (h.value() < pickHolders
+                                                                      || (h.value() == pickHolders && i < pick)));
+                    if (better) {
+                        pick = i;
+                        pickHolders = h.value();
+                        pickRequests = asked;
+                    }
+                }
+                if (pick < 0 || (pickRequests > 0 && requested.size() < holders.size()))
+                    break; // rien pour lui, ou il reste des morceaux que personne n'envoie
+                m_active.value(peer)->send({{"t", "file-want"}, {"f", id}, {"i", pick}});
+                it->inFlight.append({peer, pick, now()});
+                ++requested[pick];
+                ++load[peer];
+                sources.insert(peer);
+                sent = true;
+            }
+        }
+        if (sent)
             emit fileChanged(id);
     }
 }
@@ -1208,11 +1282,13 @@ void GroupNode::filesTick()
     // Morceau demandé resté sans réponse : on le redemande, éventuellement à un autre
     const qint64 t = now();
     bool expired = false;
-    for (auto it = m_downloads.begin(); it != m_downloads.end(); ++it)
-        if (it->chunk >= 0 && t - it->requestedAt > m_timing.fileRequestTimeoutMs) {
-            it->chunk = -1;
-            expired = true;
-        }
+    for (auto it = m_downloads.begin(); it != m_downloads.end(); ++it) {
+        const auto before = it->inFlight.size();
+        it->inFlight.erase(std::remove_if(it->inFlight.begin(), it->inFlight.end(),
+                                          [&](const Request &r) { return t - r.at > m_timing.fileRequestTimeoutMs; }),
+                           it->inFlight.end());
+        expired = expired || it->inFlight.size() != before;
+    }
     if (expired)
         pumpDownloads();
     if (!m_serveQueue.isEmpty())

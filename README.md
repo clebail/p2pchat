@@ -81,8 +81,12 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 - **Fichiers** (100 Mo au plus) : bouton 📎, glisser-déposer ou collage d'un fichier ; une image reste une
   image. La bulle montre le type, le nom, la taille et l'état. Les fichiers de 2 Mo au plus sont téléchargés
   automatiquement, les autres d'un clic sur « Télécharger » ; un téléchargement interrompu reprend tout seul.
-  N'importe quel membre qui a le fichier peut le fournir (chaque morceau est vérifié grâce à l'annonce signée
-  de l'auteur ; ils voyagent en trames binaires, sans base64). Clic sur un fichier reçu : *Ouvrir* (avertissement avant un programme ou un script) ; clic
+  N'importe quel membre qui a le fichier peut le fournir, même en partie : il est demandé à plusieurs membres
+  à la fois (jusqu'à 4, deux morceaux en vol chacun pour masquer la latence de Tor), les morceaux les plus rares
+  d'abord, et celui qui télécharge annonce sa progression pour servir de source à son tour. Les derniers
+  morceaux sont aussi demandés aux sources libres, et une source lente est moins sollicitée. La bulle indique
+  « depuis Alice, Bob ». Chaque morceau est vérifié grâce à l'annonce signée de l'auteur (une source qui en
+  fournit un faux est écartée) ; ils voyagent en trames binaires, sans base64. Clic sur un fichier reçu : *Ouvrir* (avertissement avant un programme ou un script) ; clic
   droit : *Enregistrer sous…*, *Annuler le téléchargement*. Fichiers conservés 30 jours, effacés avec la
   conversation.
 - **Images** : bouton 🖼 à gauche de la zone de saisie, glisser-déposer d'un fichier ou d'une image n'importe où

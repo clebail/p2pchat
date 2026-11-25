@@ -34,9 +34,10 @@ public:
     void showRow(int row);
     void setReactions(const QString &id, const QList<ChatEntry::Reaction> &reactions);
     void setAuthorVerified(const QString &onion, bool verified) { m_model->setAuthorVerified(onion, verified); }
-    void setFileState(const QString &fileId, ChatEntry::File::State state, int received, int total)
+    void setFileState(const QString &fileId, ChatEntry::File::State state, int received, int total,
+                      const QString &sources = {})
     {
-        m_model->setFileState(fileId, state, received, total);
+        m_model->setFileState(fileId, state, received, total, sources);
     }
 
     // Fichier joint : clic sur la carte (Télécharger ou Ouvrir selon l'état) ou menu contextuel

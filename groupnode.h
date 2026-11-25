@@ -141,7 +141,7 @@ public:
     {
         enum Kind { Unknown, NotDownloaded, Downloading, Waiting, Complete } kind = Unknown;
         int received = 0, total = 0; // morceaux
-        QString source;              // membre qui nous l'envoie
+        QStringList sources;         // membres qui nous l'envoient en ce moment
     };
     FileState fileState(const QString &fileId) const;
 
@@ -292,14 +292,26 @@ private:
     // Fichiers
     std::unique_ptr<Files::FileStore> m_files;
     QHash<QString, Files::FileInfo> m_fileInfos; // fiches annoncées par des messages authentiques
+    // Téléchargement depuis plusieurs membres : jusqu'à MaxSources à la fois, PerSource morceaux en vol
+    // chacun (la latence de Tor est masquée), les morceaux les plus rares d'abord, et pour finir les derniers
+    // demandés aussi aux sources libres (une source lente ne bloque pas la fin)
+    static constexpr int MaxSources = 4, PerSource = 2;
+    struct Request
+    {
+        QString source;
+        int chunk = -1;
+        qint64 at = 0;
+    };
     struct Download
     {
-        QString source;       // membre à qui un morceau est demandé
-        int chunk = -1;       // morceau demandé (-1 : aucun)
-        qint64 requestedAt = 0;
+        QList<Request> inFlight;
         QSet<QString> bad;    // membres qui ont fourni un morceau faux : plus sollicités
+        int sinceAnnounce = 0; // morceaux reçus depuis la dernière annonce de notre progression
+        qint64 announcedAt = 0;
     };
     QHash<QString, Download> m_downloads;
+    QHash<QString, double> m_chunkMs; // membre -> durée moyenne d'un morceau (sources lentes moins sollicitées)
+    void dropRequests(const QString &peer, const QString &fileId = {}); // vide : tous les fichiers
     QHash<QString, QHash<QString, QBitArray>> m_peerFiles; // membre -> fichier -> morceaux (vide : complet)
     QHash<QString, QList<QPair<QString, int>>> m_serveQueue; // membre -> morceaux qu'il nous a demandés
     QTimer m_fileTimer;
