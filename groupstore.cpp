@@ -287,3 +287,26 @@ void GroupStore::setClearedBefore(qint64 ms)
 {
     m_settings.setValue(key("history/clearedBefore"), ms);
 }
+
+QString GroupStore::name() const
+{
+    return m_settings.value(key("name")).toString();
+}
+
+void GroupStore::setName(const QString &name)
+{
+    if (name.trimmed().isEmpty())
+        m_settings.remove(key("name"));
+    else
+        m_settings.setValue(key("name"), name.trimmed().left(60));
+}
+
+QString GroupStore::notifyMode() const
+{
+    return m_settings.value(key("notify/mode"), m_settings.value("notify/mode")).toString();
+}
+
+void GroupStore::setNotifyMode(const QString &mode)
+{
+    m_settings.setValue(key("notify/mode"), mode);
+}

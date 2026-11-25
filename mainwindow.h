@@ -15,7 +15,12 @@
 #include <QSettings>
 #include <QTimer>
 
+#include <memory>
+#include <vector>
+
 class QAction;
+class QListWidget;
+class QListWidgetItem;
 class QLabel;
 class QMenu;
 class QMessageBox;
@@ -27,6 +32,7 @@ class Composer;
 class MentionCompleter;
 class QDragEnterEvent;
 class QDropEvent;
+class QResizeEvent;
 class QMimeData;
 class Notifier;
 class QToolButton;
@@ -34,9 +40,10 @@ class TerminalSession;
 class TerminalSharing;
 class TorService;
 
-// Fenêtre principale : la conversation, Tor, les notifications et la console partagée.
-// Le groupe lui-même (connexions, synchronisation, historique) est dans GroupNode.
 class Switchboard;
+
+// Fenêtre principale : la liste des conversations, celle affichée, Tor, les notifications et la console
+// partagée. Chaque conversation (connexions, synchronisation, historique) est un GroupNode.
 
 class MainWindow : public QMainWindow
 {
@@ -48,16 +55,56 @@ public:
 
 protected:
     void changeEvent(QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
     // Glisser-déposer d'une image n'importe où sur la fenêtre (la zone de saisie gère le sien et le collage)
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
 
 private:
+    // Une conversation : son état, son groupe, sa vue
+    struct Conversation
+    {
+        QString id;
+        std::unique_ptr<GroupStore> store;
+        GroupNode *node = nullptr;
+        ChatView *chat = nullptr;
+        TerminalSharing *sharing = nullptr;
+        QListWidgetItem *item = nullptr; // dans la colonne de gauche
+        int unread = 0;
+        QString preview; // dernier message, pour la colonne
+        QString draft;   // texte en cours d'écriture quand on change de conversation
+    };
+    Conversation *openConversation(const QString &id); // existante (réglages, historique) ou nouvelle
+    Conversation *newConversation();
+    void closeConversation(Conversation *c); // la supprime : réglages, historique, fichiers
+    Conversation *conversationById(const QString &id) const;
+    void showConversation(Conversation *c);
+    // m_group, m_node, m_chat, m_sharing : ceux de la conversation en contexte, en principe celle affichée ;
+    // le temps de traiter un signal d'une autre, c'est elle (cf. inContext)
+    void setContext(Conversation *c);
+    template<typename F> void inContext(Conversation *c, F &&f)
+    {
+        Conversation *previous = m_ctx;
+        setContext(c);
+        f();
+        setContext(previous);
+    }
+    bool isShown() const { return m_ctx == m_shown; }
+    bool isBlank(const Conversation *c) const; // ni groupe ni historique : page d'accueil
+    QString displayName(const Conversation *c) const;
+    void updateConversationItem(Conversation *c);
+    void startConversation(); // ⋮ → Nouvelle conversation
+    void renameConversation();
+    void deleteConversation();
+
     // Interface
     void buildUi();
+    QWidget *buildSidebar(QWidget *parent);
+    void setSidebarVisible(bool visible);
     void updateStatus();
-    void connectNode(); // signaux du groupe -> interface
+    void connectNode(Conversation *c); // signaux du groupe -> interface
+    void connectChat(Conversation *c);
     // msg : message signé tel qu'échangé sur le réseau (id, a, n, x, ts, s)
     void appendMessage(const QJsonObject &msg, bool mine, GroupNode::Trust trust);
     void onMessagesReceived(const QList<QJsonObject> &messages, bool catchUp); // notifications
@@ -123,7 +170,7 @@ private:
     void sendCurrent();
 
     // Console partagée (Linux, macOS) : négociation dans TerminalSharing, ici les questions posées
-    void setupTerminalSharing();
+    void setupTerminalSharing(Conversation *c);
     void shareTerminal();
     void askTerminalOffer(const QString &onion, const QString &nick, bool control);
 
@@ -137,27 +184,34 @@ private:
     void showSafetyNumber(const QString &onion);
     void resetAll();
 
-    // Conversation ouverte au démarrage : la première (après reprise de l'ancienne disposition), ou une nouvelle
     static QString dataDir();
-    QString initialConversation();
 
     QSettings m_settings;
     Conversations m_conversations{m_settings, dataDir()};
-    GroupStore m_group{m_settings, initialConversation()};
-    Switchboard *m_board = nullptr;
+    std::vector<std::unique_ptr<Conversation>> m_convs; // dans l'ordre de la colonne
+    Conversation *m_shown = nullptr, *m_ctx = nullptr;
+    GroupStore *m_group = nullptr;
     GroupNode *m_node = nullptr;
+    Switchboard *m_board = nullptr;
     TorService *m_tor = nullptr;
+    QString m_onion; // notre adresse, une fois Tor prêt
     QString m_torStatus, m_torError;
-    bool m_inviteWanted = false;
+    QString m_inviteFor;      // conversation dont le code s'affichera quand Tor sera prêt
+    QString m_lastNotified;   // conversation de la dernière notification (ouverte par un clic dessus)
 
-    int m_unread = 0;
+    int m_unread = 0; // toutes conversations confondues
 
     TerminalSharing *m_sharing = nullptr;
     QPointer<QMessageBox> m_termPrompt; // « Ouvrir la console de … ? »
     QAction *m_termShareAct = nullptr, *m_termCtlAct = nullptr, *m_termStopAct = nullptr;
 
     ChatView *m_chat = nullptr;
-    QStackedWidget *m_pages = nullptr; // accueil (pas de groupe) / conversation
+    QStackedWidget *m_pages = nullptr; // accueil (conversation vierge), puis une vue par conversation
+    QWidget *m_home = nullptr;
+    QWidget *m_sidebar = nullptr;
+    QListWidget *m_convList = nullptr;
+    QToolButton *m_sidebarButton = nullptr;
+    bool m_sidebarWanted = true; // choix de l'utilisateur (la colonne se replie d'elle-même si c'est étroit)
     Composer *m_input = nullptr;
     MentionCompleter *m_mentions = nullptr;
     QWidget *m_replyBar = nullptr;

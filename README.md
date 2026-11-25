@@ -47,6 +47,11 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 
 ### Interface
 
+- **Plusieurs conversations**, chacune avec ses membres, son code d'invitation et son historique, listées dans
+  une colonne à gauche (nom, dernier message, non-lus) ; elle se replie quand la fenêtre est étroite (bouton ☰).
+  ＋ → *Nouvelle conversation…* ou *Rejoindre avec un code…* (sans quitter les autres). Une même identité et un
+  seul service Tor pour toutes. ⋮ → *Renommer la conversation…* (nom affiché sur ce poste), *Quitter la
+  conversation…*, puis *Supprimer la conversation…* pour effacer son historique.
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
 - **Au survol d'un message**, une petite barre apparaît au coin de la bulle : réactions rapides et ↩ *Répondre*.
 - **Réactions** (👍 ❤️ 😂 😮 😢 🎉) : clic droit sur un message → *Réagir*, ou clic sur une pastille existante pour
@@ -55,8 +60,9 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 - **Saisie sur plusieurs lignes** : Entrée envoie, Maj+Entrée va à la ligne ; la zone grandit jusqu'à 6 lignes.
   `` `code` `` et les blocs ` ``` ` s'affichent en police à chasse fixe (les accents graves sont masqués, mais
   gardés quand on copie le message).
-- **Notifications** (menu ⋮ → *Notifications*) : tous les messages, mentions et réponses seulement, ou aucune ;
-  « ne pas déranger » pendant 1 h ou jusqu'au lendemain 8 h. Le compteur de non-lus reste à jour.
+- **Notifications** (menu ⋮ → *Notifications*, propres à chaque conversation) : tous les messages, mentions et
+  réponses seulement, ou aucune ; « ne pas déranger » (pour toutes) pendant 1 h ou jusqu'au lendemain 8 h. Le
+  compteur de non-lus reste à jour.
 - **Nouveaux messages** : en revenant sur la fenêtre, un séparateur rouge marque le premier message reçu en votre
   absence, et la liste s'y place. Si vous avez remonté l'historique, un bouton « ↓ » en bas à droite indique le
   nombre de messages arrivés depuis et ramène en bas.

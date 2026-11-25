@@ -79,6 +79,13 @@ public:
     qint64 shareHistoryUntil() const;
     void setShareHistoryUntil(qint64 ms); // 0 : pas de partage
 
+    // Nom de la conversation choisi sur ce poste (vide : les pseudos des membres)
+    QString name() const;
+    void setName(const QString &name);
+    // Notifications de cette conversation (cf. notifications.h) ; vide : réglage général
+    QString notifyMode() const;
+    void setNotifyMode(const QString &mode);
+
     // Historique vidé localement : rien d'antérieur n'est affiché ni re-téléchargé
     qint64 clearedBefore() const;
     void setClearedBefore(qint64 ms);
