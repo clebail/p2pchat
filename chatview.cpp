@@ -18,7 +18,9 @@
 
 #include "reactions.h"
 #include <QVBoxLayout>
+#include <QBuffer>
 #include <QMouseEvent>
+#include <QMovie>
 #include <QHash>
 #include <QLocale>
 #include <QMenu>
@@ -765,8 +767,24 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
         p->save();
         p->setClipPath(clip);
         p->setRenderHint(QPainter::SmoothPixmapTransform);
-        p->drawImage(ir, e.image);
+        const QPixmap frame = view && e.animated ? view->animationFrame(e) : QPixmap();
+        if (!frame.isNull())
+            p->drawPixmap(ir, frame, QRectF(frame.rect()));
+        else
+            p->drawImage(ir, e.image);
         p->restore();
+        if (e.animated) { // pastille « GIF » en bas à gauche
+            const QFontMetrics fm(smallFont(true));
+            const QRectF badge(ir.left() + 8, ir.bottom() - fm.height() - 10, fm.horizontalAdvance("GIF") + 12,
+                               fm.height() + 4);
+            p->setPen(Qt::NoPen);
+            p->setBrush(QColor(0, 0, 0, 140));
+            p->drawRoundedRect(badge, 6, 6);
+            p->setFont(smallFont(true));
+            p->setPen(Qt::white);
+            p->drawText(badge, Qt::AlignCenter, QStringLiteral("GIF"));
+            p->setBrush(Qt::NoBrush);
+        }
     }
 
     if (!e.text.isEmpty() || !g.imageH) {
@@ -973,6 +991,22 @@ ChatView::ChatView(QWidget *parent) : QListView(parent), m_model(new ChatModel(t
         }
         m_hoverBar->hide();
     });
+    // Animations : arrêtées dès qu'elles sortent de la vue
+    m_animationPrune = new QTimer(this);
+    m_animationPrune->setInterval(1000);
+    connect(m_animationPrune, &QTimer::timeout, this, &ChatView::pruneAnimations);
+    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
+        if (!m_animationPrune->isActive() && !m_animations.isEmpty())
+            m_animationPrune->start();
+    });
+    connect(m_model, &QAbstractItemModel::modelReset, this, [this] {
+        for (const Animation &a : std::as_const(m_animations)) {
+            delete a.movie;
+            delete a.buffer;
+        }
+        m_animations.clear();
+    });
+
     // Les lignes bougent : la barre serait mal placée
     connect(verticalScrollBar(), &QScrollBar::valueChanged, m_hoverBar, &QWidget::hide);
     connect(m_model, &QAbstractItemModel::rowsInserted, m_hoverBar, &QWidget::hide);
@@ -1101,6 +1135,67 @@ void ChatView::hideHoverBarSoon()
 {
     if (m_hoverBar->isVisible() && !m_hoverHide->isActive())
         m_hoverHide->start();
+}
+
+QPixmap ChatView::animationFrame(const ChatEntry &e) const
+{
+    constexpr int MaxAnimations = 6; // au-delà, les plus anciennes restent figées
+    if (!e.animated || e.id.isEmpty() || e.imageData.isEmpty() || !isVisible())
+        return {};
+    auto it = m_animations.find(e.id);
+    if (it == m_animations.end()) {
+        if (m_animations.size() >= MaxAnimations)
+            return {};
+        auto *self = const_cast<ChatView *>(this);
+        Animation a;
+        a.buffer = new QBuffer;
+        a.buffer->setData(e.imageData);
+        a.buffer->open(QIODevice::ReadOnly);
+        a.movie = new QMovie(a.buffer, "gif");
+        a.movie->setCacheMode(QMovie::CacheAll); // GIF ≤ 150 Ko : peu d'images
+        const QString id = e.id;
+        connect(a.movie, &QMovie::frameChanged, self, [self, id] {
+            const int row = self->m_model->rowOf(id);
+            if (row >= 0)
+                self->viewport()->update(self->visualRect(self->m_model->index(row)));
+        });
+        a.movie->start();
+        it = m_animations.insert(e.id, a);
+        if (!m_animationPrune->isActive())
+            m_animationPrune->start();
+    }
+    return it->movie->currentPixmap();
+}
+
+ChatView::~ChatView()
+{
+    for (const Animation &a : std::as_const(m_animations)) {
+        delete a.movie;
+        delete a.buffer;
+    }
+}
+
+void ChatView::pruneAnimations()
+{
+    const QRect visible = viewport()->rect();
+    for (auto it = m_animations.begin(); it != m_animations.end();) {
+        const int row = m_model->rowOf(it.key());
+        if (!isVisible() || row < 0 || !visualRect(m_model->index(row)).intersects(visible)) {
+            delete it->movie;
+            delete it->buffer;
+            it = m_animations.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (m_animations.isEmpty())
+        m_animationPrune->stop();
+}
+
+void ChatView::hideEvent(QHideEvent *event)
+{
+    QListView::hideEvent(event);
+    pruneAnimations(); // fenêtre masquée : plus rien ne s'anime
 }
 
 bool ChatView::isHoverBarVisible() const
@@ -1347,9 +1442,21 @@ void ChatView::openImage(int row)
     // Au plus 85 % de l'écran, jamais agrandie
     const QSize avail = (screen() ? screen()->availableSize() : QSize(1280, 800)) * 0.85;
     QPixmap pm = QPixmap::fromImage(full);
-    if (pm.width() > avail.width() || pm.height() > avail.height())
+    const bool shrink = pm.width() > avail.width() || pm.height() > avail.height();
+    if (shrink)
         pm = pm.scaled(avail, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    label->setPixmap(pm);
+    if (e.animated) { // GIF : animé en grand aussi
+        auto *buffer = new QBuffer(dlg);
+        buffer->setData(e.imageData);
+        buffer->open(QIODevice::ReadOnly);
+        auto *movie = new QMovie(buffer, "gif", dlg);
+        if (shrink)
+            movie->setScaledSize(pm.size());
+        label->setMovie(movie);
+        movie->start();
+    } else {
+        label->setPixmap(pm);
+    }
     lay->addWidget(label, 1);
     if (!e.text.isEmpty()) {
         auto *caption = new QLabel(e.text, dlg);
@@ -1375,11 +1482,14 @@ void ChatView::saveImage(int row)
     if (row < 0 || row >= m_model->rowCount() || m_model->entry(row).image.isNull())
         return;
     const ChatEntry &e = m_model->entry(row);
-    const bool png = e.imageData.startsWith("\x89PNG");
+    const bool png = e.imageData.startsWith("\x89PNG"), gif = e.imageData.startsWith("GIF8");
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
-    const QString name = QStringLiteral("p2pchat-%1.%2").arg(e.ts.toString("yyyyMMdd-HHmmss"), png ? "png" : "jpg");
+    const QString name = QStringLiteral("p2pchat-%1.%2").arg(e.ts.toString("yyyyMMdd-HHmmss"),
+                                                             png ? "png" : gif ? "gif" : "jpg");
     const QString path = QFileDialog::getSaveFileName(this, tr("Enregistrer l'image"), dir + "/" + name,
-                                                      png ? tr("Image PNG (*.png)") : tr("Image JPEG (*.jpg *.jpeg)"));
+                                                      png   ? tr("Image PNG (*.png)")
+                                                      : gif ? tr("Image GIF (*.gif)")
+                                                            : tr("Image JPEG (*.jpg *.jpeg)"));
     if (path.isEmpty())
         return;
     // Le fichier reçu tel quel (pas de recompression) ; sinon l'image affichée

@@ -32,6 +32,14 @@ private slots:
         QCOMPARE(isValidOnion(onion), valid);
     }
 
+    void missingFeatures()
+    {
+        QCOMPARE(Protocol::missingFeatures(Protocol::Version), QStringList());
+        QCOMPARE(Protocol::missingFeatures(4),
+                 QStringList({"les citations", "les images", "les réactions", "les GIF animés"}));
+        QCOMPARE(Protocol::missingFeatures(7), QStringList({"les GIF animés"}));
+    }
+
     void base64()
     {
         const QByteArray raw("\xfb\xff\x00\x01", 4);

@@ -1,4 +1,5 @@
 #pragma once
+#include "attachment.h"
 #include "chatview.h"
 #include "connectionpolicy.h"
 #include "groupstore.h"
@@ -70,7 +71,7 @@ private:
     // Image jointe au message en cours d'écriture (aperçu au-dessus de la zone de saisie)
     void chooseImage();
     bool attachFromMime(const QMimeData *mime); // false : rien d'utilisable
-    void attachImage(const QImage &image, const QString &error = {});
+    void attachPrepared(const Attachment::Prepared &prepared);
     void cancelImage();
     QString notificationBody(const QJsonObject &msg) const;
 

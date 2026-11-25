@@ -2,6 +2,7 @@
 
 #include "crypto.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QJsonValue>
 #include <QRegularExpression>
@@ -13,6 +14,19 @@ const QByteArray ReplyContext("p2pchat-reply-v1");
 const QByteArray ImageContext("p2pchat-image-v1");
 constexpr int MaxImageB64 = 300 * 1024; // garde-fou avant décodage (l'image envoyée fait ≤ 150 Ko)
 } // namespace
+
+QStringList Protocol::missingFeatures(int peerVersion)
+{
+    static const QList<QPair<int, const char *>> features{{5, QT_TRANSLATE_NOOP("Protocol", "les citations")},
+                                                          {6, QT_TRANSLATE_NOOP("Protocol", "les images")},
+                                                          {7, QT_TRANSLATE_NOOP("Protocol", "les réactions")},
+                                                          {8, QT_TRANSLATE_NOOP("Protocol", "les GIF animés")}};
+    QStringList missing;
+    for (const auto &f : features)
+        if (peerVersion < f.first)
+            missing << QCoreApplication::translate("Protocol", f.second);
+    return missing;
+}
 
 bool Protocol::isValidOnion(const QString &s)
 {

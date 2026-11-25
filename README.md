@@ -71,6 +71,8 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
   (✕ pour retirer) ; on peut ajouter une légende avant d'envoyer. L'image est réduite (1600 px au plus) et
   recompressée en JPEG de 150 Ko au plus, puis envoyée dans le message lui-même : chiffrée, signée par son auteur,
   synchronisée et relayée comme le texte. Clic sur une image : affichage en grand, « Enregistrer… », « Copier ».
+  Un **GIF animé** de 150 Ko au plus part tel quel et s'anime dans la conversation (badge « GIF ») ; plus lourd,
+  il part figé (l'aperçu le signale). Seuls les GIF visibles s'animent.
   Les versions précédentes de P2P Chat affichent « 📷 Image (mettez à jour P2P Chat pour la voir) ».
 - Clic droit sur un message → copier, ou **répondre** : un bandeau « Réponse à … » apparaît au-dessus de la zone
   de saisie (✕ ou Échap pour annuler). La réponse affiche une citation du message d'origine ; un clic dessus y

@@ -10,6 +10,8 @@
 #include <QStyledItemDelegate>
 #include <QTimer>
 
+class QBuffer;
+class QMovie;
 class QToolButton;
 class HoverBar;
 
@@ -59,6 +61,7 @@ struct ChatEntry
     // Image jointe : version réduite pour l'affichage, et fichier d'origine (JPEG ou PNG reçu)
     QImage image;
     QByteArray imageData;
+    bool animated = false; // GIF animé : joué dans la bulle tant qu'il est visible
     // Presence : évènements consécutifs regroupés en une seule ligne, dépliable d'un clic
     QList<PresenceEvent> events;
     bool expanded = false;
@@ -137,6 +140,7 @@ class ChatView : public QListView
     Q_OBJECT
 public:
     explicit ChatView(QWidget *parent = nullptr);
+    ~ChatView() override;
     void addMessage(const QString &author, const QString &text, const QDateTime &ts, bool mine,
                     ChatEntry::Trust trust = ChatEntry::Verified, const QList<QPair<int, int>> &mentions = {},
                     bool mentionsMe = false);
@@ -174,6 +178,10 @@ public:
     bool isHoverBarVisible() const;
     QWidget *hoverBar() const;
 
+    // GIF animés : image courante (lance l'animation au premier affichage) ; nulle sinon
+    QPixmap animationFrame(const ChatEntry &e) const;
+    int runningAnimations() const { return int(m_animations.size()); }
+
     static QColor colorFor(const QString &name);
     // Extrait d'un message pour une citation : une ligne, espaces regroupés, coupé à maxChars
     static QString excerpt(const QString &text, int maxChars = 120);
@@ -194,12 +202,14 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     bool viewportEvent(QEvent *event) override; // infobulle des réactions, sortie du pointeur
+    void hideEvent(QHideEvent *event) override; // fenêtre masquée : plus rien ne s'anime
 
 private:
     void appendEntry(const ChatEntry &e);
     void updateDownButton();
     void showHoverBar(const QModelIndex &index);
     void hideHoverBarSoon(); // sauf si le pointeur est passé sur la barre
+    void pruneAnimations();  // arrête celles qui ne sont plus visibles
     ChatModel *m_model;
     ChatDelegate *m_delegate;
     QPersistentModelIndex m_flash;
@@ -211,5 +221,13 @@ private:
     HoverBar *m_hoverBar;
     QPersistentModelIndex m_hoverIndex;
     QTimer *m_hoverHide;
+    // Animations en cours, par identifiant de message (seulement les GIF visibles, MaxAnimations au plus)
+    struct Animation
+    {
+        QMovie *movie = nullptr;
+        QBuffer *buffer = nullptr;
+    };
+    mutable QHash<QString, Animation> m_animations;
+    QTimer *m_animationPrune;
     int m_newBelow = 0;
 };

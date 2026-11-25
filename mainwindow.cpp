@@ -715,8 +715,8 @@ void MainWindow::updateStatus()
         if (relayed.contains(m.onion) && m_attempts.contains(m.onion))
             state += tr(", connexion directe…");
         if (const PeerConnection *c = m_active.value(m.onion); c && c->peerVersion() < Protocol::Version)
-            state += c->peerVersion() < 5 ? tr(" — ancienne version de P2P Chat (ne voit ni les citations ni les images)")
-                                          : tr(" — ancienne version de P2P Chat (ne voit pas les images)");
+            state += tr(" — ancienne version de P2P Chat (ne voit pas %1)")
+                         .arg(Protocol::missingFeatures(c->peerVersion()).join(", "));
         if (!m_active.contains(m.onion) && m_lastError.contains(m.onion))
             state += " — " + m_lastError.value(m.onion);
         if (!m_active.contains(m.onion) && !m_attempts.contains(m.onion)
@@ -774,6 +774,7 @@ void MainWindow::appendMessage(const QJsonObject &msg, bool mine, ChatEntry::Tru
         if (!image.isNull()) {
             e.image = Attachment::thumbnail(image);
             e.imageData = imageData;
+            e.animated = Attachment::isAnimated(imageData);
         }
     }
     e.reactions = reactionSummary(e.id); // réactions arrivées avant le message (synchronisation)
@@ -1635,53 +1636,57 @@ void MainWindow::sendCurrent()
 void MainWindow::chooseImage()
 {
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
-    const QString path = QFileDialog::getOpenFileName(
-        this, tr("Joindre une image"), dir, tr("Images (*.jpg *.jpeg *.png *.gif *.bmp *.webp *.heic *.tif *.tiff)"));
-    if (path.isEmpty())
-        return;
-    QString error;
-    const QImage image = Attachment::load(path, &error);
-    attachImage(image, error);
+    const QString path =
+        QFileDialog::getOpenFileName(this, tr("Joindre une image"), dir, Attachment::fileDialogFilter());
+    if (!path.isEmpty())
+        attachPrepared(Attachment::prepareFile(path));
 }
 
 bool MainWindow::attachFromMime(const QMimeData *mime)
 {
     if (!mime || !m_input->isEnabled())
         return false;
-    // Fichier (gestionnaire de fichiers) : on relit le fichier pour garder la qualité et l'orientation
+    // Fichier (gestionnaire de fichiers) : on relit le fichier pour garder la qualité, l'orientation et
+    // l'animation d'un GIF
     for (const QUrl &url : mime->urls()) {
         if (url.isLocalFile() && Attachment::isImageFile(url.toLocalFile())) {
-            QString error;
-            const QImage image = Attachment::load(url.toLocalFile(), &error);
-            attachImage(image, error);
+            attachPrepared(Attachment::prepareFile(url.toLocalFile()));
             return true;
         }
     }
-    // Image copiée depuis un navigateur ou une capture d'écran
+    // Image copiée depuis un navigateur ou une capture d'écran (toujours fixe)
     if (mime->hasImage()) {
-        attachImage(qvariant_cast<QImage>(mime->imageData()));
+        attachPrepared(Attachment::prepareImage(qvariant_cast<QImage>(mime->imageData())));
         return true;
     }
     return false;
 }
 
-void MainWindow::attachImage(const QImage &image, const QString &error)
+void MainWindow::attachPrepared(const Attachment::Prepared &prepared)
 {
-    const QByteArray jpeg = image.isNull() ? QByteArray() : Attachment::encode(image);
-    if (jpeg.isEmpty()) {
+    if (prepared.data.isEmpty()) {
         QMessageBox::warning(this, tr("Joindre une image"),
-                             tr("Impossible de joindre cette image%1.").arg(error.isEmpty() ? QString() : " : " + error));
+                             tr("Impossible de joindre cette image%1.")
+                                 .arg(prepared.error.isEmpty() ? QString() : " : " + prepared.error));
         return;
     }
-    m_pendingImage = jpeg;
-    const QImage sent = QImage::fromData(jpeg);
+    m_pendingImage = prepared.data;
     m_imagePreview->setPixmap(QPixmap::fromImage(
-        sent.scaled(m_imagePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation)));
-    m_imageInfo->setText(tr("<b>Image</b> · %1 × %2 · %3 Ko<br><span style='color:#5f6368'>"
-                            "Ajoutez une légende si vous voulez, puis Entrée</span>")
-                             .arg(sent.width())
-                             .arg(sent.height())
-                             .arg((jpeg.size() + 1023) / 1024));
+        prepared.preview.scaled(m_imagePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+    const QString kind = prepared.animated ? tr("GIF animé") : tr("Image");
+    QString hint = tr("Ajoutez une légende si vous voulez, puis Entrée");
+    if (prepared.frozen) // trop lourd pour partir tel quel
+        hint = tr("<span style='color:#b06000'>GIF trop lourd (%1 Ko, %2 Ko au plus) : il sera envoyé figé</span>")
+                   .arg((prepared.sourceBytes + 1023) / 1024)
+                   .arg(Attachment::MaxBytes / 1024);
+    else
+        hint = QStringLiteral("<span style='color:#5f6368'>%1</span>").arg(hint);
+    m_imageInfo->setText(tr("<b>%1</b> · %2 × %3 · %4 Ko<br>%5")
+                             .arg(kind)
+                             .arg(prepared.preview.width())
+                             .arg(prepared.preview.height())
+                             .arg((prepared.data.size() + 1023) / 1024)
+                             .arg(hint));
     m_imageBar->setVisible(true);
     m_input->setFocus();
 }

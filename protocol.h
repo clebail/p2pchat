@@ -2,6 +2,7 @@
 #include <QByteArray>
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 
 // Éléments communs du protocole : formats, limites et messages signés.
 namespace Protocol {
@@ -9,9 +10,12 @@ namespace Protocol {
 constexpr int MaxNickLength = 40;
 
 // Version annoncée dans le hello. 4 : identité Ed25519 ; 5 : citations (réponses) ; 6 : images ;
-// 7 : réactions (cf. reactions.h). Les versions antérieures à MinVersion sont refusées.
-constexpr int Version = 7;
+// 7 : réactions (cf. reactions.h) ; 8 : GIF animés. Les versions antérieures à MinVersion sont refusées.
+constexpr int Version = 8;
 constexpr int MinVersion = 4;
+
+// Ce qu'un pair de cette version ne voit pas (pour l'avertir dans l'état des membres) ; vide s'il est à jour
+QStringList missingFeatures(int peerVersion);
 
 // Adresse de service onion v3 : 56 caractères base32 + ".onion"
 bool isValidOnion(const QString &s);

@@ -531,6 +531,40 @@ private slots:
         view.grab();
     }
 
+    void animatedGif()
+    {
+        // GIF de 2 images de 1×1 dans un écran de 2×2 (cf. tst_attachment)
+        QByteArray g("GIF89a\x02\x00\x02\x00\x80\x00\x00\xff\x00\x00\x00\x00\xff", 19);
+        g.append("\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00", 19);
+        for (int i = 0; i < 2; ++i) {
+            g.append("\x21\xf9\x04\x04\x0a\x00\x00\x00", 8);
+            g.append("\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00", 10);
+            g.append("\x02\x02\x44\x01\x00", 5);
+        }
+        g.append(char(0x3b));
+
+        ChatView view;
+        view.resize(480, 400);
+        ChatEntry e = message(QString(), QDateTime::currentDateTime());
+        e.id = "gif";
+        e.image = QImage::fromData(g);
+        e.imageData = g;
+        e.animated = true;
+        QVERIFY(!e.image.isNull());
+        view.addMessage(e);
+        QVERIFY(view.animationFrame(view.chatModel()->entry(0)).isNull()); // pas affichée : pas animée
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        view.grab(); // le dessin lance l'animation
+        QCOMPARE(view.runningAnimations(), 1);
+        QVERIFY(!view.animationFrame(view.chatModel()->entry(0)).isNull());
+        view.hide(); // fenêtre masquée : arrêtée
+        QCOMPARE(view.runningAnimations(), 0);
+        view.show();
+        view.clearAll();
+        QCOMPARE(view.runningAnimations(), 0);
+    }
+
     void avatarColorIsStable()
     {
         QCOMPARE(ChatView::colorFor("Alice"), ChatView::colorFor("Alice"));
