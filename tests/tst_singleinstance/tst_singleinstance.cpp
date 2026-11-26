@@ -7,6 +7,25 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include <chrono>
+#include <future>
+
+namespace {
+// Une instance lancée ensuite, comme un second processus : son appel bloquant part d'un autre thread pendant que
+// celui-ci traite ses événements. Sous Windows, l'écriture sur le tube nommé n'est confirmée qu'une fois lue :
+// depuis le thread du serveur, elle attendrait jusqu'au délai.
+bool activateFromOtherProcess(const QString &dataDir, int timeoutMs = 2000)
+{
+    auto result = std::async(std::launch::async, [dataDir, timeoutMs] {
+        SingleInstance other(dataDir);
+        return other.activateRunning(timeoutMs);
+    });
+    while (result.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    return result.get();
+}
+} // namespace
+
 class TestSingleInstance : public QObject
 {
     Q_OBJECT
@@ -21,9 +40,9 @@ private slots:
 
         SingleInstance second(dir.path());
         QVERIFY(!second.acquire()); // déjà ouverte
-        QVERIFY(second.activateRunning());
+        QVERIFY(activateFromOtherProcess(dir.path()));
         QTRY_COMPARE(shown.count(), 1); // la première se montre
-        QVERIFY(second.activateRunning());
+        QVERIFY(activateFromOtherProcess(dir.path()));
         QTRY_COMPARE(shown.count(), 2);
     }
 
@@ -48,7 +67,7 @@ private slots:
         QVERIFY(first.acquire());
         QVERIFY(second.acquire()); // autre utilisateur ou autre dossier de données
         QSignalSpy shown(&first, &SingleInstance::activationRequested);
-        QVERIFY(second.activateRunning()); // se joint lui-même, pas l'autre
+        QVERIFY(activateFromOtherProcess(b.path())); // joint « second », pas « first »
         QTest::qWait(100);
         QCOMPARE(shown.count(), 0);
     }
@@ -76,7 +95,7 @@ private slots:
         QSignalSpy shown(&next, &SingleInstance::activationRequested);
         SingleInstance later(dir.path());
         QVERIFY(!later.acquire());
-        QVERIFY(later.activateRunning());
+        QVERIFY(activateFromOtherProcess(dir.path()));
         QTRY_COMPARE(shown.count(), 1);
     }
 
@@ -84,7 +103,7 @@ private slots:
     {
         QTemporaryDir dir;
         SingleInstance alone(dir.path());
-        QVERIFY(!alone.activateRunning(200)); // personne n'écoute
+        QVERIFY(!activateFromOtherProcess(dir.path(), 200)); // personne n'écoute
     }
 };
 
