@@ -21,11 +21,9 @@
 {
     Q_UNUSED(center);
     Q_UNUSED(notification);
-    if (@available(macOS 11.0, *))
-        completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList
-                          | UNNotificationPresentationOptionSound);
-    else
-        completionHandler(UNNotificationPresentationOptionAlert | UNNotificationPresentationOptionSound);
+    // macOS 11 minimum (QMAKE_MACOSX_DEPLOYMENT_TARGET) : bannière et centre de notifications
+    completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList
+                      | UNNotificationPresentationOptionSound);
 }
 
 // Clic sur la notification : on rouvre la fenêtre

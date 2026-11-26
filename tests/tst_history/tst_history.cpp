@@ -1,6 +1,7 @@
 #include "history.h"
 
 #include <QJsonDocument>
+#include <QTimeZone>
 #include <QtTest>
 
 namespace {
@@ -77,7 +78,7 @@ private slots:
         QVERIFY(rows[0].mine);
         QCOMPARE(rows[0].msg.value("n").toString(), QString("Bob"));
         QCOMPARE(rows[0].msg.value("x").toString(), QString("vieux"));
-        QCOMPARE(rows[0].ts, QDateTime(QDate(2020, 1, 2), QTime(3, 4, 5), Qt::UTC).toMSecsSinceEpoch());
+        QCOMPARE(rows[0].ts, QDateTime(QDate(2020, 1, 2), QTime(3, 4, 5), QTimeZone::utc()).toMSecsSinceEpoch());
     }
 
     void cutoffs()

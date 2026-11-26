@@ -1,5 +1,7 @@
 #include "notifications.h"
 
+#include <QTimeZone>
+
 Notifications::Mode Notifications::modeFromString(const QString &s)
 {
     if (s == QLatin1String("forMe"))
@@ -39,5 +41,5 @@ bool Notifications::shouldNotify(Mode mode, qint64 pausedUntilMs, qint64 nowMs, 
 
 QDateTime Notifications::tomorrowMorning(const QDateTime &now)
 {
-    return QDateTime(now.date().addDays(1), QTime(8, 0), now.timeSpec());
+    return QDateTime(now.date().addDays(1), QTime(8, 0), now.timeZone()); // même fuseau que « maintenant »
 }
