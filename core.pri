@@ -30,6 +30,7 @@ SOURCES += \
     $$PWD/reactions.cpp \
     $$PWD/safetynumber.cpp \
     $$PWD/singleinstance.cpp \
+    $$PWD/spellchecker.cpp \
     $$PWD/switchboard.cpp
 
 HEADERS += \
@@ -55,6 +56,7 @@ HEADERS += \
     $$PWD/reactions.h \
     $$PWD/safetynumber.h \
     $$PWD/singleinstance.h \
+    $$PWD/spellchecker.h \
     $$PWD/switchboard.h
 
 # OpenSSL (libcrypto) : X25519, Ed25519, HKDF, ChaCha20-Poly1305
@@ -70,4 +72,30 @@ macx {
     LIBS += -L$$(OPENSSL_DIR)/lib -llibcrypto
 } else {
     LIBS += -lcrypto
+}
+
+# Hunspell (correcteur orthographique), facultatif : sans lui, l'application se compile sans correction.
+# HUNSPELL_DIR (dossier avec include/ et lib/, celui de vcpkg sous Windows), sinon pkg-config (Linux, Homebrew).
+HUNSPELL_DIR = $$(HUNSPELL_DIR)
+!isEmpty(HUNSPELL_DIR) {
+    for(name, $$list(hunspell-1.7 libhunspell hunspell)) {
+        isEmpty(HUNSPELL_LIB): exists($$HUNSPELL_DIR/lib/$${name}.lib): HUNSPELL_LIB = $$name
+        isEmpty(HUNSPELL_LIB): exists($$HUNSPELL_DIR/lib/lib$${name}.so): HUNSPELL_LIB = $$name
+        isEmpty(HUNSPELL_LIB): exists($$HUNSPELL_DIR/lib/lib$${name}.dylib): HUNSPELL_LIB = $$name
+    }
+    isEmpty(HUNSPELL_LIB) {
+        warning("Hunspell introuvable dans $$HUNSPELL_DIR/lib : pas de correcteur orthographique")
+    } else {
+        INCLUDEPATH += $$HUNSPELL_DIR/include/hunspell
+        LIBS += -L$$HUNSPELL_DIR/lib -l$$HUNSPELL_LIB
+        DEFINES += P2P_SPELLCHECK
+    }
+} else:!win32-msvc* { # pkg-config : Linux, Homebrew, MSYS2
+    CONFIG += link_pkgconfig
+    packagesExist(hunspell) {
+        PKGCONFIG += hunspell
+        DEFINES += P2P_SPELLCHECK
+    } else {
+        message("Hunspell absent (paquet libhunspell-dev, ou brew install hunspell) : pas de correcteur orthographique")
+    }
 }

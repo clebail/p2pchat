@@ -15,6 +15,7 @@
 #include "groupnode.h"
 #include "protocol.h"
 #include "safetynumber.h"
+#include "spellchecker.h"
 #include "switchboard.h"
 #include "torservice.h"
 #ifdef P2P_TERMINAL
@@ -33,6 +34,7 @@
 #include <QComboBox>
 #include <QSystemTrayIcon>
 #include <QDesktopServices>
+#include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -204,6 +206,77 @@ void MainWindow::buildLanguageMenu(QMenu *menu)
                                      QStringLiteral("La nouvelle langue sera utilisée au prochain démarrage de "
                                                     "P2P Chat.\n\nThe new language will be used the next time "
                                                     "P2P Chat starts."));
+        });
+    }
+}
+
+// ---------------------------------------------------------------- Correcteur orthographique
+
+namespace {
+// Langue du correcteur selon le réglage : vide (celle de l'interface), "fr", "en" ou "off"
+QString spellingLanguage(const QString &setting)
+{
+    if (setting == "fr" || setting == "en" || setting == "off")
+        return setting;
+    return QLocale().language() == QLocale::French ? QStringLiteral("fr") : QStringLiteral("en");
+}
+} // namespace
+
+void MainWindow::applySpelling()
+{
+    const QString language = spellingLanguage(m_settings.value("spelling/language").toString());
+    const QString dic = language == "off" ? QString() : SpellChecker::findDictionary(language);
+    if (dic.isEmpty()) {
+        m_spell.reset();
+        m_input->setSpellChecker(nullptr);
+        return;
+    }
+    if (!m_spell)
+        m_spell = std::make_unique<SpellChecker>();
+    if (!m_spell->load(dic)) {
+        qWarning().noquote() << "[orthographe] dictionnaire illisible :" << dic;
+        m_spell.reset();
+        m_input->setSpellChecker(nullptr);
+        return;
+    }
+    m_spell->setLanguage(language);
+    for (const QString &word : m_settings.value("spelling/words").toStringList())
+        m_spell->addWord(word);
+    m_input->setSpellChecker(m_spell.get());
+}
+
+void MainWindow::buildSpellingMenu(QMenu *menu)
+{
+    menu->clear();
+    if (!SpellChecker::supported()) {
+        menu->addAction(tr("Non disponible dans cette version"))->setEnabled(false);
+        return;
+    }
+    const QString current = m_settings.value("spelling/language").toString();
+    const QString automatic = spellingLanguage({});
+    auto name = [](const QString &language) {
+        return language == "fr" ? QStringLiteral("Français") : QStringLiteral("English");
+    };
+    auto *group = new QActionGroup(menu);
+    const QList<QPair<QString, QString>> choices{{QString(), tr("Comme l'interface (%1)").arg(name(automatic))},
+                                                 {QStringLiteral("fr"), name("fr")},
+                                                 {QStringLiteral("en"), name("en")},
+                                                 {QStringLiteral("off"), tr("Désactivé")}};
+    for (const auto &choice : choices) {
+        const QString language = spellingLanguage(choice.first);
+        const bool available = language == "off" || !SpellChecker::findDictionary(language).isEmpty();
+        QAction *a = menu->addAction(available ? choice.second : tr("%1 — dictionnaire introuvable").arg(choice.second));
+        a->setCheckable(true);
+        a->setChecked(choice.first == current || (choice.first.isEmpty() && current.isEmpty()));
+        a->setEnabled(available);
+        group->addAction(a);
+        const QString value = choice.first;
+        connect(a, &QAction::triggered, this, [this, value] {
+            if (value.isEmpty())
+                m_settings.remove("spelling/language");
+            else
+                m_settings.setValue("spelling/language", value);
+            applySpelling();
         });
     }
 }

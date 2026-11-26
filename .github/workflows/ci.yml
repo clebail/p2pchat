@@ -1,5 +1,5 @@
 # Compilation et tests à chaque push et pull request : Linux (Qt 5 et Qt 6, avec un passage aux sanitizers), macOS, Windows
-# Caches : ccache sous Linux (seuls les fichiers modifiés sont recompilés), Qt et OpenSSL déjà compilé sous Windows.
+# Caches : ccache sous Linux (seuls les fichiers modifiés sont recompilés), Qt, OpenSSL et Hunspell déjà compilés sous Windows.
 # macOS sans ccache : qmake y appelle les compilateurs de Xcode par leur chemin complet.
 name: CI
 
@@ -25,7 +25,7 @@ jobs:
       - name: Dépendances
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qtbase5-dev qtbase5-dev-tools qt5-qmake qttools5-dev-tools libssl-dev
+          sudo apt-get install -y --no-install-recommends qtbase5-dev qtbase5-dev-tools qt5-qmake qttools5-dev-tools libssl-dev libhunspell-dev hunspell-fr hunspell-en-us
           echo /usr/lib/qt5/bin >> "$GITHUB_PATH"
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
@@ -52,7 +52,7 @@ jobs:
       - name: Dépendances
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qt6-base-dev qt6-base-dev-tools qmake6 qt6-l10n-tools libssl-dev
+          sudo apt-get install -y --no-install-recommends qt6-base-dev qt6-base-dev-tools qmake6 qt6-l10n-tools libssl-dev libhunspell-dev hunspell-fr hunspell-en-us
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: linux-qt6
@@ -77,7 +77,7 @@ jobs:
       - name: Dépendances
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qtbase5-dev qtbase5-dev-tools qt5-qmake qttools5-dev-tools libssl-dev
+          sudo apt-get install -y --no-install-recommends qtbase5-dev qtbase5-dev-tools qt5-qmake qttools5-dev-tools libssl-dev libhunspell-dev hunspell-fr hunspell-en-us
           echo /usr/lib/qt5/bin >> "$GITHUB_PATH"
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
@@ -93,7 +93,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Dépendances
         run: |
-          brew install qt@5 openssl@3
+          brew install qt@5 openssl@3 hunspell pkgconf
           echo "$(brew --prefix qt@5)/bin" >> "$GITHUB_PATH"
       - name: Application
         run: |
@@ -124,15 +124,16 @@ jobs:
           path: ${{ github.workspace }}\vcpkg-cache
           key: vcpkg-openssl-${{ runner.os }}-${{ github.run_id }}
           restore-keys: vcpkg-openssl-${{ runner.os }}-
-      - name: OpenSSL (vcpkg)
+      - name: OpenSSL et Hunspell (vcpkg)
         shell: pwsh
         env:
           VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\vcpkg-cache,readwrite
         run: |
           New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\vcpkg-cache" | Out-Null
-          vcpkg install openssl:x64-windows
+          vcpkg install openssl:x64-windows hunspell:x64-windows
           $dir = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
           "OPENSSL_DIR=$dir" >> $env:GITHUB_ENV
+          "HUNSPELL_DIR=$dir" >> $env:GITHUB_ENV
           "$dir\bin" >> $env:GITHUB_PATH
       - name: Application
         shell: cmd

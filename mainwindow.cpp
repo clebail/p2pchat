@@ -15,6 +15,7 @@
 #include "groupnode.h"
 #include "protocol.h"
 #include "safetynumber.h"
+#include "spellchecker.h"
 #include "switchboard.h"
 #include "torservice.h"
 #ifdef P2P_TERMINAL
@@ -129,6 +130,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 #endif
 
     buildUi();
+    applySpelling();
     setupTray();
     m_notifier = new Notifier(this);
     m_notifier->setTray(m_tray);
@@ -554,6 +556,9 @@ void MainWindow::buildUi()
     connect(notifications, &QMenu::aboutToShow, this, [this, notifications] { buildNotificationMenu(notifications); });
     buildNotificationMenu(notifications); // le sous-menu doit avoir un contenu pour s'afficher
     buildLanguageMenu(menu->addMenu(tr("Langue")));
+    QMenu *spelling = menu->addMenu(tr("Correcteur orthographique"));
+    connect(spelling, &QMenu::aboutToShow, this, [this, spelling] { buildSpellingMenu(spelling); });
+    buildSpellingMenu(spelling); // le sous-menu doit avoir un contenu pour s'afficher
     menu->addAction(tr("Membres…"), this, &MainWindow::showMembers);
     menu->addAction(tr("Vérifier l'identité d'un membre…"), this, &MainWindow::verifyMember);
     menu->addAction(tr("Changer de pseudo…"), this, &MainWindow::changeNickname);
@@ -739,6 +744,14 @@ void MainWindow::buildUi()
     m_input->setMinimumHeight(48);
     m_input->setPlaceholderText(tr("Message"));
     m_input->setToolTip(tr("Entrée : envoyer · Maj+Entrée : aller à la ligne · `code`, ```bloc```"));
+    connect(m_input, &Composer::wordAdded, this, [this](const QString &word) {
+        QStringList words = m_settings.value("spelling/words").toStringList();
+        if (!words.contains(word))
+            m_settings.setValue("spelling/words", words << word);
+        if (m_spell)
+            m_spell->addWord(word);
+        m_input->recheckSpelling();
+    });
     m_mentions = new MentionCompleter(m_input);
     connect(m_input, &Composer::attachmentInserted, this, &MainWindow::attachFromMime); // collage, dépôt
     m_attachButton = new QToolButton(composerBar);

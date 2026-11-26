@@ -21,6 +21,7 @@
 #include <memory>
 #include <vector>
 
+class SpellChecker;
 class QAction;
 class QListWidget;
 class QListWidgetItem;
@@ -147,6 +148,10 @@ private:
     void changeNickname();
     // Langue de l'interface : automatique, français, anglais (appliquée au prochain démarrage)
     void buildLanguageMenu(QMenu *menu);
+    // Correcteur orthographique : réglage « spelling/language » (vide : langue de l'interface, "fr", "en",
+    // "off") et dictionnaire personnel (« spelling/words »)
+    void buildSpellingMenu(QMenu *menu);
+    void applySpelling();
     void changeAvatar(); // le nôtre, commun à toutes les conversations (cf. avatar.h)
     void changeConversationAvatar(); // administrateurs : le même pour tous les membres
     // Choix d'un avatar : aperçu (dessiné par preview, à la taille demandée), Choisir une image…, Retirer
@@ -195,6 +200,7 @@ private:
     QToolButton *m_sidebarButton = nullptr;
     bool m_sidebarWanted = true; // choix de l'utilisateur (la colonne se replie d'elle-même si c'est étroit)
     Composer *m_input = nullptr;
+    std::unique_ptr<SpellChecker> m_spell;
     MentionCompleter *m_mentions = nullptr;
     QWidget *m_replyBar = nullptr;
     QLabel *m_replyLabel = nullptr;

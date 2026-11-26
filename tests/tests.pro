@@ -17,6 +17,7 @@ SUBDIRS += \
     tst_reactions \
     tst_safetynumber \
     tst_singleinstance \
+    tst_spellchecker \
     tst_filestore \
     tst_governance \
     tst_groupnode \

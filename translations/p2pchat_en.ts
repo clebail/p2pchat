@@ -144,6 +144,17 @@
     </message>
 </context>
 <context>
+    <name>Composer</name>
+    <message>
+        <source>(aucune suggestion)</source>
+        <translation>(no suggestions)</translation>
+    </message>
+    <message>
+        <source>Ajouter « %1 » au dictionnaire</source>
+        <translation>Add “%1” to dictionary</translation>
+    </message>
+</context>
+<context>
     <name>Conversation</name>
     <message>
         <source>%1 a rejoint la conversation.</source>
@@ -1377,6 +1388,26 @@ Invitation codes already given will no longer work for people who have not joine
     <message>
         <source>vous propose de partager sa console</source>
         <translation>offers to share their console</translation>
+    </message>
+    <message>
+        <source>Correcteur orthographique</source>
+        <translation>Spell checking</translation>
+    </message>
+    <message>
+        <source>Non disponible dans cette version</source>
+        <translation>Not available in this version</translation>
+    </message>
+    <message>
+        <source>Comme l&apos;interface (%1)</source>
+        <translation>Same as interface (%1)</translation>
+    </message>
+    <message>
+        <source>Désactivé</source>
+        <translation>Off</translation>
+    </message>
+    <message>
+        <source>%1 — dictionnaire introuvable</source>
+        <translation>%1 — dictionary not found</translation>
     </message>
 </context>
 <context>

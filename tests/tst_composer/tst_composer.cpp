@@ -1,10 +1,13 @@
 #include "composer.h"
+#include "spellchecker.h"
 
 #include <QApplication>
 #include <QClipboard>
 #include <QMimeData>
 #include <QSignalSpy>
 #include <QTemporaryFile>
+#include <QTextBlock>
+#include <QTextLayout>
 #include <QtTest>
 
 #include <memory>
@@ -15,6 +18,21 @@ class TestComposer : public QObject
 
 private:
     std::unique_ptr<Composer> m_edit;
+
+    using Spans = QList<QPair<int, int>>;
+    // Mots soulignés par le correcteur : positions (début, longueur) dans le premier paragraphe
+    Spans underlined() const
+    {
+        Spans out;
+        for (const QTextLayout::FormatRange &r : m_edit->document()->firstBlock().layout()->formats())
+            if (r.format.underlineStyle() == QTextCharFormat::SpellCheckUnderline) {
+                if (!out.isEmpty() && out.last().first + out.last().second == r.start)
+                    out.last().second += r.length; // souligné lettre par lettre : regroupé
+                else
+                    out << qMakePair(r.start, r.length);
+            }
+        return out;
+    }
 
 private slots:
     void init()
@@ -98,6 +116,38 @@ private slots:
         QApplication::clipboard()->setMimeData(mime);
         m_edit->paste();
         QCOMPARE(m_edit->text(), QString("gras"));
+    }
+
+    void misspelledWordsAreUnderlined()
+    {
+        SpellChecker checker;
+        if (!checker.load(DICT_DIR "/utf8.dic"))
+            QSKIP("compilé sans Hunspell");
+        m_edit->setSpellChecker(&checker);
+        QSignalSpy edited(m_edit.get(), &Composer::textEdited);
+
+        // En cours de frappe : le mot n'est souligné qu'une fois quitté
+        QTest::keyClicks(m_edit.get(), "bonjour mnde");
+        QVERIFY(underlined().isEmpty());
+        QTest::keyClicks(m_edit.get(), " ");
+        QCOMPARE(underlined(), (Spans{{8, 4}}));
+        QTest::keyClicks(m_edit.get(), "chta");
+        QCOMPARE(underlined(), (Spans{{8, 4}}));
+        QTest::keyClick(m_edit.get(), Qt::Key_Home); // curseur ailleurs : vérifié
+        QCOMPARE(underlined(), (Spans{{8, 4}, {13, 4}}));
+        const int edits = edited.count();
+        QTest::keyClick(m_edit.get(), Qt::Key_End);
+        QCOMPARE(edited.count(), edits); // la mise en forme n'est pas une frappe
+
+        // Ajouté au dictionnaire : plus souligné
+        checker.addWord("chta");
+        m_edit->recheckSpelling();
+        QCOMPARE(underlined(), (Spans{{8, 4}}));
+
+        // Sans correcteur : rien
+        m_edit->setSpellChecker(nullptr);
+        QVERIFY(underlined().isEmpty());
+        QCOMPARE(edited.count(), edits);
     }
 
     void fileIsHandedOver()

@@ -1,8 +1,11 @@
 #include "composer.h"
 
 #include "markup.h"
+#include "spellchecker.h"
 
 #include <QAbstractTextDocumentLayout>
+#include <QContextMenuEvent>
+#include <QMenu>
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QScrollBar>
@@ -27,23 +30,48 @@ bool hasAttachment(const QMimeData *mime)
                        [](const QUrl &u) { return u.isLocalFile() && QFileInfo(u.toLocalFile()).isFile(); });
 }
 
-// Émojis tapés ou collés : police en couleur (cf. Markup::emojiRuns), comme dans les bulles
-class EmojiHighlighter : public QSyntaxHighlighter
+} // namespace
+
+// Un seul surligneur par document : émojis tapés ou collés en police couleur (cf. Markup::emojiRuns), comme
+// dans les bulles, et mots inconnus du correcteur soulignés (sauf celui qu'on est en train de taper)
+class ComposerHighlighter : public QSyntaxHighlighter
 {
 public:
     using QSyntaxHighlighter::QSyntaxHighlighter;
+    const SpellChecker *checker = nullptr;
+    int cursor = -1;          // position du curseur dans le document
+    int skippedBlock = -1;    // bloc où un mot a été épargné parce que le curseur était à sa fin
 
 protected:
     void highlightBlock(const QString &text) override
     {
-        QTextCharFormat format;
-        format.setFontFamilies({Markup::emojiFontFamily()});
-        for (const auto &run : Markup::emojiRuns(text))
-            setFormat(run.first, run.second, format);
+        static const QString emojiFamily = Markup::emojiFontFamily();
+        if (!emojiFamily.isEmpty()) {
+            QTextCharFormat format;
+            format.setFontFamilies({emojiFamily});
+            for (const auto &run : Markup::emojiRuns(text))
+                setFormat(run.first, run.second, format);
+        }
+        if (skippedBlock == currentBlock().blockNumber())
+            skippedBlock = -1;
+        if (!checker)
+            return;
+        const int inBlock = cursor - currentBlock().position();
+        for (const auto &word : checker->misspelled(text)) {
+            // Mot en cours de frappe : souligné seulement une fois quitté
+            if (word.first + word.second == inBlock) {
+                skippedBlock = currentBlock().blockNumber();
+                continue;
+            }
+            for (int i = word.first; i < word.first + word.second; ++i) {
+                QTextCharFormat f = format(i);
+                f.setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
+                f.setUnderlineColor(QColor("#d93025"));
+                setFormat(i, 1, f);
+            }
+        }
     }
 };
-
-} // namespace
 
 Composer::Composer(QWidget *parent) : QPlainTextEdit(parent)
 {
@@ -54,9 +82,9 @@ Composer::Composer(QWidget *parent) : QPlainTextEdit(parent)
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     document()->setDocumentMargin(2);
-    if (!Markup::emojiFontFamily().isEmpty())
-        new EmojiHighlighter(document());
+    m_highlighter = new ComposerHighlighter(document());
     connect(this, &QPlainTextEdit::textChanged, this, &Composer::onTextChanged);
+    connect(this, &QPlainTextEdit::cursorPositionChanged, this, &Composer::onCursorMoved);
     updateHeight();
 }
 
@@ -117,6 +145,89 @@ void Composer::insertFromMimeData(const QMimeData *source)
     }
     if (source && source->hasText())
         insertPlainText(source->text()); // jamais de texte mis en forme
+}
+
+void Composer::setSpellChecker(const SpellChecker *checker)
+{
+    m_highlighter->checker = checker && checker->isLoaded() ? checker : nullptr;
+    recheckSpelling();
+}
+
+void Composer::recheckSpelling()
+{
+    m_highlighter->cursor = textCursor().position();
+    withoutEditSignal([this] { m_highlighter->rehighlight(); });
+}
+
+void Composer::withoutEditSignal(const std::function<void()> &f)
+{
+    // Changer la mise en forme signale le document comme modifié : ce n'est pas une frappe
+    const bool was = m_programmatic;
+    m_programmatic = true;
+    f();
+    m_programmatic = was;
+}
+
+void Composer::onCursorMoved()
+{
+    if (!m_highlighter->checker)
+        return;
+    // Le mot épargné pendant la frappe est vérifié dès que le curseur s'en va (et le nouveau, épargné)
+    m_highlighter->cursor = textCursor().position();
+    const int skipped = m_highlighter->skippedBlock;
+    const QTextBlock current = textCursor().block();
+    withoutEditSignal([&] {
+        if (skipped >= 0 && skipped != current.blockNumber())
+            m_highlighter->rehighlightBlock(document()->findBlockByNumber(skipped));
+        m_highlighter->rehighlightBlock(current);
+    });
+}
+
+std::optional<QPair<int, int>> Composer::misspelledAt(const QTextCursor &at) const
+{
+    if (!m_highlighter->checker)
+        return std::nullopt;
+    const int pos = at.positionInBlock();
+    for (const auto &word : m_highlighter->checker->misspelled(at.block().text()))
+        if (pos >= word.first && pos <= word.first + word.second)
+            return qMakePair(at.block().position() + word.first, word.second);
+    return std::nullopt;
+}
+
+void Composer::contextMenuEvent(QContextMenuEvent *event)
+{
+    QMenu *menu = createStandardContextMenu(event->pos());
+    const auto word = misspelledAt(cursorForPosition(event->pos()));
+    if (word) {
+        const QString misspelled = text().mid(word->first, word->second);
+        QAction *first = menu->actions().value(0);
+        const QStringList suggestions = m_highlighter->checker->suggestions(misspelled);
+        QFont bold = menu->font();
+        bold.setBold(true);
+        for (const QString &s : suggestions) {
+            auto *a = new QAction(s, menu);
+            a->setFont(bold);
+            connect(a, &QAction::triggered, this, [this, word, s] {
+                QTextCursor c = textCursor();
+                c.setPosition(word->first);
+                c.setPosition(word->first + word->second, QTextCursor::KeepAnchor);
+                c.insertText(s);
+                setTextCursor(c);
+            });
+            menu->insertAction(first, a);
+        }
+        if (suggestions.isEmpty()) {
+            auto *none = new QAction(tr("(aucune suggestion)"), menu);
+            none->setEnabled(false);
+            menu->insertAction(first, none);
+        }
+        auto *add = new QAction(tr("Ajouter « %1 » au dictionnaire").arg(misspelled), menu);
+        connect(add, &QAction::triggered, this, [this, misspelled] { emit wordAdded(misspelled); });
+        menu->insertAction(first, add);
+        menu->insertSeparator(first);
+    }
+    menu->exec(event->globalPos());
+    delete menu;
 }
 
 void Composer::onTextChanged()

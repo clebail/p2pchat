@@ -130,6 +130,11 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 - Arrivées et départs regroupés : les « X est en ligne » / « X s'est déconnecté(e) » consécutifs tiennent sur une
   seule ligne (un clic la déplie). Une coupure n'est annoncée que si le membre n'est pas revenu au bout de 60 s,
   et qu'aucun autre membre ne le voit encore en ligne.
+- **Correcteur orthographique** (⋮ → *Correcteur orthographique*) : les mots inconnus sont soulignés en
+  rouge dans la zone de saisie, une fois le mot terminé. Le clic droit propose des corrections et *Ajouter au
+  dictionnaire* (dictionnaire personnel, conservé). Langue : comme l'interface (par défaut), français, anglais,
+  ou désactivé. Le code, les liens, les mentions, les nombres et les sigles ne sont pas vérifiés. Utilise
+  Hunspell et les dictionnaires de LibreOffice (cf. *Compiler*).
 - **Langue** (⋮ → *Langue*) : français ou anglais. *Automatique* (par défaut) suit le système : français si
   c'est sa langue préférée, anglais sinon. Le changement s'applique au prochain démarrage. Les dates et les
   tailles de fichiers suivent la langue choisie.
@@ -216,10 +221,20 @@ permet de choisir l'exécutable à la main (clé `torPath` de la configuration).
 
 Dépendances : Qt 6 (Widgets, Network, et `lrelease` pour compiler les traductions) et OpenSSL 3 (libcrypto).
 Qt 5.15 fonctionne aussi (`qtbase5-dev qttools5-dev-tools`, puis `qmake` au lieu de `qmake6`).
+Facultatif : Hunspell pour le correcteur orthographique (sans lui, l'application se compile sans correcteur).
+qmake le trouve par pkg-config (Linux, Homebrew), ou dans `HUNSPELL_DIR` (dossier avec `include/` et `lib/`,
+celui de vcpkg sous Windows).
+
+**Dictionnaires** (`<langue>.aff` + `<langue>.dic`, ceux de LibreOffice : `fr`/`fr_FR`, `en_US`/`en_GB`/`en`),
+cherchés dans cet ordre : dossier `dictionaries/` à côté de l'exécutable (sous macOS :
+`P2PChat.app/Contents/Resources/dictionaries/`), dossier de données de P2P Chat (`…/dictionaries/`), puis
+ceux du système (`/usr/share/hunspell` sous Linux ; `$(brew --prefix)/share/hunspell` et `~/Library/Spelling`
+sous macOS). Pour une version autonome sous Windows ou macOS, copier les dictionnaires dans `dictionaries/`
+(dépôt `LibreOffice/dictionaries` : `fr_FR/fr.aff`, `fr_FR/fr.dic`, `en/en_US.aff`, `en/en_US.dic`).
 
 **Linux**
 ```bash
-sudo apt install qt6-base-dev qt6-l10n-tools libssl-dev tor
+sudo apt install qt6-base-dev qt6-l10n-tools libssl-dev libhunspell-dev hunspell-fr hunspell-en-us tor
 mkdir build && cd build && qmake6 ../p2pchat.pro && make -j
 ./p2pchat
 make install   # facultatif : installe dans ~/.local (menu des applications + icône des notifications)
@@ -227,7 +242,7 @@ make install   # facultatif : installe dans ~/.local (menu des applications + ic
 
 **macOS**
 ```bash
-brew install qt openssl@3 tor     # macOS 11 minimum
+brew install qt openssl@3 hunspell pkgconf tor     # macOS 11 minimum
 mkdir build && cd build && qmake ../p2pchat.pro && make -j
 macdeployqt P2PChat.app           # rend l'application autonome
 open P2PChat.app
@@ -238,7 +253,7 @@ clic droit → **Ouvrir**.
 
 **Windows** (MSYS2 / MinGW)
 ```bash
-pacman -S mingw-w64-x86_64-qt6-base mingw-w64-x86_64-qt6-tools mingw-w64-x86_64-openssl
+pacman -S mingw-w64-x86_64-qt6-base mingw-w64-x86_64-qt6-tools mingw-w64-x86_64-openssl mingw-w64-x86_64-hunspell
 mkdir build && cd build && qmake6 ../p2pchat.pro && mingw32-make
 windeployqt release/p2pchat.exe   # + copier libcrypto-3-x64.dll et le dossier tor\
 ```
@@ -334,6 +349,7 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 | Fichier | Rôle |
 |---|---|
 | `torservice.*` | Lancement de tor, torrc, progression, adresse onion |
+| `spellchecker.*` | Correcteur orthographique (Hunspell) : dictionnaires, mots à souligner, suggestions |
 | `language.*`, `translations/` | Langue de l'interface (réglage, système), traductions de P2P Chat et de Qt |
 | `peerconnection.*` | Trames, poignée de main, messages chiffrés, ping |
 | `switchboard.*` | Écoute locale commune : chaque connexion entrante va à la conversation dont elle présente le secret |

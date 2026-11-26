@@ -1,13 +1,20 @@
 #pragma once
 #include <QPlainTextEdit>
 
+#include <functional>
+#include <optional>
+
+class ComposerHighlighter;
 class QMimeData;
+class SpellChecker;
 
 // Zone de saisie des messages, sur plusieurs lignes :
 //  - Entrée envoie (returnPressed), Maj+Entrée va à la ligne ;
 //  - la hauteur suit le texte, de 1 à MaxLines lignes (ascenseur au-delà) ;
 //  - une image ou un fichier collé ou déposé n'est pas inséré : attachmentInserted le transmet ;
-//  - le texte collé l'est sans mise en forme.
+//  - le texte collé l'est sans mise en forme ;
+//  - avec un correcteur (setSpellChecker), les mots inconnus sont soulignés, et le clic droit propose des
+//    corrections et l'ajout au dictionnaire.
 class Composer : public QPlainTextEdit
 {
     Q_OBJECT
@@ -26,6 +33,9 @@ public:
     int visibleLines() const; // lignes affichées (1 à MaxLines)
     // Liste de complétion (mentions) : ouverte, Entrée et Tab lui reviennent
     void setCompletionPopup(QWidget *popup) { m_popup = popup; }
+    // Correcteur orthographique (nul ou sans dictionnaire : aucun soulignement) ; il doit rester valable
+    void setSpellChecker(const SpellChecker *checker);
+    void recheckSpelling(); // après un ajout au dictionnaire
 
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
@@ -34,15 +44,20 @@ signals:
     void returnPressed();
     void textEdited(const QString &text);    // modification faite par l'utilisateur (frappe, collage)
     void attachmentInserted(const QMimeData *mime); // image ou fichier collé ou déposé
+    void wordAdded(const QString &word);            // « Ajouter au dictionnaire » (clic droit)
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
     bool canInsertFromMimeData(const QMimeData *source) const override;
     void insertFromMimeData(const QMimeData *source) override;
     void resizeEvent(QResizeEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
 
 private:
     void onTextChanged();
+    void onCursorMoved();
+    void withoutEditSignal(const std::function<void()> &f);
+    std::optional<QPair<int, int>> misspelledAt(const QTextCursor &at) const; // (position, longueur) du mot
     void updateHeight();
     int heightForLines(int lines) const;
     int totalLines() const;
@@ -51,4 +66,5 @@ private:
     int m_minHeight = 0;
     QWidget *m_popup = nullptr;
     bool m_programmatic = false;
+    ComposerHighlighter *m_highlighter = nullptr;
 };
