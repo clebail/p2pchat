@@ -7,6 +7,7 @@ SUBDIRS += \
     tst_crypto \
     tst_edits \
     tst_invitation \
+    tst_language \
     tst_links \
     tst_markup \
     tst_mentions \

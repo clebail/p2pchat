@@ -6,6 +6,7 @@
 #include "composer.h"
 #include "crypto.h"
 #include "invitation.h"
+#include "language.h"
 #include "mentioncompleter.h"
 #include "mentions.h"
 #include "notifications.h"
@@ -46,6 +47,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QLocale>
 #include <QActionGroup>
 #include <QMenu>
 #include <QPainter>
@@ -173,6 +175,37 @@ void MainWindow::chooseConversationMembers()
             chosen << list->item(i)->data(Qt::UserRole).toString();
     if (!chosen.isEmpty())
         startConversationWith(chosen, name->text());
+}
+
+// ---------------------------------------------------------------- Langue
+
+void MainWindow::buildLanguageMenu(QMenu *menu)
+{
+    const QString current = Language::setting(m_settings);
+    const QString system = Language::resolve({}, QLocale::system().uiLanguages());
+    auto *group = new QActionGroup(menu);
+    // Noms des langues dans leur propre langue : on doit pouvoir s'y retrouver quelle que soit celle affichée
+    const QList<QPair<QString, QString>> choices{
+        {QString(), tr("Automatique (%1)").arg(system == "fr" ? QStringLiteral("Français") : QStringLiteral("English"))},
+        {QStringLiteral("fr"), QStringLiteral("Français")},
+        {QStringLiteral("en"), QStringLiteral("English")}};
+    for (const auto &choice : choices) {
+        QAction *a = menu->addAction(choice.second);
+        a->setCheckable(true);
+        a->setChecked(choice.first == current);
+        group->addAction(a);
+        const QString language = choice.first;
+        connect(a, &QAction::triggered, this, [this, language] {
+            if (language == Language::setting(m_settings))
+                return;
+            Language::setSetting(m_settings, language);
+            // Dans les deux langues : celle d'avant reste affichée jusqu'au redémarrage
+            QMessageBox::information(this, QStringLiteral("P2P Chat"),
+                                     QStringLiteral("La nouvelle langue sera utilisée au prochain démarrage de "
+                                                    "P2P Chat.\n\nThe new language will be used the next time "
+                                                    "P2P Chat starts."));
+        });
+    }
 }
 
 // ---------------------------------------------------------------- Avatar

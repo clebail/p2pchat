@@ -1,5 +1,6 @@
 #include "chatmodel.h"
 
+#include <QLocale>
 #include <QHash>
 #include <QStringList>
 
@@ -56,7 +57,7 @@ QVariant ChatModel::data(const QModelIndex &index, int role) const
     if (!index.isValid() || index.row() >= m_entries.size())
         return {};
     if (role == Qt::DisplayRole || role == Qt::ToolTipRole)
-        return role == Qt::ToolTipRole ? m_entries.at(index.row()).ts.toString("dd/MM/yyyy HH:mm")
+        return role == Qt::ToolTipRole ? QLocale().toString(m_entries.at(index.row()).ts, QLocale::ShortFormat)
                                        : m_entries.at(index.row()).text;
     return {};
 }

@@ -1,10 +1,12 @@
 #include "groupstore.h"
+#include "language.h"
 #include "mainwindow.h"
 #include "singleinstance.h"
 
 #include <QApplication>
 #include <QIcon>
 #include <QInputDialog>
+#include <QLocale>
 #include <QMessageBox>
 #include <QSettings>
 #include <QStandardPaths>
@@ -19,7 +21,7 @@ int main(int argc, char *argv[])
 #ifdef P2P_TERMINAL
     // Fenêtre de console partagée : simple relais terminal <-> P2P Chat, sans interface graphique
     if (argc >= 3 && std::strcmp(argv[1], "--terminal") == 0)
-        return runTerminalClient(argv[2], argc >= 4 ? argv[3] : nullptr);
+        return runTerminalClient(argv[2], argc >= 4 ? argv[3] : nullptr, argc >= 5 ? argv[4] : nullptr);
 #endif
     QApplication app(argc, argv);
     QApplication::setOrganizationName("p2pchat");
@@ -28,6 +30,8 @@ int main(int argc, char *argv[])
     QGuiApplication::setDesktopFileName("p2pchat"); // Linux : associe la fenêtre au .desktop (icône)
     QApplication::setWindowIcon(QIcon(":/icons/p2pchat.png"));
     QSettings::setDefaultFormat(QSettings::IniFormat); // même format sur Linux, macOS et Windows
+    QSettings settings;
+    Language::apply(Language::resolve(Language::setting(settings), QLocale::system().uiLanguages()));
 
     // Une seule instance : sinon, on montre celle qui est déjà ouverte (peut-être dans la zone de notification)
     SingleInstance instance(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
@@ -37,11 +41,10 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-    QSettings settings;
     GroupStore group(settings);
     while (group.nickname().isEmpty()) {
         bool ok = false;
-        const QString n = QInputDialog::getText(nullptr, "P2P Chat", "Choisissez votre pseudo :",
+        const QString n = QInputDialog::getText(nullptr, "P2P Chat", QObject::tr("Choisissez votre pseudo :"),
                                                 QLineEdit::Normal, {}, &ok).trimmed();
         if (!ok)
             return 0;

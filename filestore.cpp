@@ -101,12 +101,12 @@ bool isRisky(const QString &name)
 
 QString formatSize(qint64 bytes)
 {
-    const QLocale fr(QLocale::French);
+    const QLocale locale; // langue de l'interface (cf. Language::apply)
     if (bytes < 1024)
         return tr("%1 octets").arg(bytes);
     if (bytes < 1024 * 1024)
-        return tr("%1 Ko").arg(fr.toString(double(bytes) / 1024, 'f', bytes < 10 * 1024 ? 1 : 0));
-    return tr("%1 Mo").arg(fr.toString(double(bytes) / (1024 * 1024), 'f', bytes < 10LL * 1024 * 1024 ? 1 : 0));
+        return tr("%1 Ko").arg(locale.toString(double(bytes) / 1024, 'f', bytes < 10 * 1024 ? 1 : 0));
+    return tr("%1 Mo").arg(locale.toString(double(bytes) / (1024 * 1024), 'f', bytes < 10LL * 1024 * 1024 ? 1 : 0));
 }
 
 // ---------------------------------------------------------------- Fiche

@@ -25,7 +25,7 @@ jobs:
       - name: Dépendances
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qtbase5-dev qtbase5-dev-tools qt5-qmake libssl-dev
+          sudo apt-get install -y --no-install-recommends qtbase5-dev qtbase5-dev-tools qt5-qmake qttools5-dev-tools libssl-dev
           echo /usr/lib/qt5/bin >> "$GITHUB_PATH"
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
@@ -52,7 +52,7 @@ jobs:
       - name: Dépendances
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qt6-base-dev qt6-base-dev-tools qmake6 libssl-dev
+          sudo apt-get install -y --no-install-recommends qt6-base-dev qt6-base-dev-tools qmake6 qt6-l10n-tools libssl-dev
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: linux-qt6
@@ -77,7 +77,7 @@ jobs:
       - name: Dépendances
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qtbase5-dev qtbase5-dev-tools qt5-qmake libssl-dev
+          sudo apt-get install -y --no-install-recommends qtbase5-dev qtbase5-dev-tools qt5-qmake qttools5-dev-tools libssl-dev
           echo /usr/lib/qt5/bin >> "$GITHUB_PATH"
       - uses: hendrikmuhs/ccache-action@v1.2
         with:

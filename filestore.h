@@ -1,6 +1,7 @@
 #pragma once
 #include <QBitArray>
 #include <QByteArray>
+#include <QCoreApplication>
 #include <QJsonObject>
 #include <QList>
 #include <QString>
@@ -51,6 +52,8 @@ struct FileInfo
 
 class FileStore
 {
+    Q_DECLARE_TR_FUNCTIONS(Files::FileStore) // même contexte que celui que lupdate lui donne
+
 public:
     explicit FileStore(const QString &dir);
 

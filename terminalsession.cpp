@@ -206,7 +206,9 @@ bool TerminalSession::start(QString *error)
 
     const QString title = m_role == Host ? tr("Console partagée avec %1").arg(m_peerNick)
                                          : tr("Console de %1").arg(m_peerNick);
-    if (!launchTerminal({"--terminal", m_server->fullServerName(), title}, error))
+    // Langue de l'interface (cf. Language::apply) : la fenêtre de console n'a pas de traductions Qt
+    const QString language = QLocale().language() == QLocale::French ? QStringLiteral("fr") : QStringLiteral("en");
+    if (!launchTerminal({"--terminal", m_server->fullServerName(), title, language}, error))
         return false;
     m_connectTimeout.start();
     return true;

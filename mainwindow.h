@@ -145,6 +145,8 @@ private:
     void askTerminalOffer(Conversation *c, const QString &nick, bool control);
 
     void changeNickname();
+    // Langue de l'interface : automatique, français, anglais (appliquée au prochain démarrage)
+    void buildLanguageMenu(QMenu *menu);
     void changeAvatar(); // le nôtre, commun à toutes les conversations (cf. avatar.h)
     void changeConversationAvatar(); // administrateurs : le même pour tous les membres
     // Choix d'un avatar : aperçu (current, sinon initiale de name), Choisir une image…, Retirer

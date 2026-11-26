@@ -80,8 +80,9 @@ void setTitle(const std::string &title)
 
 } // namespace
 
-int runTerminalClient(const char *socketPath, const char *title)
+int runTerminalClient(const char *socketPath, const char *title, const char *language)
 {
+    const bool en = language && std::strcmp(language, "en") == 0;
     // SOCK_CLOEXEC n'existe pas sur macOS : on positionne FD_CLOEXEC à part
     const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd >= 0)
@@ -89,12 +90,14 @@ int runTerminalClient(const char *socketPath, const char *title)
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
     if (fd < 0 || std::strlen(socketPath) >= sizeof(addr.sun_path)) {
-        std::fprintf(stderr, "P2P Chat : socket local invalide\n");
+        std::fprintf(stderr, en ? "P2P Chat: invalid local socket\n" : "P2P Chat : socket local invalide\n");
         return 1;
     }
     std::strcpy(addr.sun_path, socketPath);
     if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
-        std::fprintf(stderr, "P2P Chat : connexion à P2P Chat impossible (%s)\n", std::strerror(errno));
+        std::fprintf(stderr, en ? "P2P Chat: cannot connect to P2P Chat (%s)\n"
+                                : "P2P Chat : connexion à P2P Chat impossible (%s)\n",
+                     std::strerror(errno));
         ::sleep(5);
         return 1;
     }
@@ -171,9 +174,9 @@ int runTerminalClient(const char *socketPath, const char *title)
     }
     ::close(fd);
 
-    notice(ended ? endMessage : std::string("Liaison avec P2P Chat perdue."));
+    notice(ended ? endMessage : std::string(en ? "Lost connection to P2P Chat." : "Liaison avec P2P Chat perdue."));
     if (g_raw) {
-        notice("Appuyez sur une touche pour fermer cette fenêtre.");
+        notice(en ? "Press any key to close this window." : "Appuyez sur une touche pour fermer cette fenêtre.");
         char c;
         while (::read(STDIN_FILENO, &c, 1) < 0 && errno == EINTR) {
         }

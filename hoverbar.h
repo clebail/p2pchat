@@ -3,6 +3,7 @@
 #include "chatstyle.h"
 #include "reactions.h"
 
+#include <QCoreApplication>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QToolButton>
@@ -13,6 +14,8 @@
 // Petite barre flottante au coin de la bulle survolée : réactions rapides et « Répondre »
 class HoverBar : public QFrame
 {
+    Q_DECLARE_TR_FUNCTIONS(HoverBar) // sans Q_OBJECT : sinon tr() prendrait le contexte de QFrame
+
 public:
     explicit HoverBar(QWidget *parent) : QFrame(parent)
     {

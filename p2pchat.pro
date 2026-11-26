@@ -14,6 +14,11 @@ HEADERS += mainwindow.h appstyle.h notifier.h torservice.h
 
 RESOURCES += resources.qrc
 
+# Traductions (textes écrits en français) : compilées par lrelease et embarquées (:/i18n/p2pchat_en.qm).
+# Après avoir ajouté ou modifié des textes : lupdate p2pchat.pro, puis traduire avec Qt Linguist.
+TRANSLATIONS += translations/p2pchat_en.ts
+CONFIG += lrelease embed_translations
+
 # Notifications natives
 macx {
     OBJECTIVE_SOURCES += notifier_mac.mm

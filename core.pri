@@ -20,6 +20,7 @@ SOURCES += \
     $$PWD/groupstore.cpp \
     $$PWD/history.cpp \
     $$PWD/invitation.cpp \
+    $$PWD/language.cpp \
     $$PWD/links.cpp \
     $$PWD/markup.cpp \
     $$PWD/notifications.cpp \
@@ -44,6 +45,7 @@ HEADERS += \
     $$PWD/groupstore.h \
     $$PWD/history.h \
     $$PWD/invitation.h \
+    $$PWD/language.h \
     $$PWD/links.h \
     $$PWD/markup.h \
     $$PWD/notifications.h \

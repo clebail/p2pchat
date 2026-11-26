@@ -6,6 +6,7 @@
 #include "composer.h"
 #include "crypto.h"
 #include "invitation.h"
+#include "language.h"
 #include "mentioncompleter.h"
 #include "mentions.h"
 #include "notifications.h"
@@ -552,6 +553,7 @@ void MainWindow::buildUi()
     QMenu *notifications = menu->addMenu(tr("Notifications"));
     connect(notifications, &QMenu::aboutToShow, this, [this, notifications] { buildNotificationMenu(notifications); });
     buildNotificationMenu(notifications); // le sous-menu doit avoir un contenu pour s'afficher
+    buildLanguageMenu(menu->addMenu(tr("Langue")));
     menu->addAction(tr("Membres…"), this, &MainWindow::showMembers);
     menu->addAction(tr("Vérifier l'identité d'un membre…"), this, &MainWindow::verifyMember);
     menu->addAction(tr("Changer de pseudo…"), this, &MainWindow::changeNickname);

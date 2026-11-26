@@ -179,8 +179,11 @@ QString dayLabel(const QDate &d)
         return QObject::tr("Aujourd'hui");
     if (d == today.addDays(-1))
         return QObject::tr("Hier");
-    const QLocale fr(QLocale::French);
-    return fr.toString(d, d.year() == today.year() ? "dddd d MMMM" : "d MMMM yyyy");
+    // Langue de l'interface (cf. Language::apply) ; format propre à chaque langue
+    const QLocale locale;
+    const bool fr = locale.language() == QLocale::French;
+    return locale.toString(d, d.year() == today.year() ? (fr ? "dddd d MMMM" : "dddd, MMMM d")
+                                                       : (fr ? "d MMMM yyyy" : "MMMM d, yyyy"));
 }
 
 bool sameGroup(const ChatEntry &a, const ChatEntry &b)

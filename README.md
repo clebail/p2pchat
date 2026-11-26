@@ -128,6 +128,9 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 - Arrivées et départs regroupés : les « X est en ligne » / « X s'est déconnecté(e) » consécutifs tiennent sur une
   seule ligne (un clic la déplie). Une coupure n'est annoncée que si le membre n'est pas revenu au bout de 60 s,
   et qu'aucun autre membre ne le voit encore en ligne.
+- **Langue** (⋮ → *Langue*) : français ou anglais. *Automatique* (par défaut) suit le système : français si
+  c'est sa langue préférée, anglais sinon. Le changement s'applique au prochain démarrage. Les dates et les
+  tailles de fichiers suivent la langue choisie.
 - **Une seule instance** : relancer P2P Chat alors qu'il est déjà ouvert (par exemple caché dans la zone de
   notification) affiche simplement la fenêtre existante.
 - **Notifications natives** avec l'icône de l'application quand un message arrive et que la fenêtre n'est pas
@@ -209,12 +212,12 @@ permet de choisir l'exécutable à la main (clé `torPath` de la configuration).
 
 ## Compiler
 
-Dépendances : Qt 6 (Widgets, Network) et OpenSSL 3 (libcrypto). Qt 5.15 fonctionne aussi
-(`qtbase5-dev`, puis `qmake` au lieu de `qmake6`).
+Dépendances : Qt 6 (Widgets, Network, et `lrelease` pour compiler les traductions) et OpenSSL 3 (libcrypto).
+Qt 5.15 fonctionne aussi (`qtbase5-dev qttools5-dev-tools`, puis `qmake` au lieu de `qmake6`).
 
 **Linux**
 ```bash
-sudo apt install qt6-base-dev libssl-dev tor
+sudo apt install qt6-base-dev qt6-l10n-tools libssl-dev tor
 mkdir build && cd build && qmake6 ../p2pchat.pro && make -j
 ./p2pchat
 make install   # facultatif : installe dans ~/.local (menu des applications + icône des notifications)
@@ -233,10 +236,23 @@ clic droit → **Ouvrir**.
 
 **Windows** (MSYS2 / MinGW)
 ```bash
-pacman -S mingw-w64-x86_64-qt6-base mingw-w64-x86_64-openssl
+pacman -S mingw-w64-x86_64-qt6-base mingw-w64-x86_64-qt6-tools mingw-w64-x86_64-openssl
 mkdir build && cd build && qmake6 ../p2pchat.pro && mingw32-make
 windeployqt release/p2pchat.exe   # + copier libcrypto-3-x64.dll et le dossier tor\
 ```
+
+### Traductions
+
+Les textes sont écrits en français, dans le code (`tr()`). La traduction anglaise est dans
+`translations/p2pchat_en.ts`, compilée par `lrelease` pendant le build et embarquée dans l'application. Après
+avoir ajouté ou modifié des textes :
+
+```bash
+lupdate -no-obsolete -locations none p2pchat.pro   # met à jour translations/p2pchat_en.ts
+linguist translations/p2pchat_en.ts                # traduire les nouveaux textes
+```
+
+`tst_language` échoue tant qu'un texte n'est pas traduit, ou qu'une traduction perd un `%1`.
 
 ### Tests unitaires
 
@@ -316,6 +332,7 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 | Fichier | Rôle |
 |---|---|
 | `torservice.*` | Lancement de tor, torrc, progression, adresse onion |
+| `language.*`, `translations/` | Langue de l'interface (réglage, système), traductions de P2P Chat et de Qt |
 | `peerconnection.*` | Trames, poignée de main, messages chiffrés, ping |
 | `switchboard.*` | Écoute locale commune : chaque connexion entrante va à la conversation dont elle présente le secret |
 | `crypto.*` | X25519, Ed25519, HKDF, ChaCha20-Poly1305 (OpenSSL) |
