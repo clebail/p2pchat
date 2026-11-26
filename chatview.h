@@ -2,6 +2,7 @@
 #include "chatdelegate.h"
 #include "chatmodel.h"
 
+#include <QImage>
 #include <QListView>
 #include <QPersistentModelIndex>
 #include <QTimer>
@@ -29,6 +30,9 @@ public:
                    bool mentionsMe, const QString &editedBy = {});
     // Administrateur : « Modifier » et « Supprimer » aussi sur les messages des autres
     void setModerator(bool moderator) { m_moderator = moderator; }
+    // Avatar d'un auteur (cf. avatar.h) ; image nulle : rond coloré avec son initiale
+    void setAvatarProvider(std::function<QImage(const QString &onion)> provider) { m_avatars = std::move(provider); }
+    QImage avatarOf(const QString &onion) const { return m_avatars && !onion.isEmpty() ? m_avatars(onion) : QImage(); }
     void addSystem(const QString &text);
     // « X est en ligne » / « X s'est déconnecté(e) » : fusionné avec la ligne de présence
     // précédente tant qu'aucun autre message ne s'est intercalé (même jour)
@@ -130,4 +134,5 @@ private:
     QTimer *m_animationPrune;
     int m_newBelow = 0;
     bool m_moderator = false;
+    std::function<QImage(const QString &)> m_avatars;
 };

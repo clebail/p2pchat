@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 
 #include "attachment.h"
+#include "avatar.h"
 #include "chatview.h"
 #include "composer.h"
 #include "crypto.h"
@@ -67,6 +68,34 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+
+namespace {
+// Rond d'avatar pour les listes et l'aperçu : l'image, sinon la couleur du membre et son initiale
+QPixmap avatarPixmap(const QImage &image, const QString &name, int side, qreal ratio)
+{
+    QPixmap pix(QSize(side, side) * ratio);
+    pix.setDevicePixelRatio(ratio);
+    pix.fill(Qt::transparent);
+    QPainter p(&pix);
+    p.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing);
+    const QRectF r(0, 0, side, side);
+    QPainterPath circle;
+    circle.addEllipse(r);
+    if (!image.isNull()) {
+        p.setClipPath(circle);
+        p.drawImage(r, image);
+    } else {
+        p.fillPath(circle, ChatView::colorFor(name));
+        QFont f = QApplication::font();
+        f.setBold(true);
+        f.setPixelSize(qMax(8, side * 4 / 9));
+        p.setFont(f);
+        p.setPen(Qt::white);
+        p.drawText(r, Qt::AlignCenter, name.left(1).toUpper());
+    }
+    return pix;
+}
+} // namespace
 
 using Protocol::isValidOnion;
 
@@ -173,6 +202,65 @@ void MainWindow::chooseConversationMembers()
         startConversationWith(chosen, name->text());
 }
 
+// ---------------------------------------------------------------- Avatar
+
+void MainWindow::changeAvatar()
+{
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Votre avatar"));
+    auto *lay = new QVBoxLayout(&dlg);
+    auto *preview = new QLabel(&dlg);
+    preview->setAlignment(Qt::AlignCenter);
+    lay->addWidget(preview);
+    auto *note = new QLabel(tr("Visible par les membres de toutes vos conversations. L'image est recadrée en carré "
+                               "et réduite."),
+                            &dlg);
+    note->setWordWrap(true);
+    lay->addWidget(note);
+    auto *buttons = new QHBoxLayout;
+    auto *chooseBtn = new QPushButton(tr("Choisir une image…"), &dlg);
+    auto *removeBtn = new QPushButton(tr("Retirer"), &dlg);
+    auto *closeBtn = new QPushButton(tr("Fermer"), &dlg);
+    buttons->addWidget(chooseBtn);
+    buttons->addWidget(removeBtn);
+    buttons->addStretch(1);
+    buttons->addWidget(closeBtn);
+    lay->addLayout(buttons);
+    connect(closeBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+
+    auto refresh = [this, preview, removeBtn] {
+        const QByteArray jpeg = m_group->ownAvatar();
+        preview->setPixmap(avatarPixmap(Avatar::decode(jpeg), m_group->nickname(), Avatar::Side, devicePixelRatioF()));
+        removeBtn->setEnabled(!jpeg.isEmpty());
+    };
+    // Enregistré (plus récent que le précédent, même si l'horloge a reculé), puis envoyé dans chaque conversation
+    auto apply = [this, refresh](const QByteArray &jpeg) {
+        const qint64 ts = std::max(QDateTime::currentMSecsSinceEpoch(), m_group->ownAvatarTime() + 1);
+        m_group->setOwnAvatar(jpeg, ts);
+        for (const auto &c : m_convs)
+            c->node().publishAvatar();
+        refresh();
+    };
+    connect(chooseBtn, &QPushButton::clicked, &dlg, [this, &dlg, apply] {
+        const QString dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+        const QString path = QFileDialog::getOpenFileName(&dlg, tr("Choisir une image"), dir,
+                                                          Attachment::fileDialogFilter());
+        if (path.isEmpty())
+            return;
+        QString error;
+        const QByteArray jpeg = Avatar::fromImage(Attachment::load(path, &error));
+        if (jpeg.isEmpty()) {
+            QMessageBox::warning(&dlg, tr("Votre avatar"),
+                                 error.isEmpty() ? tr("Cette image ne peut pas servir d'avatar.") : error);
+            return;
+        }
+        apply(jpeg);
+    });
+    connect(removeBtn, &QPushButton::clicked, &dlg, [apply] { apply({}); });
+    refresh();
+    dlg.exec();
+}
+
 // ---------------------------------------------------------------- Membres et gouvernance
 
 void MainWindow::showMembers()
@@ -186,6 +274,7 @@ void MainWindow::showMembers()
     dlg.resize(420, 420);
     auto *lay = new QVBoxLayout(&dlg);
     auto *list = new QListWidget(&dlg);
+    list->setIconSize(QSize(28, 28));
     lay->addWidget(list);
     auto *info = new QLabel(&dlg);
     info->setWordWrap(true);
@@ -226,6 +315,7 @@ void MainWindow::showMembers()
         bold.setBold(true);
         me->setFont(bold);
         me->setData(Qt::UserRole, m_node->ownOnion());
+        me->setIcon(avatarPixmap(Avatar::decode(m_group->ownAvatar()), m_group->nickname(), 28, devicePixelRatioF()));
         list->addItem(me);
         if (!selected.isEmpty() && selected == m_node->ownOnion())
             list->setCurrentItem(me);
@@ -234,6 +324,7 @@ void MainWindow::showMembers()
             r.prepend(m_node->isConnected(m.onion) ? tr("en ligne") : tr("hors ligne"));
             auto *item = new QListWidgetItem(tr("%1 — %2").arg(m.nick, r.join(", ")));
             item->setData(Qt::UserRole, m.onion);
+            item->setIcon(avatarPixmap(m_shown->avatarOf(m.onion), m.nick, 28, devicePixelRatioF()));
             list->addItem(item);
             if (m.onion == selected)
                 list->setCurrentItem(item);

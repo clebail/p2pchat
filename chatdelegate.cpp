@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QTextLayout>
 
 #include <cmath>
@@ -439,8 +440,18 @@ void ChatDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
         tl.draw(p, QPointF(bubble.left() + PadH, bubble.top() + g.textTop));
     }
 
-    // Avatar (dernier message d'un groupe reçu)
-    if (!e.mine && g.last) {
+    // Avatar (dernier message d'un groupe reçu) : son image, sinon un rond coloré avec son initiale
+    const QImage avatar = !e.mine && g.last && view ? view->avatarOf(e.authorOnion) : QImage();
+    if (!avatar.isNull()) {
+        const QRectF av(r.left() + Side, bubble.bottom() - Avatar, Avatar, Avatar);
+        p->save();
+        p->setRenderHint(QPainter::SmoothPixmapTransform);
+        QPainterPath circle;
+        circle.addEllipse(av);
+        p->setClipPath(circle, Qt::IntersectClip);
+        p->drawImage(av, avatar);
+        p->restore();
+    } else if (!e.mine && g.last) {
         const QRectF av(r.left() + Side, bubble.bottom() - Avatar, Avatar, Avatar);
         p->setPen(Qt::NoPen);
         p->setBrush(ChatView::colorFor(e.author));

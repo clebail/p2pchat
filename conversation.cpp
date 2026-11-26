@@ -1,6 +1,7 @@
 #include "conversation.h"
 
 #include "attachment.h"
+#include "avatar.h"
 #include "filestore.h"
 #include "mentions.h"
 #include "notifications.h"
@@ -38,6 +39,7 @@ Conversation::Conversation(QSettings &settings, const QString &id, const QString
 {
     connectNode();
     connectView();
+    m_view->setAvatarProvider([this](const QString &onion) { return avatarOf(onion); });
 }
 
 Conversation::~Conversation()
@@ -133,6 +135,10 @@ void Conversation::connectNode()
         rememberName();
         emit changed();
     });
+    connect(n, &GroupNode::avatarChanged, this, [this](const QString &onion) {
+        forgetAvatar(onion);
+        emit avatarChanged(onion);
+    });
     connect(n, &GroupNode::typingChanged, this, &Conversation::changed);
     connect(n, &GroupNode::fileChanged, this, &Conversation::updateFileEntry);
     connect(n, &GroupNode::messageEdited, this, &Conversation::onMessageEdited);
@@ -185,6 +191,20 @@ QString Conversation::displayName() const
         return names.join(", ");
     return m_store->inGroup() ? tr("Nouvelle conversation") : isBlank() ? tr("Conversation vierge")
                                                                          : tr("Ancienne conversation");
+}
+
+QImage Conversation::avatarOf(const QString &onion) const
+{
+    auto it = m_avatars.constFind(onion);
+    if (it == m_avatars.constEnd())
+        it = m_avatars.insert(onion, Avatar::decode(Avatar::image(m_store->avatarRecord(onion))));
+    return *it;
+}
+
+void Conversation::forgetAvatar(const QString &onion)
+{
+    if (m_avatars.remove(onion) > 0 && m_view)
+        m_view->viewport()->update();
 }
 
 QString Conversation::subtitle() const

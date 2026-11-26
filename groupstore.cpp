@@ -244,6 +244,36 @@ bool GroupStore::pinKey(const QString &onion, const QByteArray &pub, qint64 nowM
     return true;
 }
 
+QByteArray GroupStore::ownAvatar() const
+{
+    return Protocol::fromB64(m_settings.value("avatar/image").toString());
+}
+
+qint64 GroupStore::ownAvatarTime() const
+{
+    return m_settings.value("avatar/ts").toLongLong();
+}
+
+void GroupStore::setOwnAvatar(const QByteArray &jpeg, qint64 timestampMs)
+{
+    if (jpeg.isEmpty())
+        m_settings.remove("avatar/image");
+    else
+        m_settings.setValue("avatar/image", Protocol::toB64(jpeg));
+    m_settings.setValue("avatar/ts", timestampMs);
+}
+
+QJsonObject GroupStore::avatarRecord(const QString &onion) const
+{
+    return isValidOnion(onion) ? readObject(m_settings, "avatars/" + onion) : QJsonObject();
+}
+
+void GroupStore::setAvatarRecord(const QString &onion, const QJsonObject &record)
+{
+    if (isValidOnion(onion))
+        writeObject(m_settings, "avatars/" + onion, record);
+}
+
 bool GroupStore::isVerified(const QString &onion) const
 {
     const QByteArray key = pinnedKey(onion);

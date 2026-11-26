@@ -144,6 +144,7 @@ private:
     void askTerminalOffer(Conversation *c, const QString &nick, bool control);
 
     void changeNickname();
+    void changeAvatar(); // le nôtre, commun à toutes les conversations (cf. avatar.h)
     // Code de sécurité (cf. safetynumber.h) : choix du membre, puis comparaison de vive voix
     void verifyMember();
     // Membres (⋮ → Membres…) : rôles, présence, exclusion et renouvellement du secret (administrateurs)

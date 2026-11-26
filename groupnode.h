@@ -100,6 +100,7 @@ public:
     JoinResult join(const Invitation &inv);
     void leaveGroup();
     void announceNickname(); // notre pseudo a changé
+    void publishAvatar();    // notre avatar a changé (cf. GroupStore::setOwnAvatar) : envoyé aux membres connectés
 
     // ---- Envoi
     // Message signé, envoyé aux membres connectés (les autres le recevront par synchronisation) ;
@@ -198,6 +199,7 @@ signals:
     void memberLeft(const QString &onion, const QString &nick);
     void adminChanged(const QString &onion, const QString &nick, bool admin, const QString &byNick);
     void sharedNameChanged(const QString &name, const QString &byNick);
+    void avatarChanged(const QString &onion); // avatar d'un membre reçu (cf. GroupStore::avatarRecord)
     // Un membre nous invite à une autre conversation (son code, vérifié : c'est bien le sien)
     void directInvitation(const QString &fromOnion, const QString &fromNick, const Invitation &invitation,
                           const QString &name);
@@ -249,6 +251,10 @@ private:
     void onName(PeerConnection *c, const QJsonObject &o);
     void onDirectInvitation(PeerConnection *c, const QJsonObject &o);
     void sendName(PeerConnection *c);
+    QJsonObject avatarRecordOf(const QString &onion) const; // le nôtre (signé à la volée) ou celui reçu
+    void sendAvatarInventory(PeerConnection *c);
+    void onAvatarInventory(PeerConnection *c, const QJsonObject &o);
+    void onAvatar(PeerConnection *c, const QJsonObject &o);
     void onGovernance(PeerConnection *c, const QJsonObject &o);
     void onSecret(PeerConnection *c, const QJsonObject &o);
     void onLeave(PeerConnection *c, const QJsonObject &o);

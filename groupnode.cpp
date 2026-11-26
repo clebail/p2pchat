@@ -1,5 +1,6 @@
 #include "groupnode.h"
 
+#include "avatar.h"
 #include "crypto.h"
 #include "invitation.h"
 #include "peerconnection.h"
@@ -585,6 +586,7 @@ void GroupNode::setActive(PeerConnection *c)
     if (c->peerVersion() >= Governance::Version)
         sendGovernance(c);
     sendName(c);
+    sendAvatarInventory(c);
     if (isNew)
         broadcast(membersMessage(), c);
     c->send(inventoryMessage()); // après la liste des membres : les clés des auteurs sont connues
@@ -768,6 +770,10 @@ void GroupNode::onReceived(PeerConnection *c, const QJsonObject &o)
         onLeave(c, o);
     } else if (type == "conv-name") {
         onName(c, o);
+    } else if (type == "avatar-have") {
+        onAvatarInventory(c, o);
+    } else if (type == "avatar") {
+        onAvatar(c, o);
     } else if (type == "conv-invite") {
         onDirectInvitation(c, o);
     } else if (type == "typing") {
@@ -1705,6 +1711,74 @@ void GroupNode::onName(PeerConnection *c, const QJsonObject &o)
             sendName(p);
     emit sharedNameChanged(sharedName(), author == m_ownOnion ? m_group.nickname() : m_group.nickOf(author));
     emit stateChanged();
+}
+
+// ---------------------------------------------------------------- Avatars
+
+QJsonObject GroupNode::avatarRecordOf(const QString &onion) const
+{
+    if (onion.isEmpty())
+        return {};
+    if (onion == m_ownOnion)
+        return m_group.ownAvatarTime() > 0 ? Avatar::create(m_group.identitySeed(), m_ownOnion, m_group.ownAvatar(),
+                                                            m_group.ownAvatarTime())
+                                           : QJsonObject();
+    return m_group.avatarRecord(onion);
+}
+
+void GroupNode::sendAvatarInventory(PeerConnection *c)
+{
+    // Date des avatars connus (le nôtre et ceux des membres) : il nous renvoie ceux qu'il a de plus récents
+    if (c->peerVersion() < Avatar::Version)
+        return;
+    QJsonObject have;
+    if (m_group.ownAvatarTime() > 0)
+        have.insert(m_ownOnion, double(m_group.ownAvatarTime()));
+    for (const Member &m : m_group.members())
+        if (const qint64 ts = Avatar::timestamp(m_group.avatarRecord(m.onion)); ts > 0)
+            have.insert(m.onion, double(ts));
+    c->send({{"t", "avatar-have"}, {"h", have}});
+}
+
+void GroupNode::onAvatarInventory(PeerConnection *c, const QJsonObject &o)
+{
+    // Seulement les avatars des membres de cette conversation : rien sur nos autres contacts
+    const QJsonObject theirs = o.value("h").toObject();
+    QStringList onions{m_ownOnion};
+    for (const Member &m : m_group.members())
+        if (m.onion != c->peerOnion())
+            onions << m.onion;
+    for (const QString &onion : std::as_const(onions)) {
+        const QJsonObject r = avatarRecordOf(onion);
+        if (!r.isEmpty() && Avatar::timestamp(r) > qint64(theirs.value(onion).toDouble()))
+            c->send(r);
+    }
+}
+
+void GroupNode::onAvatar(PeerConnection *c, const QJsonObject &o)
+{
+    const QString author = Avatar::author(o);
+    if (author == m_ownOnion || !m_group.isMember(author)
+        || Avatar::timestamp(o) <= Avatar::timestamp(m_group.avatarRecord(author)) || !Avatar::verify(o, keyOf(author)))
+        return; // le nôtre, pas d'un membre, pas plus récent, ou falsifié
+    QJsonObject r = o;
+    r.insert("t", "avatar");
+    m_group.setAvatarRecord(author, r);
+    for (PeerConnection *p : m_active.values()) // relais, pour ceux qui ne sont reliés qu'à nous
+        if (p != c && p->peerVersion() >= Avatar::Version)
+            p->send(r);
+    emit avatarChanged(author);
+}
+
+void GroupNode::publishAvatar()
+{
+    const QJsonObject r = avatarRecordOf(m_ownOnion);
+    if (r.isEmpty())
+        return;
+    for (PeerConnection *p : m_active.values())
+        if (p->peerVersion() >= Avatar::Version)
+            p->send(r);
+    emit avatarChanged(m_ownOnion);
 }
 
 bool GroupNode::canInviteDirectly(const QString &onion) const

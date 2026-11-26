@@ -2,6 +2,7 @@
 TEMPLATE = subdirs
 SUBDIRS += \
     tst_attachment \
+    tst_avatar \
     tst_composer \
     tst_crypto \
     tst_edits \

@@ -4,6 +4,8 @@
 #include "groupstore.h"
 #include "invitation.h"
 
+#include <QHash>
+#include <QImage>
 #include <QObject>
 #include <QPointer>
 
@@ -35,12 +37,16 @@ public:
 
     // ---- Ce que la fenêtre en montre
     bool isBlank() const;         // ni groupe ni historique : page d'accueil
-    QString displayName() const;  // nom local, sinon nom partagé, sinon pseudos des membres
+    QString displayName() const;  // nom partagé, sinon pseudos des membres (après un départ : dernier nom connu)
     QString preview() const { return m_preview; } // dernier message, pour la colonne
     QString subtitle() const;     // ligne d'état (HTML) : membres en ligne, « X écrit… »
     QString subtitleToolTip() const; // état détaillé de chaque membre (HTML)
     QString typingText() const;   // vide si personne n'écrit
     QString memberNick(const QString &onion) const; // « Un membre » si inconnu
+    // Avatar d'un membre (cf. avatar.h), image nulle s'il n'en a pas. Les avatars sont communs à toutes les
+    // conversations : forgetAvatar est appelé sur chacune quand l'une en reçoit un nouveau.
+    QImage avatarOf(const QString &onion) const;
+    void forgetAvatar(const QString &onion);
     QStringList mentionNames() const; // pseudos reconnus dans les « @… » (membres, nous, « tous »)
 
     // ---- Non-lus (la fenêtre décide quand en ajouter : conversation cachée ou fenêtre en arrière-plan)
@@ -60,6 +66,7 @@ signals:
     // Messages reçus : de quoi notifier (count > 1 : rattrapage groupé)
     void messagesArrived(int count, const QString &title, const QString &text, qint64 firstTs, bool forMe);
     void excludedFromGroup(const QString &byNick);
+    void avatarChanged(const QString &onion); // reçu par cette conversation : les autres oublient l'ancien
     void directInvitation(const QString &fromNick, const Invitation &invitation, const QString &name);
     // Actions de la vue qui demandent la fenêtre (citation, dialogues)
     void replyRequested(const QString &id, const QString &author, const QString &text);
@@ -90,4 +97,5 @@ private:
     int m_unread = 0;
     QString m_preview, m_previewId; // dernier message affiché, et son identifiant
     QString m_knownName;
+    mutable QHash<QString, QImage> m_avatars; // décodés (image nulle : pas d'avatar)
 };

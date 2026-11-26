@@ -196,6 +196,10 @@ Conversation *MainWindow::openConversation(const QString &id)
             [this, c](int count, const QString &title, const QString &text, qint64 firstTs, bool forMe) {
                 onMessagesArrived(c, count, title, text, firstTs, forMe);
             });
+    connect(c, &Conversation::avatarChanged, this, [this](const QString &onion) {
+        for (const auto &other : m_convs) // commun à toutes les conversations
+            other->forgetAvatar(onion);
+    });
     connect(c, &Conversation::excludedFromGroup, this, [this, c](const QString &by) {
         auto *box = new QMessageBox(QMessageBox::Information, tr("Exclu du groupe"),
                                     tr("%1, administrateur de « %2 », vous en a exclu.\n\n"
@@ -546,6 +550,7 @@ void MainWindow::buildUi()
     menu->addAction(tr("Membres…"), this, &MainWindow::showMembers);
     menu->addAction(tr("Vérifier l'identité d'un membre…"), this, &MainWindow::verifyMember);
     menu->addAction(tr("Changer de pseudo…"), this, &MainWindow::changeNickname);
+    menu->addAction(tr("Changer d'avatar…"), this, &MainWindow::changeAvatar);
     QAction *renameAct = menu->addAction(tr("Renommer la conversation…"), this, &MainWindow::renameConversation);
     menu->addAction(tr("Vider la conversation"), this, &MainWindow::clearConversation);
     menu->addSeparator();

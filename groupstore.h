@@ -71,6 +71,14 @@ public:
     bool pinKey(const QString &onion, const QByteArray &pub, qint64 nowMs); // false si une autre clé est connue
     qint64 firstSeen(const QString &onion) const; // 0 : avant cette fonctionnalité, ou historique partagé
 
+    // Avatars (cf. avatar.h), communs à toutes les conversations. Le nôtre : image JPEG (vide : aucun) et date du
+    // choix (0 : jamais choisi) ; ceux des autres : enregistrements reçus et vérifiés (vide : inconnu)
+    QByteArray ownAvatar() const;
+    qint64 ownAvatarTime() const;
+    void setOwnAvatar(const QByteArray &jpeg, qint64 timestampMs);
+    QJsonObject avatarRecord(const QString &onion) const;
+    void setAvatarRecord(const QString &onion, const QJsonObject &record);
+
     // Identité vérifiée de vive voix (code de sécurité comparé) : valable pour la clé mémorisée
     bool isVerified(const QString &onion) const;
     void setVerified(const QString &onion, bool verified);

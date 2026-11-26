@@ -1,3 +1,4 @@
+#include "avatar.h"
 #include "crypto.h"
 #include "groupnode.h"
 #include "edits.h"
@@ -938,6 +939,48 @@ private slots:
         QCOMPARE(d.node->join(invitation(c)), GroupNode::JoinResult::Joined);
         d.node->setOnline(d.onion);
         QTRY_COMPARE(d.node->sharedName(), QString("Les amis"));
+    }
+
+    void avatarsAreShared()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        QImage img(Avatar::Side, Avatar::Side, QImage::Format_RGB32);
+        img.fill(Qt::red);
+        const QByteArray jpeg = Avatar::fromImage(img);
+        QSignalSpy changedAtC(c.node.get(), &GroupNode::avatarChanged);
+        a.store->setOwnAvatar(jpeg, 5000);
+        a.node->publishAvatar();
+        QTRY_COMPARE(Avatar::image(b.store->avatarRecord(a.onion)), jpeg);
+        QTRY_COMPARE(Avatar::image(c.store->avatarRecord(a.onion)), jpeg);
+        QTRY_COMPARE(changedAtC.count(), 1); // une seule fois, malgré le relais par B
+        QTest::qWait(100);
+        QCOMPARE(changedAtC.count(), 1);
+
+        // Signé par un autre membre, plus ancien, ou d'un inconnu : ignoré
+        QImage other(Avatar::Side, Avatar::Side, QImage::Format_RGB32);
+        other.fill(Qt::black);
+        const QByteArray pirate = Avatar::fromImage(other);
+        b.node->sendTo(c.onion, Avatar::create(b.store->identitySeed(), a.onion, pirate, 9000));
+        a.node->sendTo(c.onion, Avatar::create(a.store->identitySeed(), a.onion, pirate, 1000));
+        const QString stranger = QString(56, 'z') + ".onion";
+        b.node->sendTo(c.onion, Avatar::create(Ed25519::generateSeed(), stranger, pirate, 9000));
+        QTest::qWait(200);
+        QCOMPARE(Avatar::image(c.store->avatarRecord(a.onion)), jpeg);
+        QVERIFY(c.store->avatarRecord(stranger).isEmpty());
+
+        // Un nouveau venu le reçoit en se connectant
+        Peer &d = peer('d');
+        QCOMPARE(d.node->join(invitation(c)), GroupNode::JoinResult::Joined);
+        d.node->setOnline(d.onion);
+        QTRY_COMPARE(Avatar::image(d.store->avatarRecord(a.onion)), jpeg);
+
+        // Retiré : les autres l'oublient
+        a.store->setOwnAvatar({}, 6000);
+        a.node->publishAvatar();
+        QTRY_COMPARE(Avatar::timestamp(c.store->avatarRecord(a.onion)), qint64(6000));
+        QVERIFY(Avatar::image(c.store->avatarRecord(a.onion)).isEmpty());
+        QTRY_COMPARE(Avatar::timestamp(d.store->avatarRecord(a.onion)), qint64(6000));
     }
 
     void directInvitation()

@@ -60,6 +60,10 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
   tous les membres (signé, le plus récent l'emporte), y compris ceux qui rejoignent ensuite. Après un départ,
   la conversation garde le dernier nom connu.
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
+- **Avatar** (⋮ → *Changer d'avatar…*) : une image recadrée en carré et réduite (96 px), commune à toutes vos
+  conversations et visible par leurs membres. Sans image, un rond coloré avec l'initiale du pseudo. Signé par son
+  auteur et relayé par les autres membres, comme le nom de la conversation ; *Retirer* l'efface aussi chez eux.
+  Les versions précédentes de P2P Chat ne l'affichent pas.
 - **Au survol d'un message**, une petite barre apparaît au coin de la bulle : réactions rapides et ↩ *Répondre*.
 - **Modifier ou supprimer un message** (clic droit → *Modifier*, *Supprimer*) : la modification est signée,
   synchronisée avec les absents, et le message affiche « modifié » ; supprimé, il devient « Message supprimé »,
@@ -113,7 +117,7 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
   monde. Liste fermée, Tab complète comme dans un terminal (le pseudo s'il est seul possible, sinon la liste). Les mentions apparaissent en gras ; un message qui vous mentionne a une bulle jaune, et sa notification
   l'indique (« Alice vous a mentionné(e) »). Elles sont retrouvées dans le texte signé : rien ne change dans le
   protocole, et personne ne peut en ajouter en relayant un message.
-- Menu ⋮ : inviter, rejoindre, se reconnecter, **partager ma console**, changer de pseudo,
+- Menu ⋮ : inviter, rejoindre, se reconnecter, **partager ma console**, changer de pseudo ou d'avatar,
   **vider la conversation** (efface l'historique local), quitter le groupe
 - Survoler la ligne d'état sous le titre affiche l'état de chaque membre (dernière erreur, heure du prochain essai).
   Un membre pas encore relié directement, mais connecté à un autre membre, apparaît « en ligne (via …) » : les
@@ -275,6 +279,9 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
   quelqu'un qui possède le code ne peut pas se faire passer pour un autre membre.
 - **Messages** : l'auteur signe chaque message (identifiant, adresse, pseudo, texte, heure). Un message
   modifié en route ou attribué à quelqu'un d'autre est rejeté.
+- **Avatars** : signés par leur auteur, acceptés seulement pour les membres de la conversation. Une image reçue
+  n'est décodée que si c'est un JPEG d'au plus 16 Ko et 192 × 192 pixels. Un membre ne reçoit que les avatars
+  des membres de la conversation, rien sur les contacts de vos autres conversations.
 - **Exclusion et secret** (⋮ → *Membres…* : rôles, présence, *Nommer administrateur*, *Exclure…*,
   *Renouveler le secret…*) : le créateur du groupe en est le premier administrateur ; un administrateur peut en
   nommer d'autres, retirer ce rôle ou s'en retirer, tant qu'il en reste un (sans changer le secret). Les décisions (exclusions,
@@ -314,13 +321,14 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 | `filestore.*` | Fichiers joints : découpage en morceaux, empreintes, stockage, reprise, ménage à 30 jours |
 | `reactions.*` | Réactions : enregistrements signés, état (le plus récent l'emporte) |
 | `markup.*` | Repérage de `code` et des blocs ``` dans le texte |
+| `avatar.*` | Avatars : image recadrée et réduite, enregistrement signé, décodage prudent d'une image reçue |
 | `notifications.*` | Réglage des notifications (lesquelles, pause) |
 | `composer.*` | Zone de saisie sur plusieurs lignes (Entrée / Maj+Entrée, hauteur, collage d'images) |
 | `safetynumber.*` | Code de sécurité entre deux membres |
 | `links.*` | Détection des liens dans le texte des messages |
 | `mentions.*`, `mentioncompleter.*` | Détection des « @pseudo », autocomplétion dans la zone de saisie |
 | `conversations.*` | Liste des conversations, leurs dossiers, reprise de l'ancienne disposition (un seul groupe) |
-| `groupstore.*` | État persistant : pseudo, identité et trousseau (communs), secret et membres (par conversation) |
+| `groupstore.*` | État persistant : pseudo, avatars, identité et trousseau (communs), secret et membres (par conversation) |
 | `governance.*` | Gouvernance du groupe : administrateurs, exclusions, secret en vigueur (enregistrements signés) |
 | `history.*` | Historique local, inventaire et lots de synchronisation |
 | `connectionpolicy.*` | Espacement des appels, appels croisés, présence relayée |
