@@ -134,6 +134,14 @@ private:
         return a.node->isConnected(b.onion) && b.node->isConnected(a.onion);
     }
 
+    // Pourquoi deux membres ne sont pas reliés : dernière erreur de chaque côté
+    static QByteArray whyNotLinked(Peer &a, Peer &b)
+    {
+        return QStringLiteral("%1 -> %2 : « %3 » ; %2 -> %1 : « %4 »")
+            .arg(a.nick, b.nick, a.node->lastError(b.onion), b.node->lastError(a.onion))
+            .toUtf8();
+    }
+
     // A crée le groupe ; B rejoint avec le code de A, C avec celui de B
     void mesh()
     {
@@ -142,11 +150,11 @@ private:
         a.node->setOnline(a.onion);
         QCOMPARE(b.node->join(invitation(a)), GroupNode::JoinResult::Joined);
         b.node->setOnline(b.onion);
-        QTRY_VERIFY(linked(a, b));
+        QVERIFY2(QTest::qWaitFor([&] { return linked(a, b); }), whyNotLinked(a, b).constData());
         QCOMPARE(c.node->join(invitation(b)), GroupNode::JoinResult::Joined);
         c.node->setOnline(c.onion);
-        QTRY_VERIFY(linked(b, c));
-        QTRY_VERIFY(linked(a, c)); // C a découvert A par la liste des membres de B
+        QVERIFY2(QTest::qWaitFor([&] { return linked(b, c); }), whyNotLinked(b, c).constData());
+        QVERIFY2(QTest::qWaitFor([&] { return linked(a, c); }), whyNotLinked(a, c).constData()); // C a découvert A par la liste des membres de B
     }
 
     static int countId(const QList<QJsonObject> &list, const QString &id)
