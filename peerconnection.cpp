@@ -119,6 +119,10 @@ void PeerConnection::sendHello()
 
 void PeerConnection::onReadyRead()
 {
+    // Connexion entrante : ses premières données peuvent arriver avant le démarrage différé (constructeur),
+    // sous Windows notamment. Sans cela, la clé de l'appelant serait prise pour un message chiffré.
+    if (m_state == Connecting && m_socket->state() == QAbstractSocket::ConnectedState)
+        onConnected();
     const QByteArray data = m_socket->readAll();
     m_receivedAny = m_receivedAny || !data.isEmpty();
     m_buffer += data;

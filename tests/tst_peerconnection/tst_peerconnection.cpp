@@ -326,6 +326,34 @@ private slots:
         delete raw;
     }
 
+    void incomingDataBeforeDeferredStart()
+    {
+        // Sous Windows, la clé de l'appelant peut être lue avant le démarrage différé d'une connexion entrante.
+        // Ordre reproduit ici : clé déjà reçue, puis readyRead aussitôt la connexion entrante créée, avant tout
+        // retour à la boucle d'événements.
+        QTcpServer server;
+        server.setProxy(QNetworkProxy::NoProxy);
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        const Side a = side('a'), b = side('b');
+        auto *s = new QTcpSocket;
+        s->setProxy(QNetworkProxy::NoProxy);
+        PeerConnection out(s, true, a.psk, a.nick, a.onion, a.seed);
+        QSignalSpy outReady(&out, &PeerConnection::ready);
+        s->connectToHost(QHostAddress::LocalHost, server.serverPort());
+        // Appelant connecté (sa clé part aussitôt), connexion pas encore acceptée de ce côté
+        QTRY_VERIFY(server.hasPendingConnections() && s->state() == QAbstractSocket::ConnectedState
+                    && s->bytesToWrite() == 0);
+
+        QTcpSocket *accepted = server.nextPendingConnection();
+        QVERIFY(accepted->bytesAvailable() > 0 || accepted->waitForReadyRead(2000)); // clé de l'appelant reçue
+        PeerConnection in(accepted, false, b.psk, b.nick, b.onion, b.seed);
+        QSignalSpy inReady(&in, &PeerConnection::ready), inClosed(&in, &PeerConnection::closed);
+        emit accepted->readyRead(); // avant le démarrage différé
+        QTRY_COMPARE(inReady.count(), 1);
+        QTRY_COMPARE(outReady.count(), 1);
+        QCOMPARE(inClosed.count(), 0);
+    }
+
     void unreachablePeerFails()
     {
         // Port fermé : l'appel échoue sans attendre le délai de poignée de main. Le port 1 (réservé) plutôt
