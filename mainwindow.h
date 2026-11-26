@@ -149,9 +149,9 @@ private:
     void buildLanguageMenu(QMenu *menu);
     void changeAvatar(); // le nôtre, commun à toutes les conversations (cf. avatar.h)
     void changeConversationAvatar(); // administrateurs : le même pour tous les membres
-    // Choix d'un avatar : aperçu (current, sinon initiale de name), Choisir une image…, Retirer
+    // Choix d'un avatar : aperçu (dessiné par preview, à la taille demandée), Choisir une image…, Retirer
     void avatarDialog(const QString &title, const QString &note, const std::function<QByteArray()> &current,
-                      const std::function<QString()> &name,
+                      const std::function<QPixmap(int side)> &preview,
                       const std::function<bool(const QByteArray &, QString *)> &apply);
     // Code de sécurité (cf. safetynumber.h) : choix du membre, puis comparaison de vive voix
     void verifyMember();

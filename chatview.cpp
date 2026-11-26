@@ -143,7 +143,7 @@ QColor ChatView::colorFor(const QString &name)
     return colors.at(int(h % uint(colors.size())));
 }
 
-QPixmap ChatView::roundAvatar(const QImage &image, const QString &name, int side, qreal ratio)
+QPixmap ChatView::roundAvatar(const QImage &image, const QString &name, int side, qreal ratio, const QString &colorKey)
 {
     QPixmap pix(QSize(side, side) * ratio);
     pix.setDevicePixelRatio(ratio);
@@ -157,7 +157,7 @@ QPixmap ChatView::roundAvatar(const QImage &image, const QString &name, int side
         p.setClipPath(circle);
         p.drawImage(r, image);
     } else {
-        p.fillPath(circle, colorFor(name));
+        p.fillPath(circle, colorFor(colorKey.isEmpty() ? name : colorKey));
         QFont f = QApplication::font();
         f.setBold(true);
         f.setPixelSize(qMax(8, side * 4 / 9));

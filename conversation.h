@@ -49,6 +49,9 @@ public:
     QImage avatarOf(const QString &onion) const;
     void forgetAvatar(const QString &onion);
     QImage conversationAvatar() const; // choisi par un administrateur ; image nulle : aucun
+    // Son rond : l'image, sinon l'initiale du nom partagé et une couleur tirée du groupe, les mêmes chez tous
+    // les membres (sans nom partagé, chacun voit les pseudos des autres : l'initiale diffère alors)
+    QPixmap avatarPixmap(int side, qreal ratio) const;
     QStringList mentionNames() const; // pseudos reconnus dans les « @… » (membres, nous, « tous »)
 
     // ---- Non-lus (la fenêtre décide quand en ajouter : conversation cachée ou fenêtre en arrière-plan)

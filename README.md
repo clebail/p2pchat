@@ -60,8 +60,10 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
   tous les membres (signé, le plus récent l'emporte), y compris ceux qui rejoignent ensuite. Après un départ,
   la conversation garde le dernier nom connu.
 - **Avatar de la conversation** (⋮ → *Avatar de la conversation…*) : réservé aux administrateurs, partagé avec
-  tous les membres comme le nom. Il s'affiche dans la colonne des conversations et dans l'en-tête ; sans avatar,
-  un rond coloré avec l'initiale du nom. Il disparaît quand on quitte le groupe.
+  tous les membres comme le nom. Il s'affiche dans la colonne des conversations et dans l'en-tête ; sans image,
+  un rond avec l'initiale du nom de la conversation, de la même couleur chez tous les membres (sans nom choisi
+  par un administrateur, chacun voit les pseudos des autres, donc une autre initiale). Il disparaît quand on
+  quitte le groupe.
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
 - **Avatar** (⋮ → *Changer d'avatar…*) : une image recadrée en carré et réduite (96 px), commune à toutes vos
   conversations et visible par leurs membres. Sans image, un rond coloré avec l'initiale du pseudo. Signé par son

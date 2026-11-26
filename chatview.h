@@ -80,8 +80,10 @@ public:
     int runningAnimations() const { return int(m_animations.size()); }
 
     static QColor colorFor(const QString &name);
-    // Rond d'avatar (colonne, en-tête, dialogues) : l'image, sinon la couleur du nom et son initiale
-    static QPixmap roundAvatar(const QImage &image, const QString &name, int side, qreal ratio);
+    // Rond d'avatar (colonne, en-tête, dialogues) : l'image, sinon une couleur et l'initiale de name.
+    // colorKey : ce dont dépend la couleur (vide : name)
+    static QPixmap roundAvatar(const QImage &image, const QString &name, int side, qreal ratio,
+                               const QString &colorKey = {});
     // Extrait d'un message pour une citation : une ligne, espaces regroupés, coupé à maxChars
     static QString excerpt(const QString &text, int maxChars = 120);
     // Texte d'un message pour le citer : « 📷 Image » ou « 📎 nom » s'il n'a pas de légende

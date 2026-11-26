@@ -154,6 +154,17 @@ private slots:
         pair();
         Person &a = person('a'), &b = person('b');
         QVERIFY(b.conv->conversationAvatar().isNull());
+
+        // Sans image : même couleur chez chacun (tirée du groupe), bien que chacun voie un autre nom
+        QTRY_COMPARE(b.conv->node().groupId(), a.conv->node().groupId());
+        QVERIFY(a.conv->displayName() != b.conv->displayName());
+        auto edge = [](const Conversation &c) { return c.avatarPixmap(40, 1).toImage().pixel(5, 20); };
+        QCOMPARE(edge(*a.conv), edge(*b.conv));
+        // Avec un nom partagé : le même rond, initiale comprise
+        QVERIFY(a.conv->node().setSharedName("Les amis"));
+        QTRY_COMPARE(b.conv->displayName(), QString("Les amis"));
+        QCOMPARE(a.conv->avatarPixmap(40, 1).toImage(), b.conv->avatarPixmap(40, 1).toImage());
+
         QImage img(Avatar::Side, Avatar::Side, QImage::Format_RGB32);
         img.fill(Qt::magenta);
         QVERIFY(!b.conv->node().setConversationAvatar(Avatar::fromImage(img))); // pas administrateur

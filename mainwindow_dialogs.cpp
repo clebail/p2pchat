@@ -211,15 +211,15 @@ void MainWindow::buildLanguageMenu(QMenu *menu)
 // ---------------------------------------------------------------- Avatar
 
 void MainWindow::avatarDialog(const QString &title, const QString &note, const std::function<QByteArray()> &current,
-                              const std::function<QString()> &name,
+                              const std::function<QPixmap(int side)> &preview,
                               const std::function<bool(const QByteArray &, QString *)> &apply)
 {
     QDialog dlg(this);
     dlg.setWindowTitle(title);
     auto *lay = new QVBoxLayout(&dlg);
-    auto *preview = new QLabel(&dlg);
-    preview->setAlignment(Qt::AlignCenter);
-    lay->addWidget(preview);
+    auto *image = new QLabel(&dlg);
+    image->setAlignment(Qt::AlignCenter);
+    lay->addWidget(image);
     auto *text = new QLabel(note, &dlg);
     text->setWordWrap(true);
     lay->addWidget(text);
@@ -234,10 +234,9 @@ void MainWindow::avatarDialog(const QString &title, const QString &note, const s
     lay->addLayout(buttons);
     connect(closeBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
 
-    auto refresh = [this, preview, removeBtn, current, name] {
-        const QByteArray jpeg = current();
-        preview->setPixmap(ChatView::roundAvatar(Avatar::decode(jpeg), name(), Avatar::Side, devicePixelRatioF()));
-        removeBtn->setEnabled(!jpeg.isEmpty());
+    auto refresh = [image, removeBtn, current, preview] {
+        image->setPixmap(preview(Avatar::Side));
+        removeBtn->setEnabled(!current().isEmpty());
     };
     auto set = [&dlg, title, apply, refresh](const QByteArray &jpeg) {
         QString error;
@@ -269,7 +268,11 @@ void MainWindow::changeAvatar()
     avatarDialog(
         tr("Votre avatar"),
         tr("Visible par les membres de toutes vos conversations. L'image est recadrée en carré et réduite."),
-        [this] { return m_group->ownAvatar(); }, [this] { return m_group->nickname(); },
+        [this] { return m_group->ownAvatar(); },
+        [this](int side) {
+            return ChatView::roundAvatar(Avatar::decode(m_group->ownAvatar()), m_group->nickname(), side,
+                                         devicePixelRatioF());
+        },
         [this](const QByteArray &jpeg, QString *) {
             // Plus récent que le précédent, même si l'horloge a reculé ; puis envoyé dans chaque conversation
             const qint64 ts = std::max(QDateTime::currentMSecsSinceEpoch(), m_group->ownAvatarTime() + 1);
@@ -289,7 +292,8 @@ void MainWindow::changeConversationAvatar()
     avatarDialog(
         tr("Avatar de la conversation"),
         tr("Visible par tous les membres de « %1 ». L'image est recadrée en carré et réduite.").arg(c->displayName()),
-        [c] { return c->node().conversationAvatar(); }, [c] { return c->displayName(); },
+        [c] { return c->node().conversationAvatar(); },
+        [this, c](int side) { return c->avatarPixmap(side, devicePixelRatioF()); },
         [c](const QByteArray &jpeg, QString *error) { return c->node().setConversationAvatar(jpeg, error); });
 }
 

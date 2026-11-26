@@ -215,6 +215,14 @@ QImage Conversation::conversationAvatar() const
     return *m_conversationAvatar;
 }
 
+QPixmap Conversation::avatarPixmap(int side, qreal ratio) const
+{
+    const QString shared = m_node->sharedName();
+    const QString name = shared.isEmpty() ? displayName() : shared;
+    const QString group = m_node->groupId();
+    return ChatView::roundAvatar(conversationAvatar(), name, side, ratio, group.isEmpty() ? name : group);
+}
+
 void Conversation::forgetAvatar(const QString &onion)
 {
     if (m_avatars.remove(onion) > 0 && m_view)

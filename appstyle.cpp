@@ -37,6 +37,8 @@ QToolButton#searchButton:hover { background: #e9eef6; }
 QMenu { background: #f0f4f9; border: 1px solid #e1e3e1; border-radius: 8px; padding: 6px 0; }
 QMenu::item { padding: 9px 28px 9px 20px; color: #1f1f1f; }
 QMenu::item:selected { background: #dde3ea; }
+QMenu::item:disabled { color: #9aa0a6; }
+QMenu::item:disabled:selected { background: transparent; }
 QMenu::separator { height: 1px; background: #e1e3e1; margin: 4px 0; }
 QPushButton#primary { background: #0b57d0; color: white; border: none; border-radius: 20px;
                       padding: 10px 28px; font-weight: 600; }

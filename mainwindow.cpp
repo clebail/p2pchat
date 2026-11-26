@@ -324,7 +324,7 @@ void MainWindow::updateConversationItem(Conversation *c)
     f.setBold(c->unread() > 0);
     item->setFont(f);
     item->setToolTip(c->displayName());
-    item->setIcon(ChatView::roundAvatar(c->conversationAvatar(), c->displayName(), ConvAvatarSide, devicePixelRatioF()));
+    item->setIcon(c->avatarPixmap(ConvAvatarSide, devicePixelRatioF()));
 }
 
 void MainWindow::startConversation()
@@ -833,8 +833,7 @@ void MainWindow::updateStatus()
     // Titre : le nom de la conversation, ou les pseudos des membres
     m_title->setText(m_shown->isBlank() ? tr("P2P Chat") : m_shown->displayName());
     m_titleAvatar->setVisible(!m_shown->isBlank());
-    m_titleAvatar->setPixmap(ChatView::roundAvatar(m_shown->conversationAvatar(), m_shown->displayName(),
-                                                   TitleAvatarSide, devicePixelRatioF()));
+    m_titleAvatar->setPixmap(m_shown->avatarPixmap(TitleAvatarSide, devicePixelRatioF()));
     QStringList others;
     for (const Member &m : list)
         others << m.nick;
