@@ -4,60 +4,64 @@ CONFIG += c++17
 # Sources en UTF-8 : sans cette option, MSVC les lit en Windows-1252 et abîme les littéraux larges
 # (QStringLiteral, u"…") qui contiennent des accents ou des émojis
 win32-msvc*: QMAKE_CXXFLAGS += /utf-8
-INCLUDEPATH += $$PWD
-DEPENDPATH += $$PWD
+# Un dossier par fonctionnalité (cf. README, « Fichiers ») ; les #include restent sans chemin
+CORE_DIRS = crypto files group messages network notifications text app
+for(dir, CORE_DIRS) {
+    INCLUDEPATH += $$PWD/$$dir
+    DEPENDPATH += $$PWD/$$dir
+}
 
 SOURCES += \
-    $$PWD/attachment.cpp \
-    $$PWD/avatar.cpp \
-    $$PWD/connectionpolicy.cpp \
-    $$PWD/conversations.cpp \
-    $$PWD/crypto.cpp \
-    $$PWD/edits.cpp \
-    $$PWD/filestore.cpp \
-    $$PWD/governance.cpp \
-    $$PWD/groupnode.cpp \
-    $$PWD/groupstore.cpp \
-    $$PWD/history.cpp \
-    $$PWD/invitation.cpp \
-    $$PWD/language.cpp \
-    $$PWD/links.cpp \
-    $$PWD/markup.cpp \
-    $$PWD/notifications.cpp \
-    $$PWD/mentions.cpp \
-    $$PWD/peerconnection.cpp \
-    $$PWD/protocol.cpp \
-    $$PWD/reactions.cpp \
-    $$PWD/safetynumber.cpp \
-    $$PWD/singleinstance.cpp \
-    $$PWD/spellchecker.cpp \
-    $$PWD/switchboard.cpp
+    $$PWD/messages/attachment.cpp \
+    $$PWD/messages/avatar.cpp \
+    $$PWD/network/connectionpolicy.cpp \
+    $$PWD/group/conversations.cpp \
+    $$PWD/crypto/crypto.cpp \
+    $$PWD/messages/edits.cpp \
+    $$PWD/files/filestore.cpp \
+    $$PWD/group/governance.cpp \
+    $$PWD/group/groupnode.cpp \
+    $$PWD/group/groupstore.cpp \
+    $$PWD/group/history.cpp \
+    $$PWD/group/invitation.cpp \
+    $$PWD/app/language.cpp \
+    $$PWD/text/links.cpp \
+    $$PWD/text/markup.cpp \
+    $$PWD/notifications/notifications.cpp \
+    $$PWD/text/mentions.cpp \
+    $$PWD/network/peerconnection.cpp \
+    $$PWD/network/protocol.cpp \
+    $$PWD/messages/reactions.cpp \
+    $$PWD/crypto/safetynumber.cpp \
+    $$PWD/app/singleinstance.cpp \
+    $$PWD/text/spellchecker.cpp \
+    $$PWD/network/switchboard.cpp
 
 HEADERS += \
-    $$PWD/attachment.h \
-    $$PWD/avatar.h \
-    $$PWD/connectionpolicy.h \
-    $$PWD/conversations.h \
-    $$PWD/crypto.h \
-    $$PWD/edits.h \
-    $$PWD/filestore.h \
-    $$PWD/governance.h \
-    $$PWD/groupnode.h \
-    $$PWD/groupstore.h \
-    $$PWD/history.h \
-    $$PWD/invitation.h \
-    $$PWD/language.h \
-    $$PWD/links.h \
-    $$PWD/markup.h \
-    $$PWD/notifications.h \
-    $$PWD/mentions.h \
-    $$PWD/peerconnection.h \
-    $$PWD/protocol.h \
-    $$PWD/reactions.h \
-    $$PWD/safetynumber.h \
-    $$PWD/singleinstance.h \
-    $$PWD/spellchecker.h \
-    $$PWD/switchboard.h
+    $$PWD/messages/attachment.h \
+    $$PWD/messages/avatar.h \
+    $$PWD/network/connectionpolicy.h \
+    $$PWD/group/conversations.h \
+    $$PWD/crypto/crypto.h \
+    $$PWD/messages/edits.h \
+    $$PWD/files/filestore.h \
+    $$PWD/group/governance.h \
+    $$PWD/group/groupnode.h \
+    $$PWD/group/groupstore.h \
+    $$PWD/group/history.h \
+    $$PWD/group/invitation.h \
+    $$PWD/app/language.h \
+    $$PWD/text/links.h \
+    $$PWD/text/markup.h \
+    $$PWD/notifications/notifications.h \
+    $$PWD/text/mentions.h \
+    $$PWD/network/peerconnection.h \
+    $$PWD/network/protocol.h \
+    $$PWD/messages/reactions.h \
+    $$PWD/crypto/safetynumber.h \
+    $$PWD/app/singleinstance.h \
+    $$PWD/text/spellchecker.h \
+    $$PWD/network/switchboard.h
 
 # OpenSSL (libcrypto) : X25519, Ed25519, HKDF, ChaCha20-Poly1305
 macx {

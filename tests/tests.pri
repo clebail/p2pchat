@@ -3,4 +3,4 @@ QT += testlib
 QT -= gui
 CONFIG += testcase console no_testcase_installs
 CONFIG -= app_bundle
-include($$PWD/../core.pri)
+include($$PWD/../src/core.pri)

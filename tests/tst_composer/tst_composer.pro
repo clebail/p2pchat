@@ -1,5 +1,5 @@
 include(../tests.pri)
-include(../../ui.pri)
+include(../../src/ui.pri)
 TARGET = tst_composer
 SOURCES += tst_composer.cpp
 

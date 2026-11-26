@@ -346,49 +346,108 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
 
 ## Fichiers
 
+Les sources sont dans `src/`, un dossier par fonctionnalité. Les `#include` n'ont pas de chemin : chaque dossier est
+dans le chemin d'inclusion (`src/core.pri`, `src/ui.pri`).
+
+**`src/app/`** — Application
+
 | Fichier | Rôle |
 |---|---|
-| `torservice.*` | Lancement de tor, torrc, progression, adresse onion |
-| `spellchecker.*` | Correcteur orthographique (Hunspell) : dictionnaires, mots à souligner, suggestions |
-| `language.*`, `translations/` | Langue de l'interface (réglage, système), traductions de P2P Chat et de Qt |
-| `peerconnection.*` | Trames, poignée de main, messages chiffrés, ping |
-| `switchboard.*` | Écoute locale commune : chaque connexion entrante va à la conversation dont elle présente le secret |
-| `crypto.*` | X25519, Ed25519, HKDF, ChaCha20-Poly1305 (OpenSSL) |
-| `protocol.*` | Formats communs (adresse onion, base64), messages signés |
-| `invitation.*` | Encodage / décodage du code d'invitation |
-| `attachment.*` | Images jointes : chargement, réduction et compression, décodage sûr à la réception |
-| `filestore.*` | Fichiers joints : découpage en morceaux, empreintes, stockage, reprise, ménage à 30 jours |
-| `reactions.*` | Réactions : enregistrements signés, état (le plus récent l'emporte) |
-| `markup.*` | Repérage de `code` et des blocs ``` dans le texte |
-| `avatar.*` | Avatars : image recadrée et réduite, enregistrement signé, décodage prudent d'une image reçue |
-| `notifications.*` | Réglage des notifications (lesquelles, pause) |
-| `composer.*` | Zone de saisie sur plusieurs lignes (Entrée / Maj+Entrée, hauteur, collage d'images) |
-| `safetynumber.*` | Code de sécurité entre deux membres |
-| `links.*` | Détection des liens dans le texte des messages |
-| `mentions.*`, `mentioncompleter.*` | Détection des « @pseudo », autocomplétion dans la zone de saisie |
-| `conversations.*` | Liste des conversations, leurs dossiers, reprise de l'ancienne disposition (un seul groupe) |
-| `groupstore.*` | État persistant : pseudo, avatars, identité et trousseau (communs), secret et membres (par conversation) |
-| `governance.*` | Gouvernance du groupe : administrateurs, exclusions, secret en vigueur (enregistrements signés) |
-| `history.*` | Historique local, inventaire et lots de synchronisation |
-| `connectionpolicy.*` | Espacement des appels, appels croisés, présence relayée |
-| `core.pri` | Liste des fichiers ci-dessus (sans interface), partagée par l'application et les tests |
-| `groupnode.*` | Le groupe, sans interface : maillage, reconnexion, présence, synchronisation, messages, réactions, historique |
+| `main.cpp` | Démarrage : langue, instance unique, pseudo, fenêtre |
 | `mainwindow.*` | Fenêtre : colonne des conversations, zone de saisie, Tor, notifications |
 | `mainwindow_dialogs.cpp` | Dialogues de la fenêtre : invitation, membres et gouvernance, code de sécurité, console partagée |
-| `conversation.*` | Une conversation affichable : son groupe et sa vue, ce que la fenêtre en montre (nom, aperçu, état, non-lus, notifications) |
 | `appstyle.*` | Feuille de style et icônes dessinées de la fenêtre |
-| `notifier.*`, `notifier_mac.mm` | Notifications natives (D-Bus sous Linux, UserNotifications sous macOS) |
+| `language.*` | Langue de l'interface (réglage, système), traductions (`translations/`) de P2P Chat et de Qt |
+| `singleinstance.*` | Une seule instance par utilisateur ; la suivante affiche la fenêtre existante |
+
+**`src/chat/`** — Conversation affichée
+
+| Fichier | Rôle |
+|---|---|
+| `conversation.*` | Une conversation affichable : son groupe et sa vue, ce que la fenêtre en montre (nom, aperçu, état, non-lus, notifications) |
+| `chatview.*`, `hoverbar.h` | Liste des messages : défilement, séparateur, bouton ↓, barre de survol, GIF, images en grand |
 | `chatmodel.*` | Contenu de la conversation : messages, lignes système et de présence, citations, réactions, recherche |
 | `chatdelegate.*` | Dessin des bulles (citation, image, texte, réactions) et de ce qui y est cliquable |
 | `chatstyle.*` | Couleurs, dimensions, polices et mise en page du texte des bulles |
-| `chatview.*`, `hoverbar.h` | Liste des messages : défilement, séparateur, bouton ↓, barre de survol, GIF, images en grand |
-| `ui.pri` | Composants de la conversation, partagés par l'application et les tests graphiques |
+| `composer.*` | Zone de saisie sur plusieurs lignes (Entrée / Maj+Entrée, hauteur, collage d'images) |
+| `mentioncompleter.*` | Autocomplétion des « @pseudo » dans la zone de saisie |
+
+**`src/group/`** — Groupe
+
+| Fichier | Rôle |
+|---|---|
+| `groupnode.*` | Le groupe, sans interface : maillage, reconnexion, présence, synchronisation, messages, réactions, historique |
+| `groupstore.*` | État persistant : pseudo, avatars, identité et trousseau (communs), secret et membres (par conversation) |
+| `governance.*` | Gouvernance du groupe : administrateurs, exclusions, secret en vigueur (enregistrements signés) |
+| `invitation.*` | Encodage / décodage du code d'invitation |
+| `history.*` | Historique local, inventaire et lots de synchronisation |
+| `conversations.*` | Liste des conversations, leurs dossiers, reprise de l'ancienne disposition (un seul groupe) |
+
+**`src/network/`** — Réseau
+
+| Fichier | Rôle |
+|---|---|
+| `protocol.*` | Formats communs (adresse onion, base64), messages signés |
+| `peerconnection.*` | Trames, poignée de main, messages chiffrés, ping |
+| `switchboard.*` | Écoute locale commune : chaque connexion entrante va à la conversation dont elle présente le secret |
+| `connectionpolicy.*` | Espacement des appels, appels croisés, présence relayée |
+| `torservice.*` | Lancement de tor, torrc, progression, adresse onion |
+
+**`src/crypto/`** — Cryptographie
+
+| Fichier | Rôle |
+|---|---|
+| `crypto.*` | X25519, Ed25519, HKDF, ChaCha20-Poly1305 (OpenSSL) |
+| `safetynumber.*` | Code de sécurité entre deux membres |
+
+**`src/messages/`** — Contenu des messages
+
+| Fichier | Rôle |
+|---|---|
+| `attachment.*` | Images jointes : chargement, réduction et compression, décodage sûr à la réception |
+| `avatar.*` | Avatars : image recadrée et réduite, enregistrement signé, décodage prudent d'une image reçue |
+| `edits.*` | Modification et suppression des messages : enregistrements signés |
+| `reactions.*` | Réactions : enregistrements signés, état (le plus récent l'emporte) |
+
+**`src/text/`** — Texte
+
+| Fichier | Rôle |
+|---|---|
+| `markup.*` | Repérage de `code` et des blocs ``` dans le texte |
+| `links.*` | Détection des liens dans le texte des messages |
+| `mentions.*` | Détection des « @pseudo » dans le texte |
+| `spellchecker.*` | Correcteur orthographique (Hunspell) : dictionnaires, mots à souligner, suggestions |
+
+**`src/files/`** — Fichiers joints
+
+| Fichier | Rôle |
+|---|---|
+| `filestore.*` | Fichiers joints : découpage en morceaux, empreintes, stockage, reprise, ménage à 30 jours |
+
+**`src/notifications/`** — Notifications
+
+| Fichier | Rôle |
+|---|---|
+| `notifications.*` | Réglage des notifications (lesquelles, pause) |
+| `notifier.*`, `notifier_mac.mm` | Notifications natives (D-Bus sous Linux, UserNotifications sous macOS) |
+
+**`src/terminal/`** — Console partagée (Linux, macOS)
+
+| Fichier | Rôle |
+|---|---|
 | `terminalsession.*` | Console partagée : shell dans un pseudo-terminal (hôte), miroir (invité), échanges avec l'autre membre |
 | `terminalsharing.*` | Console partagée : proposition, réponse, annulation, une session à la fois |
-| `singleinstance.*` | Une seule instance par utilisateur ; la suivante affiche la fenêtre existante |
 | `terminalclient.*` | Mode `p2pchat --terminal` exécuté dans la fenêtre de terminal (mode brut, relais vers P2P Chat) |
+
+**Autour**
+
+| Fichier | Rôle |
+|---|---|
+| `src/core.pri` | Fichiers sans interface (protocole, crypto, groupe, historique…), partagés par l'application et les tests ; OpenSSL et Hunspell |
+| `src/ui.pri` | Composants de la conversation, partagés par l'application et les tests graphiques |
+| `resources/` | Icône (`icons/` : `p2pchat.svg` source, `.icns` macOS, `.ico` Windows, `.png`), entrée de menu Linux (`p2pchat.desktop`), ressources Qt |
+| `translations/` | Traduction anglaise (cf. *Traductions*) |
 | `tests/` | Tests unitaires (Qt Test) |
-| `icons/` | Icône : `p2pchat.svg` (source), `.icns` (macOS), `.ico` (Windows), `.png` |
 
 La configuration (`p2pchat.ini`) est dans `~/.config/p2pchat/` (Linux), `~/Library/Preferences/p2pchat/` (macOS)
 ou `%APPDATA%\p2pchat\` (Windows). Les clés Tor et les conversations sont dans le dossier de données de
