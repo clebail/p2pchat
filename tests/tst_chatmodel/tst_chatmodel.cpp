@@ -225,7 +225,7 @@ private slots:
             int hits = 0;
             for (int y = opt.rect.top(); y < opt.rect.bottom(); y += 3)
                 for (int x = opt.rect.left(); x < opt.rect.right(); x += 10) {
-                    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), Qt::LeftButton, Qt::NoButton,
+                    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), QPointF(x, y), Qt::LeftButton, Qt::NoButton,
                                         Qt::NoModifier);
                     hits += delegate->editorEvent(&release, view.model(), opt, idx) ? 1 : 0;
                 }
@@ -266,8 +266,8 @@ private slots:
         QVERIFY(opt.rect.height() >= 225 && opt.rect.height() < 300);
         auto *delegate = qobject_cast<ChatDelegate *>(view.itemDelegate());
         QSignalSpy clicked(delegate, &ChatDelegate::imageClicked);
-        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(opt.rect.left() + 150, opt.rect.center().y()),
-                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        const QPointF at(opt.rect.left() + 150, opt.rect.center().y());
+        QMouseEvent release(QEvent::MouseButtonRelease, at, at, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
         QVERIFY(delegate->editorEvent(&release, view.model(), opt, idx));
         QCOMPARE(clicked.count(), 1);
         QCOMPARE(clicked.first().first().toInt(), 0);
@@ -403,7 +403,7 @@ private slots:
         for (int y = opt.rect.top(); y < opt.rect.bottom() && link.isEmpty(); y += 2)
             for (int x = opt.rect.left(); x < opt.rect.right() && link.isEmpty(); x += 4)
                 if (delegate->hitTest(idx, opt.rect, QPoint(x, y)).kind == ChatDelegate::Hit::Link) {
-                    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), Qt::LeftButton, Qt::NoButton,
+                    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), QPointF(x, y), Qt::LeftButton, Qt::NoButton,
                                         Qt::NoModifier);
                     delegate->editorEvent(&release, view.model(), opt, idx);
                 }
@@ -439,7 +439,7 @@ private slots:
                 if (hit.kind == ChatDelegate::Hit::Reaction && !seen.contains(hit.emoji)) {
                     seen << hit.emoji;
                     QCOMPARE(hit.who, hit.emoji == QStringLiteral("👍") ? QString("Vous, Bob") : QString("Bob"));
-                    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), Qt::LeftButton, Qt::NoButton,
+                    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), QPointF(x, y), Qt::LeftButton, Qt::NoButton,
                                         Qt::NoModifier);
                     delegate->editorEvent(&release, view.model(), opt, idx);
                 }
@@ -518,7 +518,7 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&view));
         auto hover = [&](int row) {
             const QPoint pos = view.visualRect(view.chatModel()->index(row)).center();
-            QMouseEvent move(QEvent::MouseMove, pos, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            QMouseEvent move(QEvent::MouseMove, pos, pos, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
             QApplication::sendEvent(view.viewport(), &move);
         };
 
@@ -628,7 +628,7 @@ private slots:
             for (int y = opt.rect.top(); y < opt.rect.bottom(); y += 3)
                 for (int x = opt.rect.left(); x < opt.rect.right(); x += 6)
                     if (delegate->hitTest(idx, opt.rect, QPoint(x, y)).kind == ChatDelegate::Hit::File) {
-                        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), Qt::LeftButton, Qt::NoButton,
+                        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), QPointF(x, y), Qt::LeftButton, Qt::NoButton,
                                             Qt::NoModifier);
                         return delegate->editorEvent(&release, view.model(), opt, idx);
                     }

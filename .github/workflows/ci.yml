@@ -1,4 +1,4 @@
-# Compilation et tests à chaque push et pull request : Linux (avec un passage aux sanitizers), macOS, Windows
+# Compilation et tests à chaque push et pull request : Linux (Qt 5 et Qt 6, avec un passage aux sanitizers), macOS, Windows
 # Caches : ccache sous Linux (seuls les fichiers modifiés sont recompilés), Qt et OpenSSL déjà compilé sous Windows.
 # macOS sans ccache : qmake y appelle les compilateurs de Xcode par leur chemin complet.
 name: CI
@@ -40,6 +40,32 @@ jobs:
         run: |
           mkdir build-tests && cd build-tests
           qmake ../tests/tests.pro
+          make -j"$(nproc)"
+          make check
+
+  # Qt 6 : ce qui est déprécié y est une erreur (sinon rien ne le signale tant que le reste de la CI est en Qt 5)
+  linux-qt6:
+    name: Linux (Qt 6, gcc)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dépendances
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qt6-base-dev qt6-base-dev-tools qmake6 libssl-dev
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-qt6
+          create-symlink: true
+      - name: Application
+        run: |
+          mkdir build && cd build
+          qmake6 ../p2pchat.pro "QMAKE_CXXFLAGS+=-Werror=deprecated-declarations"
+          make -j"$(nproc)"
+      - name: Tests
+        run: |
+          mkdir build-tests && cd build-tests
+          qmake6 ../tests/tests.pro "QMAKE_CXXFLAGS+=-Werror=deprecated-declarations"
           make -j"$(nproc)"
           make check
 
@@ -121,12 +147,3 @@ jobs:
           qmake ..\tests\tests.pro
           nmake
           nmake check
-      # Un test qui s'arrête net (abort : code 3) ne laisse aucune trace : on relance chacun en détaillant chaque étape
-      - name: Détail des tests en échec
-        if: failure()
-        shell: cmd
-        run: |
-          for /r build-tests %%f in (tst_*.exe) do (
-            echo ===== %%~nf
-            "%%f" -v2 2>&1 || echo ===== %%~nf : ECHEC
-          )
