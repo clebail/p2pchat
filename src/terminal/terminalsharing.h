@@ -27,7 +27,6 @@ public:
 
     TerminalSession *session() const { return m_term; }
     bool hasOutgoingOffer() const { return !m_offer.sid.isEmpty(); }
-    bool hasIncomingOffer() const { return !m_incoming.sid.isEmpty(); }
     bool canShare() const { return !m_term && m_offer.sid.isEmpty(); }
 
     // Propose notre console à un membre connecté (control : il pourra taper) ; false si impossible

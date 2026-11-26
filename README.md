@@ -355,6 +355,7 @@ dans le chemin d'inclusion (`src/core.pri`, `src/ui.pri`).
 |---|---|
 | `main.cpp` | Démarrage : langue, instance unique, pseudo, fenêtre |
 | `mainwindow.*` | Fenêtre : colonne des conversations, zone de saisie, Tor, notifications |
+| `mainwindow_ui.cpp` | Construction de la fenêtre : colonne, barre du haut et menu ⋮, recherche, accueil, bandeaux, zone de saisie |
 | `mainwindow_dialogs.cpp` | Dialogues de la fenêtre : invitation, membres et gouvernance, code de sécurité, console partagée |
 | `appstyle.*` | Feuille de style et icônes dessinées de la fenêtre |
 | `language.*` | Langue de l'interface (réglage, système), traductions (`translations/`) de P2P Chat et de Qt |
@@ -377,6 +378,9 @@ dans le chemin d'inclusion (`src/core.pri`, `src/ui.pri`).
 | Fichier | Rôle |
 |---|---|
 | `groupnode.*` | Le groupe, sans interface : maillage, reconnexion, présence, synchronisation, messages, réactions, historique |
+| `groupnode_files.cpp` | `GroupNode`, fichiers joints : annonces, morceaux, sources, reprise |
+| `groupnode_governance.cpp` | `GroupNode`, gouvernance (administrateurs, exclusions, secret), nom et avatar de la conversation, invitations directes, avatars des membres |
+| `groupnode_p.h` | Commun aux fichiers de `GroupNode` |
 | `groupstore.*` | État persistant : pseudo, avatars, identité et trousseau (communs), secret et membres (par conversation) |
 | `governance.*` | Gouvernance du groupe : administrateurs, exclusions, secret en vigueur (enregistrements signés) |
 | `invitation.*` | Encodage / décodage du code d'invitation |

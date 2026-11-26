@@ -21,6 +21,8 @@ SOURCES += \
     $$PWD/files/filestore.cpp \
     $$PWD/group/governance.cpp \
     $$PWD/group/groupnode.cpp \
+    $$PWD/group/groupnode_files.cpp \
+    $$PWD/group/groupnode_governance.cpp \
     $$PWD/group/groupstore.cpp \
     $$PWD/group/history.cpp \
     $$PWD/group/invitation.cpp \
@@ -47,6 +49,7 @@ HEADERS += \
     $$PWD/files/filestore.h \
     $$PWD/group/governance.h \
     $$PWD/group/groupnode.h \
+    $$PWD/group/groupnode_p.h \
     $$PWD/group/groupstore.h \
     $$PWD/group/history.h \
     $$PWD/group/invitation.h \

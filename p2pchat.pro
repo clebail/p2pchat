@@ -10,7 +10,8 @@ include(src/core.pri)
 include(src/ui.pri)
 
 # Fenêtre principale, Tor, notifications natives (cf. src/, un dossier par fonctionnalité)
-SOURCES += src/app/main.cpp src/app/mainwindow.cpp src/app/mainwindow_dialogs.cpp src/app/appstyle.cpp \
+SOURCES += src/app/main.cpp src/app/mainwindow.cpp src/app/mainwindow_ui.cpp src/app/mainwindow_dialogs.cpp \
+           src/app/appstyle.cpp \
            src/network/torservice.cpp
 HEADERS += src/app/mainwindow.h src/app/appstyle.h src/notifications/notifier.h src/network/torservice.h
 

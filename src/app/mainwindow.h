@@ -81,8 +81,16 @@ private:
     void appendSystem(const QString &text) { m_shown->appendSystem(text); }
 
     // Interface
+    // Construction de la fenêtre (mainwindow_ui.cpp)
     void buildUi();
     QWidget *buildSidebar(QWidget *parent);
+    QWidget *buildTopBar(QWidget *parent);
+    QMenu *buildMainMenu(QWidget *parent);
+    QWidget *buildSearchBar(QWidget *parent);
+    QWidget *buildHome(QWidget *parent);
+    QWidget *buildClosableBar(QWidget *parent, const QList<QWidget *> &content, const QString &closeTip,
+                              void (MainWindow::*onClose)());
+    QWidget *buildComposerBar(QWidget *parent);
     void setSidebarVisible(bool visible);
     void updateStatus(); // en-tête et zone de saisie, pour la conversation affichée
     // Réponse avec citation : bandeau au-dessus de la zone de saisie
