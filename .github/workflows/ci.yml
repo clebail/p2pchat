@@ -14,6 +14,7 @@ concurrency: # un nouveau push annule la vérification en cours de la même bran
 
 env:
   QT_QPA_PLATFORM: offscreen # tests d'interface sans écran
+  QT_FORCE_STDERR_LOGGING: 1 # sous Windows sans console, qWarning/qFatal iraient dans OutputDebugString, invisible ici
 
 jobs:
   linux:
@@ -120,3 +121,12 @@ jobs:
           qmake ..\tests\tests.pro
           nmake
           nmake check
+      # Un test qui s'arrête net (abort : code 3) ne laisse aucune trace : on relance chacun en détaillant chaque étape
+      - name: Détail des tests en échec
+        if: failure()
+        shell: cmd
+        run: |
+          for /r build-tests %%f in (tst_*.exe) do (
+            echo ===== %%~nf
+            "%%f" -v2 2>&1 || echo ===== %%~nf : ECHEC
+          )

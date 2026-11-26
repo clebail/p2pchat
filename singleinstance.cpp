@@ -50,7 +50,10 @@ bool SingleInstance::acquire()
             });
         }
     });
-    m_server->listen(m_serverName); // à défaut, l'instance unique reste garantie par le verrou
+    // À défaut, l'instance unique reste garantie par le verrou, mais une relance n'affichera pas la fenêtre
+    if (!m_server->listen(m_serverName))
+        qWarning("SingleInstance : écoute impossible sur %s : %s", qPrintable(m_serverName),
+                 qPrintable(m_server->errorString()));
     return true;
 }
 
