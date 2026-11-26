@@ -135,13 +135,17 @@ private slots:
         Person &b = person('b');
         QCOMPARE(a.conv->displayName(), b.nick); // les pseudos des membres
         QCOMPARE(b.conv->displayName(), a.nick);
-        // Nom partagé par l'administrateur, puis nom local, prioritaire chez soi
+        // Nom choisi par l'administrateur, le même pour tous
+        QVERIFY(!b.conv->node().setSharedName("Chez A")); // pas administrateur
         QVERIFY(a.conv->node().setSharedName("Les amis"));
         QTRY_COMPARE(b.conv->displayName(), QString("Les amis"));
         QVERIFY(hasSystemLine(*b.conv, "a nommé la conversation « Les amis »"));
+        // Un nom local d'une version précédente ne masque plus celui du groupe…
         b.conv->store().setName("Chez A");
-        QCOMPARE(b.conv->displayName(), QString("Chez A"));
-        QCOMPARE(a.conv->displayName(), QString("Les amis"));
+        QCOMPARE(b.conv->displayName(), QString("Les amis"));
+        // …et au départ, c'est le dernier nom connu qui reste
+        b.conv->leave();
+        QCOMPARE(b.conv->displayName(), QString("Les amis"));
     }
 
     void messagesPreviewAndNotifications()

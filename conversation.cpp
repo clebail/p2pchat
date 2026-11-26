@@ -71,7 +71,7 @@ void Conversation::rememberName()
 void Conversation::keepName()
 {
     // Sans membres ni nom partagé, elle s'appellerait « Ancienne conversation » : on garde le dernier nom
-    if (m_store->name().isEmpty() && !m_knownName.isEmpty())
+    if (!m_knownName.isEmpty())
         m_store->setName(m_knownName);
 }
 
@@ -173,8 +173,9 @@ bool Conversation::isBlank() const
 
 QString Conversation::displayName() const
 {
-    if (!m_store->name().isEmpty())
-        return m_store->name(); // choisi sur ce poste
+    // Nom gardé au départ (seulement hors du groupe : en groupe, seul celui de l'administrateur compte)
+    if (!m_store->inGroup() && !m_store->name().isEmpty())
+        return m_store->name();
     if (const QString shared = m_node->sharedName(); !shared.isEmpty())
         return shared; // choisi par un administrateur
     QStringList names;

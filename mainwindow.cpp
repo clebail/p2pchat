@@ -330,26 +330,18 @@ void MainWindow::startConversation()
 
 void MainWindow::renameConversation()
 {
-    // Administrateur : le nom vaut pour tous ; sinon, pour ce poste seulement
-    const bool shared = m_node->isAdmin() && !m_node->groupId().isEmpty();
+    // Réservé aux administrateurs : le nom vaut pour tous les membres
+    if (!m_node->isAdmin() || m_node->groupId().isEmpty())
+        return;
     bool ok = false;
-    const QString name = QInputDialog::getText(
-        this, tr("Renommer la conversation"),
-        shared ? tr("Nom de la conversation, pour tous les membres (vide : leurs pseudos) :")
-               : tr("Nom affiché sur ce poste seulement (vide : %1) :")
-                     .arg(m_node->sharedName().isEmpty() ? tr("les pseudos des membres")
-                                                         : tr("« %1 »").arg(m_node->sharedName())),
-        QLineEdit::Normal, m_group->name().isEmpty() ? m_node->sharedName() : m_group->name(), &ok);
+    const QString name = QInputDialog::getText(this, tr("Renommer la conversation"),
+                                               tr("Nom de la conversation, pour tous les membres (vide : leurs pseudos) :"),
+                                               QLineEdit::Normal, m_node->sharedName(), &ok);
     if (!ok)
         return;
-    if (shared) {
-        m_group->setName({});
-        QString error;
-        if (!m_node->setSharedName(name, &error))
-            QMessageBox::warning(this, tr("Renommer la conversation"), tr("Impossible : %1.").arg(error));
-    } else {
-        m_group->setName(name);
-    }
+    QString error;
+    if (!m_node->setSharedName(name, &error))
+        QMessageBox::warning(this, tr("Renommer la conversation"), tr("Impossible : %1.").arg(error));
     onConversationChanged(m_shown);
 }
 
@@ -554,13 +546,15 @@ void MainWindow::buildUi()
     menu->addAction(tr("Membres…"), this, &MainWindow::showMembers);
     menu->addAction(tr("Vérifier l'identité d'un membre…"), this, &MainWindow::verifyMember);
     menu->addAction(tr("Changer de pseudo…"), this, &MainWindow::changeNickname);
-    menu->addAction(tr("Renommer la conversation…"), this, &MainWindow::renameConversation);
+    QAction *renameAct = menu->addAction(tr("Renommer la conversation…"), this, &MainWindow::renameConversation);
     menu->addAction(tr("Vider la conversation"), this, &MainWindow::clearConversation);
     menu->addSeparator();
     QAction *leaveAct = menu->addAction(tr("Quitter la conversation…"), this, &MainWindow::resetAll);
     QAction *deleteAct = menu->addAction(tr("Supprimer la conversation…"), this, &MainWindow::deleteConversation);
-    connect(menu, &QMenu::aboutToShow, this, [this, inviteAct, leaveAct, deleteAct, withAct] {
+    connect(menu, &QMenu::aboutToShow, this, [this, inviteAct, leaveAct, deleteAct, withAct, renameAct] {
         withAct->setEnabled(m_group->inGroup() && !m_group->members().isEmpty());
+        // Réservé aux administrateurs (le nom vaut pour tous)
+        renameAct->setEnabled(m_node->isAdmin() && !m_node->groupId().isEmpty());
         inviteAct->setText(m_group->inGroup() ? tr("Inviter quelqu'un…") : tr("Créer la conversation et inviter…"));
         leaveAct->setVisible(m_group->inGroup());
         deleteAct->setVisible(!m_group->inGroup());
