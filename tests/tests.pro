@@ -17,6 +17,7 @@ SUBDIRS += \
     tst_reactions \
     tst_safetynumber \
     tst_singleinstance \
+    tst_torservice \
     tst_spellchecker \
     tst_filestore \
     tst_governance \
@@ -26,7 +27,9 @@ SUBDIRS += \
     tst_connectionpolicy \
     tst_peerconnection \
     tst_chatmodel \
-    tst_conversation
+    tst_conversation \
+    tst_mainwindow
 
-# Console partagée : Linux et macOS seulement
+# Console partagée : Linux et macOS seulement ; de bout en bout (vrai shell, faux terminal) : Linux
 unix: SUBDIRS += tst_terminalsharing
+linux: SUBDIRS += tst_terminalsession

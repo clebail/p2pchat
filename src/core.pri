@@ -1,4 +1,6 @@
 # Cœur de P2P Chat sans interface graphique : utilisé par l'application et par les tests (tests/)
+!isEmpty(P2P_CORE_PRI): return() # déjà inclus (tests qui chargent aussi app.pri)
+P2P_CORE_PRI = 1
 QT += network gui # gui : QImage (attachment, avatar)
 CONFIG += c++17
 # Sources en UTF-8 : sans cette option, MSVC les lit en Windows-1252 et abîme les littéraux larges

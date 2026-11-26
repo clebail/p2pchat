@@ -287,8 +287,12 @@ trousseau), l'historique et sa synchronisation, les règles de reconnexion, la p
 `PeerConnection` reliées en local (sans Tor), des scénarios complets entre plusieurs membres
 (`tst_groupnode` : maillage, relais, réactions, rattrapage après une absence, message falsifié, imposteur,
 fichiers téléchargés automatiquement ou à la demande, reprise après coupure, source au fichier abîmé…),
-la négociation de la console partagée (`tst_terminalsharing`, sans ouvrir de terminal), l'instance unique, le modèle de la liste de messages
-et ce qu'une conversation affiche (`tst_conversation` : nom, aperçu, notifications, ligne d'état ; rendu hors écran).
+la négociation de la console partagée (`tst_terminalsharing`, sans ouvrir de terminal), la console de bout en bout
+(`tst_terminalsession`, Linux : vrai shell dans un pseudo-terminal, faux terminal, contrôle donné ou non), le lancement
+de tor (`tst_torservice` : torrc, progression, adresse onion, erreurs, avec un faux tor), l'instance unique, le modèle
+de la liste de messages, ce qu'une conversation affiche (`tst_conversation` : nom, aperçu, notifications, ligne d'état ;
+rendu hors écran) et la fenêtre principale (`tst_mainwindow` : actions indisponibles grisées, sous-menus, recherche,
+colonne repliée quand la fenêtre est étroite), la langue, le correcteur orthographique et les avatars.
 
 **Intégration continue** (`.github/workflows/ci.yml`, GitHub Actions) : à chaque push et pull request, compilation
 de l'application et des tests sous Linux (gcc, avec un second passage sous sanitizers), macOS (clang, Qt et OpenSSL

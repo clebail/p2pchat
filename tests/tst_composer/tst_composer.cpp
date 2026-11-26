@@ -2,6 +2,9 @@
 #include "spellchecker.h"
 
 #include <QApplication>
+#include <QContextMenuEvent>
+#include <QMenu>
+#include <QTimer>
 #include <QClipboard>
 #include <QMimeData>
 #include <QSignalSpy>
@@ -148,6 +151,61 @@ private slots:
         m_edit->setSpellChecker(nullptr);
         QVERIFY(underlined().isEmpty());
         QCOMPARE(edited.count(), edits);
+    }
+
+    // Clic droit sur un mot souligné : corrections, puis « Ajouter au dictionnaire » (le menu est piloté
+    // depuis une minuterie, car il s'ouvre en attendant un choix)
+    void contextMenuOffersCorrections()
+    {
+        SpellChecker checker;
+        if (!checker.load(DICT_DIR "/utf8.dic"))
+            QSKIP("compilé sans Hunspell");
+        m_edit->setSpellChecker(&checker);
+        m_edit->setText("le bonjur chat");
+        QSignalSpy added(m_edit.get(), &Composer::wordAdded);
+
+        auto openMenuOn = [this](int position, const QString &choice) {
+            QTextCursor c = m_edit->textCursor();
+            c.setPosition(position);
+            const QPoint at = m_edit->cursorRect(c).center();
+            QStringList shown;
+            QTimer::singleShot(100, this, [&shown, choice] {
+                auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+                if (!menu)
+                    return;
+                for (QAction *a : menu->actions())
+                    shown << a->text();
+                for (QAction *a : menu->actions())
+                    if (a->text() == choice) {
+                        menu->close();
+                        a->trigger();
+                        return;
+                    }
+                menu->close();
+            });
+            QContextMenuEvent event(QContextMenuEvent::Mouse, at, m_edit->viewport()->mapToGlobal(at));
+            QCoreApplication::sendEvent(m_edit->viewport(), &event);
+            return shown;
+        };
+
+        // Sur « bonjur » : la correction en tête du menu
+        QStringList shown = openMenuOn(5, "bonjour");
+        QVERIFY2(shown.value(0) == "bonjour", qPrintable(shown.join(" | ")));
+        QVERIFY(shown.contains("Ajouter « bonjur » au dictionnaire"));
+        QCOMPARE(m_edit->text(), QString("le bonjour chat"));
+
+        // Sur un mot correct : le menu habituel seulement
+        shown = openMenuOn(13, QString());
+        QVERIFY(!shown.isEmpty());
+        QVERIFY(!shown.join(' ').contains("dictionnaire"));
+
+        // Ajout au dictionnaire : signalé (la fenêtre le garde et l'ajoute au correcteur)
+        m_edit->setText("zorglub");
+        shown = openMenuOn(2, "Ajouter « zorglub » au dictionnaire");
+        QVERIFY(shown.contains("(aucune suggestion)"));
+        QCOMPARE(added.count(), 1);
+        QCOMPARE(added.at(0).at(0).toString(), QString("zorglub"));
+        QCOMPARE(m_edit->text(), QString("zorglub")); // texte inchangé
     }
 
     void fileIsHandedOver()

@@ -14,6 +14,7 @@
 #include <QSignalSpy>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QtTest>
 
 #include <memory>
@@ -38,6 +39,7 @@ private:
     };
 
     std::unique_ptr<QTemporaryDir> m_dir; // un par test : historiques et réglages repartent de zéro
+    GroupNode::Timing m_timing;            // délais des membres créés ensuite (réglables par un test)
     std::map<char, std::unique_ptr<Peer>> m_peers;
     QHash<QString, Peer *> m_byOnion;      // adresse -> membre qui y répond
     QSet<QPair<QString, QString>> m_cut;   // liens impossibles (dans un sens comme dans l'autre)
@@ -78,7 +80,7 @@ private:
     {
         p.node.reset();
         p.node = std::make_unique<GroupNode>(*p.store, m_dir->filePath(QStringLiteral("%1.jsonl").arg(name)),
-                                             fastTiming());
+                                             m_timing);
         QVERIFY(p.node->listen());
         p.node->setFilesDir(m_dir->filePath(QStringLiteral("%1-fichiers").arg(name)));
         const QString self = p.onion;
@@ -167,6 +169,7 @@ private:
 private slots:
     void init()
     {
+        m_timing = fastTiming();
         m_dir = std::make_unique<QTemporaryDir>();
         QVERIFY(m_dir->isValid());
     }
@@ -1027,6 +1030,117 @@ private slots:
         QTRY_COMPARE(c.node->conversationAvatar(), jpeg);
         c.node->leaveGroup();
         QVERIFY(c.node->conversationAvatar().isEmpty());
+    }
+
+    // Un appel raté attend 10 s avant le suivant ; « Se reconnecter maintenant » et un retour du réseau
+    // n'attendent pas
+    void reconnectNowSkipsTheDelay()
+    {
+        Peer &a = peer('a'), &b = peer('b');
+        a.node->createGroup();
+        a.node->setOnline(a.onion);
+        m_cut.insert({a.onion, b.onion}); // A injoignable pour l'instant
+        QCOMPARE(b.node->join(invitation(a)), GroupNode::JoinResult::Joined);
+        b.node->setOnline(b.onion);
+        QTRY_VERIFY(!b.node->lastError(a.onion).isEmpty()); // premier appel raté
+        m_cut.clear();
+        QTest::qWait(600); // plusieurs tics du rappel (200 ms) : il attend toujours
+        QVERIFY(!linked(a, b));
+        b.node->reconnectNow();
+        QTRY_VERIFY(linked(a, b));
+        QVERIFY(b.node->lastError(a.onion).isEmpty());
+
+        // Même chose quand le réseau revient (retrySoon)
+        Peer &c = peer('c');
+        m_cut.insert({b.onion, c.onion});
+        m_cut.insert({a.onion, c.onion});
+        QCOMPARE(c.node->join(invitation(b)), GroupNode::JoinResult::Joined);
+        c.node->setOnline(c.onion);
+        QTRY_VERIFY(!c.node->lastError(b.onion).isEmpty());
+        m_cut.clear();
+        QTest::qWait(600);
+        QVERIFY(!linked(b, c));
+        c.node->retrySoon();
+        QTRY_VERIFY(linked(b, c));
+    }
+
+    // Sortie de veille : le tic de surveillance arrive très en retard. Courte pause : les liens restent.
+    // Longue : les autres nous ont fermé la porte entre-temps, on rouvre tout sans attendre.
+    void wakeFromSleep()
+    {
+        m_timing.wakeTickMs = 50;
+        m_timing.wakeGapMs = 300;
+        m_timing.sleepKillsLinksMs = 1000;
+        Peer &a = peer('a'), &b = peer('b');
+        a.node->createGroup();
+        a.node->setOnline(a.onion);
+        QCOMPARE(b.node->join(invitation(a)), GroupNode::JoinResult::Joined);
+        b.node->setOnline(b.onion);
+        QTRY_VERIFY(linked(a, b));
+        QSignalSpy lost(a.node.get(), &GroupNode::peerLost);
+
+        QThread::msleep(500); // « veille » courte : boucle d'événements bloquée
+        QTest::qWait(300);
+        QCOMPARE(lost.count(), 0);
+        QVERIFY(linked(a, b));
+
+        QThread::msleep(1300); // longue : liens fermés puis rouverts
+        QTRY_VERIFY(lost.count() >= 1);
+        QTRY_VERIFY(linked(a, b));
+        QVERIFY(!a.system.contains("hors ligne " + b.nick)); // revenu dans le délai de grâce : rien d'annoncé
+    }
+
+    void downloadCanBeCancelled()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b');
+        const QByteArray content = Crypto::randomBytes(int(Files::AutoDownloadBytes) + 1024 * 1024);
+        QString error;
+        const QString id = fileId(a.node->sendFile(sourceFile("gros.bin", content), {}, {}, &error));
+        QVERIFY2(!id.isEmpty(), qPrintable(error));
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::NotDownloaded); // trop gros : à la demande
+        b.node->download(id);
+        QVERIFY(b.node->fileState(id).kind != GroupNode::FileState::NotDownloaded);
+        b.node->cancelDownload(id);
+        QCOMPARE(b.node->fileState(id).kind, GroupNode::FileState::NotDownloaded);
+        QVERIFY(!b.node->files().has(id)); // rien de gardé
+        QTest::qWait(300); // les morceaux encore en route sont ignorés
+        QCOMPARE(b.node->fileState(id).kind, GroupNode::FileState::NotDownloaded);
+        b.node->cancelDownload(id); // sans effet
+        b.node->download(id); // et on peut le reprendre
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QCOMPARE(contentOf(b, id), content);
+    }
+
+    // Un membre qui annonçait le fichier ne l'a plus : il répond qu'il ne l'a pas, et on attend une autre source
+    void sourceThatLostTheFile()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        const QByteArray content = Crypto::randomBytes(int(Files::AutoDownloadBytes) + 1024 * 1024);
+        QString error;
+        const QString id = fileId(a.node->sendFile(sourceFile("gros.bin", content), {}, {}, &error));
+        QVERIFY2(!id.isEmpty(), qPrintable(error));
+        QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::NotDownloaded);
+        c.node->download(id);
+        QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::NotDownloaded);
+
+        // B ne joint plus que C, qui a perdu le fichier (sans le dire) ; A est injoignable
+        m_cut.insert({a.onion, b.onion});
+        b.node->closeAll();
+        c.node->files().remove(id);
+        QTRY_VERIFY(linked(b, c));
+        QVERIFY(!b.node->isConnected(a.onion));
+        b.node->download(id);
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Waiting); // aucune source
+        QVERIFY(b.node->fileState(id).sources.isEmpty());
+
+        // A redevient joignable : il prend le relais
+        m_cut.clear();
+        b.node->reconnectNow();
+        QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
+        QCOMPARE(contentOf(b, id), content);
     }
 
     void directInvitation()

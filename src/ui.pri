@@ -1,5 +1,7 @@
 # Composants d'interface de la conversation (vue, saisie, Conversation), sans la fenêtre principale ni Tor :
 # utilisés par l'application et par les tests graphiques (tests/)
+!isEmpty(P2P_UI_PRI): return() # déjà inclus (tests qui chargent aussi app.pri)
+P2P_UI_PRI = 1
 QT += widgets
 INCLUDEPATH += $$PWD/chat
 DEPENDPATH += $$PWD/chat

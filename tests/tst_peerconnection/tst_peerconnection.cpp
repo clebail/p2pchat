@@ -181,6 +181,39 @@ private slots:
         delete out;
     }
 
+    void olderPeerIsRejected()
+    {
+        // Version annoncée sous le minimum : refusée des deux côtés, avec la raison
+        auto *s = new QTcpSocket;
+        s->setProxy(QNetworkProxy::NoProxy);
+        const Side a = side('a');
+        auto *out = new PeerConnection(s, true, a.psk, a.nick, a.onion, a.seed, this);
+        out->setAdvertisedVersion(Protocol::MinVersion - 1);
+        QSignalSpy outClosed(out, &PeerConnection::closed), outReady(out, &PeerConnection::ready);
+        s->connectToHost(QHostAddress::LocalHost, m_server.serverPort());
+        QTRY_VERIFY(m_incoming);
+        QTRY_COMPARE(m_inClosed->count(), 1);
+        QVERIFY2(m_inClosed->at(0).at(0).toString().contains("ancienne version"),
+                 qPrintable(m_inClosed->at(0).at(0).toString()));
+        QCOMPARE(m_inReady->count(), 0);
+        QTRY_COMPARE(outClosed.count(), 1);
+        delete out;
+    }
+
+    void emptyNicknameIsNamed()
+    {
+        Side a = side('a');
+        a.nick.clear();
+        PeerConnection *out = dial(a);
+        QSignalSpy outReady(out, &PeerConnection::ready);
+        QTRY_VERIFY(m_incoming);
+        QTRY_COMPARE(m_inReady->count(), 1);
+        QCOMPARE(m_incoming->peerNickname(), QString("Correspondant"));
+        QTRY_COMPARE(outReady.count(), 1);
+        QCOMPARE(out->peerNickname(), m_serverSide.nick);
+        delete out;
+    }
+
     void agreesOnCommonSecret_data()
     {
         // Le groupe a changé de secret : chacun connaît une partie des secrets, du plus récent au plus ancien

@@ -2,3 +2,6 @@
 # identiques dans chaque test : 368 octets en 7 allocations, aucune trace de notre code.
 leak:QScreen::QScreen
 leak:libqoffscreen.so
+# Qt 6.4+ : le module de détection du réseau (QNetworkInformation, greffon « networkmanager », via D-Bus) garde
+# ses métaobjets D-Bus jusqu'à la fin du programme (tst_mainwindow : la fenêtre suit le retour du réseau).
+leak:libqnetworkmanager.so
