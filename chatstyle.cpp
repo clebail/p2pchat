@@ -111,7 +111,7 @@ void prepareMessageLayout(QTextLayout &tl, const ChatEntry &e, const QString &se
         QTextLayout::FormatRange r;
         r.start = c.start;
         r.length = c.length;
-        r.format.setFontFamily(mono.family());
+        r.format.setFontFamilies({mono.family()}); // Qt ≥ 5.13 ; setFontFamily est obsolète en Qt 6
         r.format.setFontFixedPitch(true);
         r.format.setBackground(QColor(0, 0, 0, c.block ? 20 : 16));
         formats.append(r);

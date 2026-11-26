@@ -56,10 +56,12 @@ private slots:
     void staleLockAfterCrashIsTaken()
     {
         QTemporaryDir dir;
-        // Verrou laissé par un processus qui n'existe plus (plantage)
+        // Verrou laissé par un processus qui n'existe plus (plantage). Nom de machine vide : QLockFile le
+        // tient pour local. Sous Windows, il compare à %COMPUTERNAME% (majuscules, 15 caractères au plus),
+        // pas à QSysInfo::machineHostName() : avec ce dernier, le verrou ne serait jamais repris.
         QFile lock(dir.filePath("instance.lock"));
         QVERIFY(lock.open(QIODevice::WriteOnly));
-        lock.write("999999\np2pchat\n" + QSysInfo::machineHostName().toUtf8() + "\n");
+        lock.write("999999\np2pchat\n\n");
         lock.close();
 #ifndef Q_OS_WIN
         // …et socket abandonné (fichier, sous Unix) : lancer quand même. Sous Windows, le tube nommé d'un
