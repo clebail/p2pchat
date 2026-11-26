@@ -21,7 +21,8 @@ constexpr int MaxNickLength = 40;
 // 12 : invitations directes par une connexion existante, nom partagé des conversations
 // 13 : modification et suppression de ses messages (cf. edits.h)
 // 14 : avatars des membres (cf. avatar.h)
-constexpr int Version = 14;
+// 15 : avatar des conversations
+constexpr int Version = 15;
 constexpr int FilesVersion = 9;
 constexpr int BinaryVersion = 10;
 // Types de trames binaires (cf. PeerConnection::sendBinary)

@@ -108,6 +108,27 @@ private slots:
         QVERIFY(!Avatar::verify(Avatar::create(m_alice, onion('a'), jpeg, 0), Ed25519::publicKey(m_alice)));
         QVERIFY(!Avatar::verify(Avatar::create(m_alice, "pas-une-adresse", jpeg, 1000), Ed25519::publicKey(m_alice)));
     }
+
+    void conversationAvatarIsBoundToItsGroup()
+    {
+        QImage img(Avatar::Side, Avatar::Side, QImage::Format_RGB32);
+        img.fill(Qt::cyan);
+        const QByteArray jpeg = Avatar::fromImage(img);
+        const QString group(64, 'g'), other(64, 'h');
+        const QJsonObject r = Avatar::createForConversation(m_alice, onion('a'), group, jpeg, 1000);
+        QCOMPARE(r.value("t").toString(), QString("conv-avatar"));
+        QCOMPARE(Avatar::image(r), jpeg);
+        QVERIFY(Avatar::verifyForConversation(r, Ed25519::publicKey(m_alice), group));
+        QVERIFY(!Avatar::verifyForConversation(r, Ed25519::publicKey(m_alice), other)); // autre groupe
+        QVERIFY(!Avatar::verifyForConversation(r, Ed25519::publicKey(m_alice), {}));
+        QVERIFY(!Avatar::verifyForConversation(r, Ed25519::publicKey(m_bob), group));
+        // Pas interchangeable avec l'avatar d'un membre, dans un sens comme dans l'autre
+        QVERIFY(!Avatar::verify(r, Ed25519::publicKey(m_alice)));
+        QVERIFY(!Avatar::verifyForConversation(Avatar::create(m_alice, onion('a'), jpeg, 1000),
+                                               Ed25519::publicKey(m_alice), group));
+        QVERIFY(Avatar::verifyForConversation(Avatar::createForConversation(m_alice, onion('a'), group, {}, 2000),
+                                              Ed25519::publicKey(m_alice), group)); // retiré
+    }
 };
 
 QTEST_GUILESS_MAIN(TestAvatar)

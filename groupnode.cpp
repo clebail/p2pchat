@@ -586,6 +586,7 @@ void GroupNode::setActive(PeerConnection *c)
     if (c->peerVersion() >= Governance::Version)
         sendGovernance(c);
     sendName(c);
+    sendConversationAvatar(c);
     sendAvatarInventory(c);
     if (isNew)
         broadcast(membersMessage(), c);
@@ -770,6 +771,8 @@ void GroupNode::onReceived(PeerConnection *c, const QJsonObject &o)
         onLeave(c, o);
     } else if (type == "conv-name") {
         onName(c, o);
+    } else if (type == "conv-avatar") {
+        onConversationAvatar(c, o);
     } else if (type == "avatar-have") {
         onAvatarInventory(c, o);
     } else if (type == "avatar") {
@@ -1714,6 +1717,52 @@ void GroupNode::onName(PeerConnection *c, const QJsonObject &o)
 }
 
 // ---------------------------------------------------------------- Avatars
+
+QByteArray GroupNode::conversationAvatar() const
+{
+    return Avatar::image(m_group.conversationAvatarRecord());
+}
+
+bool GroupNode::setConversationAvatar(const QByteArray &jpeg, QString *error)
+{
+    if (m_chain.isEmpty() || !isAdmin()) {
+        if (error)
+            *error = tr("seul un administrateur du groupe le peut");
+        return false;
+    }
+    // Strictement plus récent que celui en vigueur (horloges décalées : on avance d'une milliseconde)
+    const qint64 ts = std::max(now(), Avatar::timestamp(m_group.conversationAvatarRecord()) + 1);
+    m_group.setConversationAvatarRecord(
+        Avatar::createForConversation(m_group.identitySeed(), m_ownOnion, groupId(), jpeg, ts));
+    for (PeerConnection *p : m_active.values())
+        sendConversationAvatar(p);
+    emit conversationAvatarChanged(jpeg.isEmpty(), m_group.nickname());
+    return true;
+}
+
+void GroupNode::sendConversationAvatar(PeerConnection *c)
+{
+    const QJsonObject r = m_group.conversationAvatarRecord();
+    if (!r.isEmpty() && c->peerVersion() >= Avatar::ConversationVersion)
+        c->send(r);
+}
+
+void GroupNode::onConversationAvatar(PeerConnection *c, const QJsonObject &o)
+{
+    const auto h = head();
+    const QString author = Avatar::author(o);
+    if (!h || !h->isAdmin(author) || Avatar::timestamp(o) <= Avatar::timestamp(m_group.conversationAvatarRecord())
+        || !Avatar::verifyForConversation(o, keyOf(author), groupId()))
+        return; // pas d'un administrateur, pas plus récent, ou falsifié
+    QJsonObject r = o;
+    r.insert("t", "conv-avatar");
+    m_group.setConversationAvatarRecord(r);
+    for (PeerConnection *p : m_active.values()) // relais, pour ceux qui ne sont reliés qu'à nous
+        if (p != c)
+            sendConversationAvatar(p);
+    emit conversationAvatarChanged(Avatar::image(r).isEmpty(),
+                                   author == m_ownOnion ? m_group.nickname() : m_group.nickOf(author));
+}
 
 QJsonObject GroupNode::avatarRecordOf(const QString &onion) const
 {

@@ -10,10 +10,22 @@
 
 namespace {
 
-QByteArray signingBytes(const QJsonObject &r)
+// Membre : {contexte, auteur, date, image} ; conversation : identifiant du groupe en plus
+QByteArray signingBytes(const QJsonObject &r, const QString &groupId = {})
 {
-    return Crypto::pack({"p2pchat-avatar-v1", r.value("a").toString().toUtf8(),
-                         QByteArray::number(qint64(r.value("ts").toDouble())), Protocol::fromB64(r.value("img"))});
+    QList<QByteArray> parts{groupId.isEmpty() ? "p2pchat-avatar-v1" : "p2pchat-conv-avatar-v1"};
+    if (!groupId.isEmpty())
+        parts << groupId.toLatin1();
+    parts << r.value("a").toString().toUtf8() << QByteArray::number(qint64(r.value("ts").toDouble()))
+          << Protocol::fromB64(r.value("img"));
+    return Crypto::pack(parts);
+}
+
+bool wellFormed(const QJsonObject &r, const QByteArray &authorKey)
+{
+    const QByteArray img = Avatar::image(r);
+    return !authorKey.isEmpty() && Protocol::isValidOnion(Avatar::author(r)) && Avatar::timestamp(r) > 0
+           && (img.isEmpty() || !Avatar::decode(img).isNull());
 }
 
 QByteArray toJpeg(const QImage &image, int quality)
@@ -75,10 +87,21 @@ QJsonObject Avatar::create(const QByteArray &identitySeed, const QString &author
 
 bool Avatar::verify(const QJsonObject &r, const QByteArray &authorKey)
 {
-    const QByteArray img = image(r);
-    return !authorKey.isEmpty() && Protocol::isValidOnion(author(r)) && timestamp(r) > 0
-           && (img.isEmpty() || !decode(img).isNull())
-           && Ed25519::verify(authorKey, signingBytes(r), Protocol::fromB64(r.value("s")));
+    return wellFormed(r, authorKey) && Ed25519::verify(authorKey, signingBytes(r), Protocol::fromB64(r.value("s")));
+}
+
+QJsonObject Avatar::createForConversation(const QByteArray &identitySeed, const QString &authorOnion,
+                                          const QString &groupId, const QByteArray &jpeg, qint64 timestampMs)
+{
+    QJsonObject r{{"t", "conv-avatar"}, {"a", authorOnion}, {"ts", double(timestampMs)}, {"img", Protocol::toB64(jpeg)}};
+    r.insert("s", Protocol::toB64(Ed25519::sign(identitySeed, signingBytes(r, groupId))));
+    return r;
+}
+
+bool Avatar::verifyForConversation(const QJsonObject &r, const QByteArray &authorKey, const QString &groupId)
+{
+    return !groupId.isEmpty() && wellFormed(r, authorKey)
+           && Ed25519::verify(authorKey, signingBytes(r, groupId), Protocol::fromB64(r.value("s")));
 }
 
 QString Avatar::author(const QJsonObject &r)

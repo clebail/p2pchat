@@ -59,6 +59,9 @@ message rattrapé est vérifié, puis inséré à sa place chronologique.
 - **Nom de la conversation** (⋮ → *Renommer la conversation…*) : réservé aux administrateurs, il vaut pour
   tous les membres (signé, le plus récent l'emporte), y compris ceux qui rejoignent ensuite. Après un départ,
   la conversation garde le dernier nom connu.
+- **Avatar de la conversation** (⋮ → *Avatar de la conversation…*) : réservé aux administrateurs, partagé avec
+  tous les membres comme le nom. Il s'affiche dans la colonne des conversations et dans l'en-tête ; sans avatar,
+  un rond coloré avec l'initiale du nom. Il disparaît quand on quitte le groupe.
 - Bulles façon messagerie mobile, avatars, regroupement des messages, séparateurs de date
 - **Avatar** (⋮ → *Changer d'avatar…*) : une image recadrée en carré et réduite (96 px), commune à toutes vos
   conversations et visible par leurs membres. Sans image, un rond coloré avec l'initiale du pseudo. Signé par son
@@ -279,7 +282,8 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
   quelqu'un qui possède le code ne peut pas se faire passer pour un autre membre.
 - **Messages** : l'auteur signe chaque message (identifiant, adresse, pseudo, texte, heure). Un message
   modifié en route ou attribué à quelqu'un d'autre est rejeté.
-- **Avatars** : signés par leur auteur, acceptés seulement pour les membres de la conversation. Une image reçue
+- **Avatars** : signés par leur auteur (celui d'une conversation, par un administrateur, et lié au groupe),
+  acceptés seulement pour les membres de la conversation. Une image reçue
   n'est décodée que si c'est un JPEG d'au plus 16 Ko et 192 × 192 pixels. Un membre ne reçoit que les avatars
   des membres de la conversation, rien sur les contacts de vos autres conversations.
 - **Exclusion et secret** (⋮ → *Membres…* : rôles, présence, *Nommer administrateur*, *Exclure…*,

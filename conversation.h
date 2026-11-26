@@ -10,6 +10,7 @@
 #include <QPointer>
 
 #include <memory>
+#include <optional>
 
 class QSettings;
 
@@ -47,6 +48,7 @@ public:
     // conversations : forgetAvatar est appelé sur chacune quand l'une en reçoit un nouveau.
     QImage avatarOf(const QString &onion) const;
     void forgetAvatar(const QString &onion);
+    QImage conversationAvatar() const; // choisi par un administrateur ; image nulle : aucun
     QStringList mentionNames() const; // pseudos reconnus dans les « @… » (membres, nous, « tous »)
 
     // ---- Non-lus (la fenêtre décide quand en ajouter : conversation cachée ou fenêtre en arrière-plan)
@@ -98,4 +100,5 @@ private:
     QString m_preview, m_previewId; // dernier message affiché, et son identifiant
     QString m_knownName;
     mutable QHash<QString, QImage> m_avatars; // décodés (image nulle : pas d'avatar)
+    mutable std::optional<QImage> m_conversationAvatar; // décodé à la première demande
 };

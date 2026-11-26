@@ -136,6 +136,9 @@ public:
     // ---- Conversations (version 12)
     // Nom partagé, choisi par un administrateur (vide : aucun)
     QString sharedName() const;
+    // Avatar de la conversation (JPEG, vide : aucun), choisi par un administrateur et le même pour tous
+    QByteArray conversationAvatar() const;
+    bool setConversationAvatar(const QByteArray &jpeg, QString *error = nullptr); // vide : retiré
     bool setSharedName(const QString &name, QString *error = nullptr);
     // Invitation à une autre conversation, par la connexion chiffrée avec ce membre ; false s'il n'est pas
     // connecté directement ou utilise une version précédente
@@ -200,6 +203,7 @@ signals:
     void adminChanged(const QString &onion, const QString &nick, bool admin, const QString &byNick);
     void sharedNameChanged(const QString &name, const QString &byNick);
     void avatarChanged(const QString &onion); // avatar d'un membre reçu (cf. GroupStore::avatarRecord)
+    void conversationAvatarChanged(bool removed, const QString &byNick);
     // Un membre nous invite à une autre conversation (son code, vérifié : c'est bien le sien)
     void directInvitation(const QString &fromOnion, const QString &fromNick, const Invitation &invitation,
                           const QString &name);
@@ -251,6 +255,8 @@ private:
     void onName(PeerConnection *c, const QJsonObject &o);
     void onDirectInvitation(PeerConnection *c, const QJsonObject &o);
     void sendName(PeerConnection *c);
+    void sendConversationAvatar(PeerConnection *c);
+    void onConversationAvatar(PeerConnection *c, const QJsonObject &o);
     QJsonObject avatarRecordOf(const QString &onion) const; // le nôtre (signé à la volée) ou celui reçu
     void sendAvatarInventory(PeerConnection *c);
     void onAvatarInventory(PeerConnection *c, const QJsonObject &o);

@@ -1,3 +1,4 @@
+#include "avatar.h"
 #include "conversation.h"
 #include "crypto.h"
 #include "filestore.h"
@@ -146,6 +147,27 @@ private slots:
         // …et au départ, c'est le dernier nom connu qui reste
         b.conv->leave();
         QCOMPARE(b.conv->displayName(), QString("Les amis"));
+    }
+
+    void conversationAvatar()
+    {
+        pair();
+        Person &a = person('a'), &b = person('b');
+        QVERIFY(b.conv->conversationAvatar().isNull());
+        QImage img(Avatar::Side, Avatar::Side, QImage::Format_RGB32);
+        img.fill(Qt::magenta);
+        QVERIFY(!b.conv->node().setConversationAvatar(Avatar::fromImage(img))); // pas administrateur
+        QVERIFY(a.conv->node().setConversationAvatar(Avatar::fromImage(img)));
+        QTRY_VERIFY(!b.conv->conversationAvatar().isNull());
+        QCOMPARE(b.conv->conversationAvatar().size(), QSize(Avatar::Side, Avatar::Side));
+        QVERIFY(hasSystemLine(*b.conv, "a changé l'avatar de la conversation"));
+        QVERIFY(a.conv->node().setConversationAvatar({}));
+        QTRY_VERIFY(b.conv->conversationAvatar().isNull());
+        QVERIFY(hasSystemLine(*b.conv, "a retiré l'avatar de la conversation"));
+        QVERIFY(a.conv->node().setConversationAvatar(Avatar::fromImage(img)));
+        QTRY_VERIFY(!b.conv->conversationAvatar().isNull());
+        b.conv->leave(); // quitté : l'avatar part avec le groupe
+        QVERIFY(b.conv->conversationAvatar().isNull());
     }
 
     void messagesPreviewAndNotifications()

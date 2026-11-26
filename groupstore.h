@@ -90,6 +90,9 @@ public:
     // Nom partagé de la conversation (cf. Governance::createName), tel que reçu et vérifié
     QJsonObject nameRecord() const;
     void setNameRecord(const QJsonObject &record);
+    // Avatar partagé de la conversation (cf. Avatar::createForConversation), tel que reçu et vérifié
+    QJsonObject conversationAvatarRecord() const;
+    void setConversationAvatarRecord(const QJsonObject &record);
     // Nom de la conversation choisi sur ce poste (vide : les pseudos des membres)
     QString name() const;
     void setName(const QString &name);

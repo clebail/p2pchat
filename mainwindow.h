@@ -17,6 +17,7 @@
 #include <QSettings>
 #include <QTimer>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -145,6 +146,11 @@ private:
 
     void changeNickname();
     void changeAvatar(); // le nôtre, commun à toutes les conversations (cf. avatar.h)
+    void changeConversationAvatar(); // administrateurs : le même pour tous les membres
+    // Choix d'un avatar : aperçu (current, sinon initiale de name), Choisir une image…, Retirer
+    void avatarDialog(const QString &title, const QString &note, const std::function<QByteArray()> &current,
+                      const std::function<QString()> &name,
+                      const std::function<bool(const QByteArray &, QString *)> &apply);
     // Code de sécurité (cf. safetynumber.h) : choix du membre, puis comparaison de vive voix
     void verifyMember();
     // Membres (⋮ → Membres…) : rôles, présence, exclusion et renouvellement du secret (administrateurs)
@@ -202,6 +208,8 @@ private:
     QLabel *m_searchCount = nullptr;
     QToolButton *m_sendButton = nullptr;
     QLabel *m_title = nullptr, *m_subtitle = nullptr;
+    QLabel *m_titleAvatar = nullptr; // avatar de la conversation affichée
+    static constexpr int ConvAvatarSide = 36, TitleAvatarSide = 40;
 
     QSystemTrayIcon *m_tray = nullptr; // Linux / Windows
     Notifier *m_notifier = nullptr;

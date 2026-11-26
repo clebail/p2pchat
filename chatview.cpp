@@ -17,6 +17,8 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QMovie>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollBar>
@@ -139,6 +141,31 @@ QColor ChatView::colorFor(const QString &name)
     for (const QChar c : name)
         h = h * 31 + c.unicode();
     return colors.at(int(h % uint(colors.size())));
+}
+
+QPixmap ChatView::roundAvatar(const QImage &image, const QString &name, int side, qreal ratio)
+{
+    QPixmap pix(QSize(side, side) * ratio);
+    pix.setDevicePixelRatio(ratio);
+    pix.fill(Qt::transparent);
+    QPainter p(&pix);
+    p.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing);
+    const QRectF r(0, 0, side, side);
+    QPainterPath circle;
+    circle.addEllipse(r);
+    if (!image.isNull()) {
+        p.setClipPath(circle);
+        p.drawImage(r, image);
+    } else {
+        p.fillPath(circle, colorFor(name));
+        QFont f = QApplication::font();
+        f.setBold(true);
+        f.setPixelSize(qMax(8, side * 4 / 9));
+        p.setFont(f);
+        p.setPen(Qt::white);
+        p.drawText(r, Qt::AlignCenter, name.left(1).toUpper());
+    }
+    return pix;
 }
 
 void ChatView::appendEntry(const ChatEntry &e)

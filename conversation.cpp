@@ -126,11 +126,18 @@ void Conversation::connectNode()
         appendSystem(name.isEmpty() ? tr("%1 a retiré le nom de la conversation.").arg(by)
                                     : tr("%1 a nommé la conversation « %2 ».").arg(by, name));
     });
+    connect(n, &GroupNode::conversationAvatarChanged, this, [this](bool removed, const QString &by) {
+        m_conversationAvatar.reset();
+        appendSystem(removed ? tr("%1 a retiré l'avatar de la conversation.").arg(by)
+                             : tr("%1 a changé l'avatar de la conversation.").arg(by));
+        emit changed();
+    });
     connect(n, &GroupNode::directInvitation, this,
             [this](const QString &, const QString &nick, const Invitation &inv, const QString &name) {
                 emit directInvitation(nick, inv, name);
             });
     connect(n, &GroupNode::stateChanged, this, [this] {
+        m_conversationAvatar.reset(); // groupe quitté : effacé avec lui
         m_view->setModerator(m_node->isAdmin());
         rememberName();
         emit changed();
@@ -199,6 +206,13 @@ QImage Conversation::avatarOf(const QString &onion) const
     if (it == m_avatars.constEnd())
         it = m_avatars.insert(onion, Avatar::decode(Avatar::image(m_store->avatarRecord(onion))));
     return *it;
+}
+
+QImage Conversation::conversationAvatar() const
+{
+    if (!m_conversationAvatar)
+        m_conversationAvatar = Avatar::decode(m_node->conversationAvatar());
+    return *m_conversationAvatar;
 }
 
 void Conversation::forgetAvatar(const QString &onion)

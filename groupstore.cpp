@@ -350,3 +350,13 @@ void GroupStore::setNameRecord(const QJsonObject &record)
 {
     writeObject(m_settings, key("group/nameRecord"), record);
 }
+
+QJsonObject GroupStore::conversationAvatarRecord() const
+{
+    return readObject(m_settings, key("group/avatarRecord"));
+}
+
+void GroupStore::setConversationAvatarRecord(const QJsonObject &record)
+{
+    writeObject(m_settings, key("group/avatarRecord"), record);
+}

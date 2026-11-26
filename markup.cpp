@@ -91,7 +91,11 @@ QList<QPair<int, int>> Markup::emojiRuns(const QString &text)
 QString Markup::emojiFontFamily()
 {
     static const QString family = [] {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        const QStringList installed = QFontDatabase::families(); // statique ; l'instance est obsolète
+#else
         const QStringList installed = QFontDatabase().families();
+#endif
         for (const QString &f : {QStringLiteral("Noto Color Emoji"), QStringLiteral("Apple Color Emoji"),
                                  QStringLiteral("Segoe UI Emoji"), QStringLiteral("Twemoji"),
                                  QStringLiteral("JoyPixels"), QStringLiteral("Twitter Color Emoji")})

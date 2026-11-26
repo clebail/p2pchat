@@ -23,6 +23,13 @@ QJsonObject create(const QByteArray &identitySeed, const QString &authorOnion, c
 // Forme, image et signature (authorKey : clé connue de son auteur)
 bool verify(const QJsonObject &record, const QByteArray &authorKey);
 
+// Avatar d'une conversation (version 15) : choisi par un administrateur (vérifié à part), lié à l'identifiant du
+// groupe ; le plus récent l'emporte. {"t":"conv-avatar", "a" (auteur), "ts", "img", "s"}
+constexpr int ConversationVersion = 15;
+QJsonObject createForConversation(const QByteArray &identitySeed, const QString &authorOnion, const QString &groupId,
+                                  const QByteArray &jpeg, qint64 timestampMs);
+bool verifyForConversation(const QJsonObject &record, const QByteArray &authorKey, const QString &groupId);
+
 QString author(const QJsonObject &record);
 qint64 timestamp(const QJsonObject &record); // 0 : aucun enregistrement
 QByteArray image(const QJsonObject &record); // vide : pas d'avatar (jamais choisi, ou retiré)

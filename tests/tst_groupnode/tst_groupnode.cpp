@@ -983,6 +983,52 @@ private slots:
         QTRY_COMPARE(Avatar::timestamp(d.store->avatarRecord(a.onion)), qint64(6000));
     }
 
+    void conversationAvatarFromAdmin()
+    {
+        mesh();
+        Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
+        QTRY_COMPARE(c.node->groupId(), a.node->groupId());
+        const QString group = a.node->groupId();
+        QImage img(Avatar::Side, Avatar::Side, QImage::Format_RGB32);
+        img.fill(Qt::blue);
+        const QByteArray jpeg = Avatar::fromImage(img);
+        QString error;
+        QVERIFY(!b.node->setConversationAvatar(jpeg, &error)); // pas administrateur
+        QVERIFY(!error.isEmpty());
+        QSignalSpy changedAtC(c.node.get(), &GroupNode::conversationAvatarChanged);
+        QVERIFY(a.node->setConversationAvatar(jpeg));
+        QTRY_COMPARE(b.node->conversationAvatar(), jpeg);
+        QTRY_COMPARE(c.node->conversationAvatar(), jpeg);
+        QTRY_COMPARE(changedAtC.count(), 1);
+        QCOMPARE(changedAtC.at(0).at(0).toBool(), false);
+        QCOMPARE(changedAtC.at(0).at(1).toString(), a.nick);
+
+        // Signé par un simple membre, plus ancien, ou pour un autre groupe : ignoré
+        const QByteArray pirate = Avatar::fromImage(QImage(50, 50, QImage::Format_RGB32));
+        const qint64 later = QDateTime::currentMSecsSinceEpoch() + 100000;
+        b.node->sendTo(c.onion, Avatar::createForConversation(b.store->identitySeed(), b.onion, group, pirate, later));
+        a.node->sendTo(c.onion, Avatar::createForConversation(a.store->identitySeed(), a.onion, group, pirate, 1));
+        a.node->sendTo(c.onion,
+                       Avatar::createForConversation(a.store->identitySeed(), a.onion, QString(64, 'e'), pirate, later));
+        QTest::qWait(200);
+        QCOMPARE(c.node->conversationAvatar(), jpeg);
+
+        // Un nouveau venu le reçoit en se connectant
+        Peer &d = peer('d');
+        QCOMPARE(d.node->join(invitation(c)), GroupNode::JoinResult::Joined);
+        d.node->setOnline(d.onion);
+        QTRY_COMPARE(d.node->conversationAvatar(), jpeg);
+
+        // Retiré : chez tous ; et oublié en quittant le groupe
+        QVERIFY(a.node->setConversationAvatar({}));
+        QTRY_VERIFY(c.node->conversationAvatar().isEmpty());
+        QTRY_VERIFY(d.node->conversationAvatar().isEmpty());
+        QVERIFY(a.node->setConversationAvatar(jpeg));
+        QTRY_COMPARE(c.node->conversationAvatar(), jpeg);
+        c.node->leaveGroup();
+        QVERIFY(c.node->conversationAvatar().isEmpty());
+    }
+
     void directInvitation()
     {
         mesh();

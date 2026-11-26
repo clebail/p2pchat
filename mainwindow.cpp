@@ -323,6 +323,7 @@ void MainWindow::updateConversationItem(Conversation *c)
     f.setBold(c->unread() > 0);
     item->setFont(f);
     item->setToolTip(c->displayName());
+    item->setIcon(ChatView::roundAvatar(c->conversationAvatar(), c->displayName(), ConvAvatarSide, devicePixelRatioF()));
 }
 
 void MainWindow::startConversation()
@@ -499,6 +500,10 @@ void MainWindow::buildUi()
     });
     top->addWidget(m_sidebarButton, 0, Qt::AlignTop);
     top->addSpacing(4);
+    m_titleAvatar = new QLabel(topBar);
+    m_titleAvatar->setFixedSize(TitleAvatarSide, TitleAvatarSide);
+    top->addWidget(m_titleAvatar, 0, Qt::AlignTop);
+    top->addSpacing(4);
     auto *titles = new QVBoxLayout;
     titles->setSpacing(1);
     m_title = new QLabel(tr("P2P Chat"), topBar);
@@ -552,14 +557,17 @@ void MainWindow::buildUi()
     menu->addAction(tr("Changer de pseudo…"), this, &MainWindow::changeNickname);
     menu->addAction(tr("Changer d'avatar…"), this, &MainWindow::changeAvatar);
     QAction *renameAct = menu->addAction(tr("Renommer la conversation…"), this, &MainWindow::renameConversation);
+    QAction *convAvatarAct =
+        menu->addAction(tr("Avatar de la conversation…"), this, &MainWindow::changeConversationAvatar);
     menu->addAction(tr("Vider la conversation"), this, &MainWindow::clearConversation);
     menu->addSeparator();
     QAction *leaveAct = menu->addAction(tr("Quitter la conversation…"), this, &MainWindow::resetAll);
     QAction *deleteAct = menu->addAction(tr("Supprimer la conversation…"), this, &MainWindow::deleteConversation);
-    connect(menu, &QMenu::aboutToShow, this, [this, inviteAct, leaveAct, deleteAct, withAct, renameAct] {
+    connect(menu, &QMenu::aboutToShow, this, [this, inviteAct, leaveAct, deleteAct, withAct, renameAct, convAvatarAct] {
         withAct->setEnabled(m_group->inGroup() && !m_group->members().isEmpty());
         // Réservé aux administrateurs (le nom vaut pour tous)
         renameAct->setEnabled(m_node->isAdmin() && !m_node->groupId().isEmpty());
+        convAvatarAct->setEnabled(renameAct->isEnabled());
         inviteAct->setText(m_group->inGroup() ? tr("Inviter quelqu'un…") : tr("Créer la conversation et inviter…"));
         leaveAct->setVisible(m_group->inGroup());
         deleteAct->setVisible(!m_group->inGroup());
@@ -792,6 +800,7 @@ QWidget *MainWindow::buildSidebar(QWidget *parent)
     m_convList->setObjectName("convList");
     m_convList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_convList->setTextElideMode(Qt::ElideRight);
+    m_convList->setIconSize(QSize(ConvAvatarSide, ConvAvatarSide));
     lay->addWidget(m_convList, 1);
     connect(m_convList, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
         showConversation(conversationById(item->data(Qt::UserRole).toString()));
@@ -821,6 +830,9 @@ void MainWindow::updateStatus()
 
     // Titre : le nom de la conversation, ou les pseudos des membres
     m_title->setText(m_shown->isBlank() ? tr("P2P Chat") : m_shown->displayName());
+    m_titleAvatar->setVisible(!m_shown->isBlank());
+    m_titleAvatar->setPixmap(ChatView::roundAvatar(m_shown->conversationAvatar(), m_shown->displayName(),
+                                                   TitleAvatarSide, devicePixelRatioF()));
     QStringList others;
     for (const Member &m : list)
         others << m.nick;
