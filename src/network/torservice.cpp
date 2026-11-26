@@ -133,7 +133,10 @@ void TorService::start()
 
     // --defaults-torrc vide : on ignore la configuration système éventuelle
     const QString defaults = m_dataDir + "/torrc-defaults";
-    QFile(defaults).open(QIODevice::WriteOnly | QIODevice::Truncate);
+    if (!QFile(defaults).open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        fail(tr("impossible d'écrire %1").arg(defaults));
+        return;
+    }
 
     m_ready = m_failed = false;
     m_lastProblem.clear();

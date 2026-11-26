@@ -285,7 +285,7 @@ private slots:
         QVERIFY(h.open(QIODevice::WriteOnly));
         h.write("{}\n");
         h.close();
-        QFile(data + "/fichiers/x").open(QIODevice::WriteOnly);
+        QVERIFY(QFile(data + "/fichiers/x").open(QIODevice::WriteOnly));
         m_store->setSecret("secret");
         m_store->setMembers({{onion('a'), "Alice"}, {onion('b'), "Bob"}});
         m_store->appendGovernanceRecord({{"seq", 0}});
