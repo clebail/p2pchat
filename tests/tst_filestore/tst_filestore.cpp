@@ -66,7 +66,11 @@ private slots:
         QFile stored(store.path(info->id()));
         QVERIFY(stored.open(QIODevice::ReadOnly));
         QCOMPARE(stored.readAll(), content);
+#ifndef Q_OS_WIN
+        // Sous Windows, Qt ne fait que simuler ces droits Unix (seul l'attribut lecture seule compte) : la
+        // confidentialité y vient des droits d'accès du dossier de l'utilisateur
         QCOMPARE(stored.permissions() & (QFile::ReadOther | QFile::ReadGroup), QFile::Permissions());
+#endif
         QCOMPARE(store.readChunk(info->id(), 1), content.mid(ChunkBytes, ChunkBytes));
         QCOMPARE(store.received(info->id()).count(true), 3);
         QCOMPARE(store.info(info->id())->sha256, info->sha256);
