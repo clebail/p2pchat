@@ -66,13 +66,22 @@ public:
     // Notre certificat a été montré à d'autres : ce poste ne peut plus être lié à une autre personne (cf. devicelink.h)
     bool personAnnounced() const;
     void setPersonAnnounced();
+    // Ce poste a été délié (révocation reçue, cf. person.h) : plus de personne, et ensureIdentity n'en recrée pas
+    bool personUnlinked() const;
+    void dropPerson();
 
     // Certificats de poste reçus et vérifiés (cf. Person), communs à toutes les conversations. Le premier vu pour
     // une adresse fixe sa personne : un certificat d'une autre personne pour ce poste est refusé.
     QJsonObject certificate(const QString &onion) const;
     void setCertificate(const QString &onion, const QJsonObject &certificate);
-    QByteArray personOf(const QString &onion) const; // vide : poste sans certificat (version précédente)
-    bool isMyDevice(const QString &onion) const;    // un autre de nos postes
+    // Personne d'un poste ; vide : sans certificat (version précédente), ou délié
+    QByteArray personOf(const QString &onion) const;
+    bool isMyDevice(const QString &onion) const; // un autre de nos postes
+    QStringList myDevices() const;               // nos autres postes (certificats connus, non déliés)
+    // Révocations reçues et vérifiées, communes à toutes les conversations ; un poste délié n'a plus de personne
+    QJsonObject revocation(const QString &onion) const;
+    void setRevocation(const QString &onion, const QJsonObject &revocation);
+    bool isUnlinked(const QString &onion) const; // révocation de la personne de son certificat
 
     QList<Member> members() const;
     void setMembers(const QList<Member> &list);

@@ -494,10 +494,17 @@ void GroupNode::sendCertificates(PeerConnection *c)
         list.append(own);
         m_group.setPersonAnnounced(); // ce poste ne pourra plus être lié à une autre personne
     }
-    for (const Member &m : m_group.members())
+    QJsonArray revoked; // après les certificats : chacune est vérifiée avec le certificat qu'elle révoque
+    for (const Member &m : m_group.members()) {
         if (const QJsonObject cert = m_group.certificate(m.onion); !cert.isEmpty() && m.onion != c->peerOnion())
             list.append(cert);
-    c->send({{"t", "devices"}, {"c", list}});
+        if (m_group.isUnlinked(m.onion)) // y compris à lui : c'est ainsi qu'il l'apprend
+            revoked.append(m_group.revocation(m.onion));
+    }
+    QJsonObject msg{{"t", "devices"}, {"c", list}};
+    if (!revoked.isEmpty())
+        msg.insert("r", revoked);
+    c->send(msg);
 }
 
 void GroupNode::onCertificates(PeerConnection *c, const QJsonObject &o)
@@ -509,6 +516,8 @@ void GroupNode::onCertificates(PeerConnection *c, const QJsonObject &o)
         if (onion == m_ownOnion || !m_group.isMember(onion) || !Person::verifyCertificate(cert, keyOf(onion)))
             continue; // le nôtre, pas d'un membre, ou falsifié
         const QJsonObject known = m_group.certificate(onion);
+        if (Person::personKey(m_group.revocation(onion)) == Person::personKey(cert))
+            continue; // délié : définitif, même par un certificat plus récent (poste volé)
         if (!known.isEmpty()) {
             if (Person::personKey(known) != Person::personKey(cert)) {
                 // Un poste ne change pas de personne : refusé, comme une clé de poste différente
@@ -524,12 +533,52 @@ void GroupNode::onCertificates(PeerConnection *c, const QJsonObject &o)
         m_group.setCertificate(onion, cert);
         fresh.append(cert);
     }
-    if (fresh.isEmpty())
+    QJsonArray revoked;
+    bool ownUnlinked = false;
+    for (const QJsonValue &v : o.value("r").toArray()) {
+        const QJsonObject r = v.toObject();
+        const QString onion = Person::deviceOnion(r);
+        if (!Person::verifyRevocation(r))
+            continue;
+        if (onion == m_ownOnion) {
+            // Délié depuis un autre de nos postes : ce poste n'est plus à notre personne
+            if (!m_group.personKey().isEmpty() && Person::personKey(r) == m_group.personKey()) {
+                m_group.setRevocation(onion, r);
+                m_group.dropPerson();
+                ownUnlinked = true;
+            }
+            continue;
+        }
+        // Seulement par la personne de son certificat (connu : envoyé avant), et une fois
+        if (!m_group.isMember(onion) || m_group.isUnlinked(onion)
+            || Person::personKey(r) != Person::personKey(m_group.certificate(onion)))
+            continue;
+        m_group.setRevocation(onion, r);
+        revoked.append(r);
+    }
+    if (fresh.isEmpty() && revoked.isEmpty() && !ownUnlinked)
         return;
-    for (PeerConnection *p : m_active.values()) // relais, pour ceux qui ne sont reliés qu'à nous
-        if (p != c && p->peerVersion() >= Person::Version)
-            p->send({{"t", "devices"}, {"c", fresh}});
+    if (!fresh.isEmpty() || !revoked.isEmpty()) {
+        QJsonObject relay{{"t", "devices"}, {"c", fresh}};
+        if (!revoked.isEmpty())
+            relay.insert("r", revoked);
+        for (PeerConnection *p : m_active.values()) // relais, pour ceux qui ne sont reliés qu'à nous
+            if (p != c && p->peerVersion() >= Person::Version)
+                p->send(relay);
+    }
     promoteMyDevices();
+    if (ownUnlinked)
+        emit unlinked();
+    emit devicesChanged();
+    emit stateChanged();
+}
+
+void GroupNode::publishRevocation(const QJsonObject &revocation)
+{
+    const QJsonObject msg{{"t", "devices"}, {"c", QJsonArray()}, {"r", QJsonArray{revocation}}};
+    for (PeerConnection *p : std::as_const(m_active))
+        if (p->peerVersion() >= Person::Version)
+            p->send(msg);
     emit devicesChanged();
     emit stateChanged();
 }

@@ -132,6 +132,8 @@ void Host::onReady(PeerConnection *c)
         return refuse(c, tr("c'est ce poste-ci"));
     // Déjà rattaché à quelqu'un d'autre (il s'est présenté sous sa propre identité) : un poste ne change pas de
     // personne
+    if (!m_identity.revocation(c->peerOnion()).isEmpty()) // délié : définitif
+        return refuse(c, tr("ce poste a été délié de votre compte : il ne peut plus y être lié"));
     if (const QByteArray person = m_identity.personOf(c->peerOnion());
         !person.isEmpty() && person != m_identity.personKey())
         return refuse(c, tr("ce poste est déjà connu comme celui de quelqu'un d'autre"));

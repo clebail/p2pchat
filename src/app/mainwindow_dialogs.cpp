@@ -593,7 +593,7 @@ void MainWindow::showSafetyNumber(const QString &onion)
     }
     // Membre certifié (postes liés) : le code de la personne, le même sur tous nos postes et tous les siens
     const QByteArray person = m_group->personOf(onion);
-    const QString number = !person.isEmpty()
+    const QString number = !person.isEmpty() && !m_group->personKey().isEmpty() // (ce poste délié : sans personne)
                                ? SafetyNumber::forPersons(m_group->personKey(), person)
                                : SafetyNumber::compute(m_node->ownOnion(), m_group->identityKey(), onion,
                                                        m_group->pinnedKey(onion));

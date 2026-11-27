@@ -149,6 +149,37 @@ private slots:
         QVERIFY(!m_store->isVerified(onion('a')));
     }
 
+    // Poste délié : plus de personne (pour nous, et pour qui le connaît) ; une révocation d'une autre personne
+    // ne compte pas
+    void unlinkedDevices()
+    {
+        m_store->ensureIdentity();
+        const QByteArray deviceC = Ed25519::generateSeed(), deviceE = Ed25519::generateSeed();
+        m_store->setCertificate(onion('c'), Person::createCertificate(m_store->personSeed(), deviceC, onion('c'), 1));
+        m_store->setCertificate(onion('e'), Person::createCertificate(m_store->personSeed(), deviceE, onion('e'), 1));
+        QCOMPARE(m_store->myDevices().size(), 2);
+        m_store->setRevocation(onion('c'), Person::createRevocation(Ed25519::generateSeed(), onion('c'), 5));
+        QVERIFY(m_store->isMyDevice(onion('c')));
+        m_store->setRevocation(onion('c'), Person::createRevocation(m_store->personSeed(), onion('c'), 5));
+        reopen();
+        QVERIFY(m_store->isUnlinked(onion('c')));
+        QVERIFY(!m_store->isMyDevice(onion('c')));
+        QVERIFY(m_store->personOf(onion('c')).isEmpty());
+        QCOMPARE(m_store->myDevices(), QStringList({onion('e')}));
+
+        // Ce poste délié : sans personne, pour de bon
+        QVERIFY(!m_store->personUnlinked());
+        m_store->dropPerson();
+        reopen();
+        m_store->ensureIdentity();
+        QVERIFY(m_store->personUnlinked());
+        QVERIFY(m_store->personSeed().isEmpty());
+        QVERIFY(m_store->personKey().isEmpty());
+        QVERIFY(m_store->personAnnounced()); // plus jamais lié à une autre personne
+        QVERIFY(m_store->myDevices().isEmpty());
+        QCOMPARE(m_store->identitySeed().size(), 32); // le poste garde sa propre identité
+    }
+
     void mergeMember()
     {
         QVERIFY(m_store->mergeMember(onion('a'), "Alice", onion('z')));

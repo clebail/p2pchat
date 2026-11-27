@@ -163,8 +163,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 MainWindow::~MainWindow()
 {
     // Les conversations (et leurs groupes) avant la fenêtre : plus aucun de leurs signaux vers nous
-    for (const auto &c : m_convs)
+    for (const auto &c : m_convs) {
         c->disconnect(this);
+        c->node().disconnect(this);
+    }
     m_sync.reset();
     if (m_selfNode)
         m_selfNode->disconnect(this);
@@ -201,6 +203,8 @@ Conversation *MainWindow::openConversation(const QString &id)
         for (const auto &other : m_convs) // commun à toutes les conversations
             other->forgetAvatar(onion);
     });
+    // Différé : le groupe de nos postes est quitté, hors du traitement du message reçu
+    connect(&c->node(), &GroupNode::unlinked, this, &MainWindow::onUnlinked, Qt::QueuedConnection);
     connect(c, &Conversation::excludedFromGroup, this, [this, c](const QString &by) {
         auto *box = new QMessageBox(QMessageBox::Information, tr("Exclu du groupe"),
                                     tr("%1, administrateur de « %2 », vous en a exclu.\n\n"

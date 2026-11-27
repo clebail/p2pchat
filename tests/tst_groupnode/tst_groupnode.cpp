@@ -1358,6 +1358,15 @@ private slots:
         QCOMPARE(forgedLink.guestFailed->at(0).at(0).toString(), QString("le poste joint n'est pas celui du code"));
         QCOMPARE(forgedLink.hostLinked->count(), 0);
         QVERIFY(e.store->personKey() != f.store->personKey());
+
+        // Poste délié auparavant : définitif, l'hôte refuse
+        a.store->setRevocation(e.onion, Person::createRevocation(a.store->personSeed(), e.onion, 1));
+        Linking revoked = startLinking(a, e);
+        QTRY_COMPARE(revoked.hostRefused->count(), 1);
+        QCOMPARE(revoked.hostRefused->at(0).at(0).toString(),
+                 QString("ce poste a été délié de votre compte : il ne peut plus y être lié"));
+        QTRY_COMPARE(revoked.guestFailed->count(), 1);
+        QVERIFY(e.store->personKey() != a.store->personKey());
     }
 
     // Administrateur : nos autres postes le deviennent aussi, une fois (un retrait ensuite est respecté)
@@ -1386,6 +1395,62 @@ private slots:
         QTest::qWait(300);
         QVERIFY(!a.node->isAdmin(e.onion));
         QVERIFY(!e.node->isAdmin());
+    }
+
+    // Poste délié (révocation signée) : plus un de nos postes, pour nous comme pour les autres membres ; lui-même
+    // l'apprend et perd notre personne. Un certificat plus récent ne le rattache pas de nouveau (poste volé).
+    void unlinkedDeviceIsNoLongerMine()
+    {
+        Peer &a = peer('a'), &b = peer('b'), &e = peer('e');
+        const QByteArray personSeed = a.store->personSeed();
+        e.store->setPersonSeed(personSeed, a.store->personSince());
+        int unlinkedSignals = 0;
+        connect(e.node.get(), &GroupNode::unlinked, this, [&] { ++unlinkedSignals; });
+        a.node->createGroup();
+        a.node->setOnline(a.onion);
+        b.node->join(invitation(a));
+        b.node->setOnline(b.onion);
+        e.node->join(invitation(a));
+        e.node->setOnline(e.onion);
+        QTRY_VERIFY(linked(a, e) && linked(a, b) && linked(b, e));
+        QTRY_VERIFY(a.store->isMyDevice(e.onion) && e.store->isMyDevice(a.onion));
+        QTRY_COMPARE(b.store->personOf(e.onion), a.store->personKey());
+
+        // Révocation par une autre personne (b) : ignorée
+        b.node->publishRevocation(Person::createRevocation(b.store->personSeed(), e.onion, 5));
+        QTest::qWait(300);
+        QVERIFY(a.store->isMyDevice(e.onion));
+        QCOMPARE(e.store->personKey(), a.store->personKey());
+
+        // a délie e : b l'apprend (directement, et par e qui la relaie), e aussi
+        const QJsonObject revocation = Person::createRevocation(personSeed, e.onion, QDateTime::currentMSecsSinceEpoch());
+        a.store->setRevocation(e.onion, revocation);
+        a.node->publishRevocation(revocation);
+        QVERIFY(!a.store->isMyDevice(e.onion));
+        QTRY_VERIFY(b.store->personOf(e.onion).isEmpty());
+        QTRY_VERIFY(e.store->personUnlinked());
+        QVERIFY(e.store->personSeed().isEmpty());
+        QCOMPARE(unlinkedSignals, 1);
+        QVERIFY(!e.store->isMyDevice(a.onion));
+
+        // Un poste volé garde la clé de personne : son certificat plus récent n'y change rien, sans alerte
+        e.store->setPersonSeed(personSeed, QDateTime::currentMSecsSinceEpoch() + 1000);
+        e.node->setOffline();
+        e.node->setOnline(e.onion);
+        QTRY_VERIFY(linked(a, e) && linked(b, e));
+        QTest::qWait(300);
+        QVERIFY(!a.store->isMyDevice(e.onion));
+        QVERIFY(b.store->personOf(e.onion).isEmpty());
+        QVERIFY(!b.system.join(";").contains("identité refusée"));
+        QVERIFY(!a.system.join(";").contains("identité refusée"));
+
+        // Un membre qui ne l'a pas encore vu l'apprend en se connectant (révocation envoyée avec les certificats)
+        Peer &c = peer('c');
+        c.node->join(invitation(a));
+        c.node->setOnline(c.onion);
+        QTRY_VERIFY(linked(a, c));
+        QTRY_VERIFY(c.store->isUnlinked(e.onion));
+        QVERIFY(c.store->personOf(e.onion).isEmpty());
     }
 
 private:

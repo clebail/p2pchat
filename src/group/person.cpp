@@ -11,6 +11,12 @@ QByteArray signingBytes(const QJsonObject &c)
                          Protocol::fromB64(c.value("k")), QByteArray::number(qint64(c.value("ts").toDouble()))});
 }
 
+QByteArray revocationBytes(const QJsonObject &r)
+{
+    return Crypto::pack({"p2pchat-unlink-v1", Protocol::fromB64(r.value("p")), r.value("o").toString().toUtf8(),
+                         QByteArray::number(qint64(r.value("ts").toDouble()))});
+}
+
 } // namespace
 
 QJsonObject Person::createCertificate(const QByteArray &personSeed, const QByteArray &deviceSeed,
@@ -51,4 +57,21 @@ QString Person::deviceOnion(const QJsonObject &c)
 qint64 Person::timestamp(const QJsonObject &c)
 {
     return qint64(c.value("ts").toDouble());
+}
+
+QJsonObject Person::createRevocation(const QByteArray &personSeed, const QString &deviceOnion, qint64 timestampMs)
+{
+    QJsonObject r{{"t", "unlink"},
+                  {"p", Protocol::toB64(Ed25519::publicKey(personSeed))},
+                  {"o", deviceOnion},
+                  {"ts", double(timestampMs)}};
+    r.insert("ps", Protocol::toB64(Ed25519::sign(personSeed, revocationBytes(r))));
+    return r;
+}
+
+bool Person::verifyRevocation(const QJsonObject &r)
+{
+    const QByteArray person = personKey(r);
+    return r.value("t").toString() == "unlink" && person.size() == 32 && Protocol::isValidOnion(deviceOnion(r))
+           && timestamp(r) > 0 && Ed25519::verify(person, revocationBytes(r), Protocol::fromB64(r.value("ps")));
 }

@@ -432,6 +432,10 @@
         <source>certificat de poste invalide</source>
         <translation>invalid device certificate</translation>
     </message>
+    <message>
+        <source>ce poste a été délié de votre compte : il ne peut plus y être lié</source>
+        <translation>this device was unlinked from your account: it can no longer be linked to it</translation>
+    </message>
 </context>
 <context>
     <name>Files</name>
@@ -1584,6 +1588,92 @@ You will also leave it on your other devices.</translation>
     <message>
         <source>Vous avez quitté la conversation sur un autre de vos postes.</source>
         <translation>You left the conversation on another of your devices.</translation>
+    </message>
+    <message>
+        <source>Ce poste a été délié de votre compte : il ne peut plus en lier d&apos;autres.</source>
+        <translation>This device was unlinked from your account: it can no longer link other devices.</translation>
+    </message>
+    <message>
+        <source>Postes liés</source>
+        <translation>Linked devices</translation>
+    </message>
+    <message>
+        <source>Délier…</source>
+        <translation>Unlink…</translation>
+    </message>
+    <message>
+        <source>Ce poste a été délié de votre compte : il n&apos;est plus lié à aucun autre.</source>
+        <translation>This device was unlinked from your account: it is no longer linked to any other.</translation>
+    </message>
+    <message>
+        <source>Aucun autre poste n&apos;est lié à votre compte. Pour en ajouter un : ⋮ → Mes postes → Lier un autre poste…</source>
+        <translation>No other device is linked to your account. To add one: ⋮ → My devices → Link another device…</translation>
+    </message>
+    <message>
+        <source>Vos postes partagent votre identité, votre profil et vos conversations. Délier un poste que vous n&apos;utilisez plus, ou que vous avez perdu.</source>
+        <translation>Your devices share your identity, your profile and your conversations. Unlink a device you no longer use, or have lost.</translation>
+    </message>
+    <message>
+        <source>Ce poste</source>
+        <translation>This device</translation>
+    </message>
+    <message numerus="yes">
+        <source>Poste %1… — %2, lié le %3, %n conversation(s) en commun</source>
+        <translation>
+            <numerusform>Device %1… — %2, linked on %3, %n conversation in common</numerusform>
+            <numerusform>Device %1… — %2, linked on %3, %n conversations in common</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Délier un poste</source>
+        <translation>Unlink a device</translation>
+    </message>
+    <message>
+        <source>&lt;p&gt;Délier le poste %1… ?&lt;/p&gt;&lt;p&gt;Il ne sera plus reconnu comme vous, ni par vos autres postes ni par les membres de vos conversations, et ne sera plus synchronisé. Il reste membre de vos conversations, sous sa propre identité. &lt;b&gt;C&apos;est définitif.&lt;/b&gt;&lt;/p&gt;</source>
+        <translation>&lt;p&gt;Unlink device %1…?&lt;/p&gt;&lt;p&gt;It will no longer be recognized as you, neither by your other devices nor by the members of your conversations, and will no longer be synchronized. It remains a member of your conversations, under its own identity. &lt;b&gt;This cannot be undone.&lt;/b&gt;&lt;/p&gt;</translation>
+    </message>
+    <message>
+        <source>Délier</source>
+        <translation>Unlink</translation>
+    </message>
+    <message>
+        <source>Poste perdu ou volé : l&apos;exclure aussi de mes conversations (leur secret est renouvelé)</source>
+        <translation>Lost or stolen device: also exclude it from my conversations (their secret is renewed)</translation>
+    </message>
+    <message>
+        <source>Poste délié.</source>
+        <translation>Device unlinked.</translation>
+    </message>
+    <message numerus="yes">
+        <source>Exclu de %n conversation(s).</source>
+        <translation>
+            <numerusform>Excluded from %n conversation.</numerusform>
+            <numerusform>Excluded from %n conversations.</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Vous n&apos;administrez pas %1 : demandez à un administrateur de l&apos;en exclure.</source>
+        <translation>You do not administer %1: ask an administrator to exclude it.</translation>
+    </message>
+    <message>
+        <source>Ce poste garde la clé de votre compte : il pourrait encore délier vos autres postes.</source>
+        <translation>That device keeps your account&apos;s key: it could still unlink your other devices.</translation>
+    </message>
+    <message>
+        <source>Poste délié</source>
+        <translation>Device unlinked</translation>
+    </message>
+    <message>
+        <source>Ce poste a été délié de votre compte depuis un autre de vos postes.
+
+Il garde ses conversations, sous sa propre identité, mais n&apos;est plus synchronisé avec vos autres postes.</source>
+        <translation>This device was unlinked from your account from another of your devices.
+
+It keeps its conversations, under its own identity, but is no longer synchronized with your other devices.</translation>
+    </message>
+    <message>
+        <source>Postes liés…</source>
+        <translation>Linked devices…</translation>
     </message>
 </context>
 <context>

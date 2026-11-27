@@ -4,17 +4,22 @@
 #include "conversation.h"
 #include "devicelink.h"
 #include "mainwindow.h"
+#include "person.h"
 #include "spellchecker.h"
 #include "switchboard.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QClipboard>
+#include <QDateTime>
 #include <QDialog>
 #include <QDir>
 #include <QFile>
 #include <QDialogButtonBox>
 #include <QInputDialog>
 #include <QLabel>
+#include <QListWidget>
+#include <QLocale>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -23,6 +28,11 @@
 
 void MainWindow::linkAnotherDevice()
 {
+    if (m_group->personUnlinked()) {
+        QMessageBox::information(this, tr("Lier un autre poste"),
+                                 tr("Ce poste a été délié de votre compte : il ne peut plus en lier d'autres."));
+        return;
+    }
     if (m_onion.isEmpty()) {
         QMessageBox::information(this, tr("Lier un autre poste"), tr("Le réseau n'est pas encore prêt."));
         return;
@@ -190,6 +200,131 @@ void MainWindow::applyLink(const DeviceLink::Profile &profile, const DeviceLink:
     updateStatus();
 }
 
+void MainWindow::showMyDevices()
+{
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Postes liés"));
+    dlg.resize(460, 320);
+    auto *lay = new QVBoxLayout(&dlg);
+    auto *intro = new QLabel(&dlg);
+    intro->setWordWrap(true);
+    lay->addWidget(intro);
+    auto *list = new QListWidget(&dlg);
+    lay->addWidget(list);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
+    QPushButton *unlinkBtn = buttons->addButton(tr("Délier…"), QDialogButtonBox::ActionRole);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    lay->addWidget(buttons);
+
+    auto fill = [this, list, intro, unlinkBtn] {
+        list->clear();
+        const QStringList mine = m_group->myDevices();
+        intro->setText(m_group->personUnlinked()
+                           ? tr("Ce poste a été délié de votre compte : il n'est plus lié à aucun autre.")
+                       : mine.isEmpty()
+                           ? tr("Aucun autre poste n'est lié à votre compte. Pour en ajouter un : ⋮ → Mes postes → "
+                                "Lier un autre poste…")
+                           : tr("Vos postes partagent votre identité, votre profil et vos conversations. Délier un "
+                                "poste que vous n'utilisez plus, ou que vous avez perdu."));
+        auto *me = new QListWidgetItem(tr("Ce poste"), list);
+        me->setFlags(me->flags() & ~Qt::ItemIsSelectable);
+        for (const QString &onion : mine) {
+            int shared = 0;
+            for (const auto &c : m_convs)
+                shared += c->store().inGroup() && c->store().isMember(onion) ? 1 : 0;
+            const qint64 since = Person::timestamp(m_group->certificate(onion));
+            auto *item = new QListWidgetItem(
+                tr("Poste %1… — %2, lié le %3, %n conversation(s) en commun", nullptr, shared)
+                    .arg(onion.left(8),
+                         m_selfNode->isConnected(onion) ? tr("en ligne") : tr("hors ligne"),
+                         QLocale().toString(QDateTime::fromMSecsSinceEpoch(since).date(), QLocale::ShortFormat)),
+                list);
+            item->setData(Qt::UserRole, onion);
+        }
+        unlinkBtn->setEnabled(false);
+    };
+    fill();
+    connect(list, &QListWidget::currentItemChanged, &dlg, [list, unlinkBtn] {
+        const QListWidgetItem *item = list->currentItem();
+        unlinkBtn->setEnabled(item && !item->data(Qt::UserRole).toString().isEmpty());
+    });
+    connect(unlinkBtn, &QPushButton::clicked, &dlg, [this, list, fill] {
+        const QListWidgetItem *item = list->currentItem();
+        if (item && unlinkDevice(item->data(Qt::UserRole).toString()))
+            fill();
+    });
+    dlg.exec();
+}
+
+bool MainWindow::unlinkDevice(const QString &onion)
+{
+    if (!m_group->isMyDevice(onion) || m_group->personSeed().isEmpty())
+        return false;
+    QMessageBox box(QMessageBox::Warning, tr("Délier un poste"),
+                    tr("<p>Délier le poste %1… ?</p>"
+                       "<p>Il ne sera plus reconnu comme vous, ni par vos autres postes ni par les membres de vos "
+                       "conversations, et ne sera plus synchronisé. Il reste membre de vos conversations, sous sa "
+                       "propre identité. <b>C'est définitif.</b></p>")
+                        .arg(onion.left(8)),
+                    QMessageBox::Cancel, this);
+    QPushButton *unlink = box.addButton(tr("Délier"), QMessageBox::DestructiveRole);
+    auto *stolen = new QCheckBox(tr("Poste perdu ou volé : l'exclure aussi de mes conversations (leur secret est "
+                                    "renouvelé)"),
+                                 &box);
+    box.setCheckBox(stolen);
+    box.setDefaultButton(QMessageBox::Cancel);
+    box.exec();
+    if (box.clickedButton() != unlink)
+        return false;
+
+    // Révocation signée par notre personne : enregistrée, puis annoncée partout (chaque conversation la relaie)
+    const QJsonObject revocation =
+        Person::createRevocation(m_group->personSeed(), onion, QDateTime::currentMSecsSinceEpoch());
+    m_group->setRevocation(onion, revocation);
+    for (const auto &c : m_convs)
+        c->node().publishRevocation(revocation);
+    m_selfNode->publishRevocation(revocation);
+    if (m_selfStore->inGroup() && m_selfStore->isMember(onion) && m_selfNode->canGovern())
+        m_selfNode->exclude(onion); // plus de synchronisation : le groupe de nos postes change de secret
+
+    QString text = tr("Poste délié.");
+    if (stolen->isChecked()) {
+        int excluded = 0;
+        QStringList notAdmin;
+        for (const auto &c : m_convs) {
+            if (!c->store().inGroup() || !c->store().isMember(onion))
+                continue;
+            if (c->node().canGovern() && c->node().exclude(onion))
+                ++excluded;
+            else
+                notAdmin << c->displayName();
+        }
+        text += " " + tr("Exclu de %n conversation(s).", nullptr, excluded);
+        if (!notAdmin.isEmpty())
+            text += "\n\n" + tr("Vous n'administrez pas %1 : demandez à un administrateur de l'en exclure.")
+                                  .arg(notAdmin.join(", "));
+        text += "\n\n" + tr("Ce poste garde la clé de votre compte : il pourrait encore délier vos autres postes.");
+    }
+    QMessageBox::information(this, tr("Délier un poste"), text);
+    updateStatus();
+    return true;
+}
+
+void MainWindow::onUnlinked()
+{
+    if (m_selfStore->inGroup())
+        m_selfNode->leaveGroup(); // plus de synchronisation
+    m_selfStore->setSyncedConversations({});
+    auto *box = new QMessageBox(QMessageBox::Information, tr("Poste délié"),
+                                tr("Ce poste a été délié de votre compte depuis un autre de vos postes.\n\n"
+                                   "Il garde ses conversations, sous sa propre identité, mais n'est plus "
+                                   "synchronisé avec vos autres postes."),
+                                QMessageBox::Ok, this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->open(); // sans bloquer la boucle d'événements
+    updateStatus();
+}
+
 bool MainWindow::joinLinked(const Invitation &inv, const QString &name)
 {
     for (const auto &c : m_convs) {
@@ -224,6 +359,7 @@ void MainWindow::setupDeviceSync()
     m_board->add(m_selfNode.get());
     DeviceSync::Hooks &hooks = *this; // base privée : convertie ici
     m_sync = std::make_unique<DeviceSync::Engine>(*m_selfStore, *m_selfNode, hooks);
+    connect(m_selfNode.get(), &GroupNode::unlinked, this, &MainWindow::onUnlinked, Qt::QueuedConnection);
     connect(m_sync.get(), &DeviceSync::Engine::conversationJoined, this, [this](const QString &groupId) {
         if (Conversation *c = conversationByGroup(groupId))
             c->appendSystem(tr("Conversation rejointe depuis un autre de vos postes."));

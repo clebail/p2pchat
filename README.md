@@ -42,6 +42,11 @@ pseudo, avatar et dictionnaire (le plus récent l'emporte, les dictionnaires son
 y nomme administrateurs les autres postes de la même personne, une fois chacun : un retrait ensuite est respecté.
 Les messages non lus ne sont pas synchronisés.
 
+⋮ → *Mes postes* → *Postes liés…* liste les autres postes de la personne ; *Délier…* en retire un, pour de bon :
+il n'est plus reconnu comme elle, ni par ses autres postes ni par les membres de ses conversations, n'est plus
+synchronisé, et garde ses conversations sous sa propre identité. Pour un poste perdu ou volé, cochez aussi
+l'exclusion : il est exclu des conversations que vous administrez, et leur secret est renouvelé.
+
 ### Synchronisation de l'historique
 
 À chaque connexion entre deux membres, chacun envoie la liste des identifiants de ses messages des
@@ -339,6 +344,10 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
   poste d'un autre. Le premier certificat vu pour un poste fixe sa personne : un poste qui prétend ensuite
   appartenir à quelqu'un d'autre est refusé (« identité refusée »). Le code de sécurité entre deux personnes est
   tiré de leurs clés de personne : une seule vérification couvre tous leurs postes.
+- **Poste délié** : une révocation signée par la personne, relayée par chaque conversation et envoyée avec les
+  certificats ; elle est définitive, même face à un certificat plus récent. Un poste volé garde la clé de
+  personne : il faut l'exclure de ses conversations (secret renouvelé), et il pourrait encore délier les autres
+  postes de la personne ; changer de clé de personne n'est pas prévu.
 - **Liaison d'un poste** : le code de liaison donne la clé de personne à qui le saisit ; il ne sert qu'une fois,
   pendant 10 minutes, et ne doit être transmis qu'à soi-même. La connexion est chiffrée comme celle d'une
   conversation, le secret du code tenant lieu de mot de passe, et le nouveau poste vérifie que la clé du poste
@@ -385,7 +394,7 @@ dans le chemin d'inclusion (`src/core.pri`, `src/ui.pri`).
 | `mainwindow.*` | Fenêtre : colonne des conversations, zone de saisie, Tor, notifications |
 | `mainwindow_ui.cpp` | Construction de la fenêtre : colonne, barre du haut et menu ⋮, recherche, accueil, bandeaux, zone de saisie |
 | `mainwindow_dialogs.cpp` | Dialogues de la fenêtre : invitation, membres et gouvernance, code de sécurité, console partagée |
-| `mainwindow_link.cpp` | Postes liés : lier un autre poste, lier ce poste à un compte, synchronisation |
+| `mainwindow_link.cpp` | Postes liés : lier un autre poste, lier ce poste à un compte, synchronisation, délier |
 | `appstyle.*` | Feuille de style et icônes dessinées de la fenêtre |
 | `language.*` | Langue de l'interface (réglage, système), traductions (`translations/`) de P2P Chat et de Qt |
 | `singleinstance.*` | Une seule instance par utilisateur ; la suivante affiche la fenêtre existante |
@@ -413,7 +422,7 @@ dans le chemin d'inclusion (`src/core.pri`, `src/ui.pri`).
 | `groupstore.*` | État persistant : pseudo, avatars, identité et trousseau (communs), secret et membres (par conversation) |
 | `governance.*` | Gouvernance du groupe : administrateurs, exclusions, secret en vigueur (enregistrements signés) |
 | `invitation.*` | Encodage / décodage du code d'invitation |
-| `person.*` | Postes liés : certificat de poste, signé par la personne et par le poste |
+| `person.*` | Postes liés : certificat de poste, signé par la personne et par le poste ; révocation |
 | `devicelink.*` | Liaison d'un poste : code à usage unique, transmission de la personne, du profil et des conversations |
 | `devicesync.*` | Synchronisation entre postes liés : profil, conversations rejointes et quittées |
 | `history.*` | Historique local, inventaire et lots de synchronisation |

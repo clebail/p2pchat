@@ -157,7 +157,7 @@ void GroupStore::ensureIdentity()
 {
     if (identitySeed().size() != 32)
         m_settings.setValue("identity/seed", Ed25519::generateSeed());
-    if (personSeed().size() != 32)
+    if (personSeed().size() != 32 && !personUnlinked())
         setPersonSeed(Ed25519::generateSeed(), QDateTime::currentMSecsSinceEpoch());
 }
 
@@ -194,6 +194,19 @@ void GroupStore::setPersonAnnounced()
         m_settings.setValue("identity/personAnnounced", true);
 }
 
+bool GroupStore::personUnlinked() const
+{
+    return m_settings.value("identity/unlinked").toBool();
+}
+
+void GroupStore::dropPerson()
+{
+    m_settings.remove("identity/person");
+    m_settings.remove("identity/personSince");
+    m_settings.setValue("identity/personAnnounced", true); // plus jamais lié à une autre personne
+    m_settings.setValue("identity/unlinked", true);
+}
+
 QJsonObject GroupStore::certificate(const QString &onion) const
 {
     return isValidOnion(onion) ? readObject(m_settings, "devices/" + onion) : QJsonObject();
@@ -207,7 +220,36 @@ void GroupStore::setCertificate(const QString &onion, const QJsonObject &certifi
 
 QByteArray GroupStore::personOf(const QString &onion) const
 {
-    return Person::personKey(certificate(onion));
+    return isUnlinked(onion) ? QByteArray() : Person::personKey(certificate(onion));
+}
+
+QStringList GroupStore::myDevices() const
+{
+    m_settings.beginGroup("devices");
+    const QStringList onions = m_settings.childKeys();
+    m_settings.endGroup();
+    QStringList mine;
+    for (const QString &onion : onions)
+        if (isMyDevice(onion))
+            mine << onion;
+    return mine;
+}
+
+QJsonObject GroupStore::revocation(const QString &onion) const
+{
+    return isValidOnion(onion) ? readObject(m_settings, "unlinked/" + onion) : QJsonObject();
+}
+
+void GroupStore::setRevocation(const QString &onion, const QJsonObject &revocation)
+{
+    if (isValidOnion(onion))
+        writeObject(m_settings, "unlinked/" + onion, revocation);
+}
+
+bool GroupStore::isUnlinked(const QString &onion) const
+{
+    const QByteArray person = Person::personKey(revocation(onion));
+    return !person.isEmpty() && person == Person::personKey(certificate(onion));
 }
 
 bool GroupStore::isMyDevice(const QString &onion) const

@@ -148,6 +148,10 @@ private:
     void linkAnotherDevice(); // ce poste donne son identité à un nouveau
     void linkThisDevice();    // ce poste prend celle d'un autre
     void applyLink(const DeviceLink::Profile &profile, const DeviceLink::Offer &offer);
+    // Nos postes liés (⋮ → Mes postes → Postes liés…), et les délier (révocation signée, cf. person.h)
+    void showMyDevices();
+    bool unlinkDevice(const QString &onion);
+    void onUnlinked(); // ce poste a été délié depuis un autre
     // Synchronisation entre nos postes (cf. devicesync.h) : groupe caché de nos postes, et ce qu'il demande
     void setupDeviceSync();
     bool hasOtherDevices() const;

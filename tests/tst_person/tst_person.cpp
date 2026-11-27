@@ -69,6 +69,36 @@ private slots:
         forged["k"] = Protocol::toB64(m_deviceKey);
         QVERIFY(!Person::verifyCertificate(forged, m_deviceKey));
     }
+
+    // Révocation (poste délié) : signée par la personne ; toute modification la rend invalide
+    void revocation()
+    {
+        const QJsonObject r = Person::createRevocation(m_person, onion('a'), 3000);
+        QCOMPARE(r.value("t").toString(), QString("unlink"));
+        QCOMPARE(Person::personKey(r), Ed25519::publicKey(m_person));
+        QCOMPARE(Person::deviceOnion(r), onion('a'));
+        QCOMPARE(Person::timestamp(r), qint64(3000));
+        QVERIFY(Person::verifyRevocation(r));
+        for (const char *field : {"t", "p", "o", "ts", "ps"}) {
+            QJsonObject changed = r;
+            const QByteArray f(field);
+            if (f == "t")
+                changed["t"] = "device";
+            else if (f == "o")
+                changed["o"] = onion('b');
+            else if (f == "ts")
+                changed["ts"] = 4000.0;
+            else if (f == "ps")
+                changed["ps"] = Protocol::toB64(QByteArray(64, 'x'));
+            else
+                changed["p"] = Protocol::toB64(Ed25519::publicKey(Ed25519::generateSeed()));
+            QVERIFY2(!Person::verifyRevocation(changed), field);
+        }
+        QVERIFY(!Person::verifyRevocation(Person::createRevocation(m_person, onion('a'), 0)));
+        QVERIFY(!Person::verifyRevocation(Person::createRevocation(m_person, "pas-une-adresse", 3000)));
+        // Ni un certificat pris pour une révocation
+        QVERIFY(!Person::verifyRevocation(Person::createCertificate(m_person, m_device, onion('a'), 3000)));
+    }
 };
 
 QTEST_GUILESS_MAIN(TestPerson)
