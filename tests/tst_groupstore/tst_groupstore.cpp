@@ -1,6 +1,7 @@
 #include "conversations.h"
 #include "crypto.h"
 #include "groupstore.h"
+#include "person.h"
 
 #include <QDir>
 #include <QFile>
@@ -93,6 +94,54 @@ private slots:
         reopen();
         m_store->ensureIdentity(); // ne régénère pas une identité existante
         QCOMPARE(m_store->identitySeed(), seed);
+    }
+
+    // Postes liés : une clé de personne, distincte de celle du poste, créée avec l'identité
+    void personIdentity()
+    {
+        m_store->ensureIdentity();
+        const QByteArray person = m_store->personSeed();
+        QCOMPARE(person.size(), 32);
+        QVERIFY(person != m_store->identitySeed());
+        QCOMPARE(m_store->personKey(), Ed25519::publicKey(person));
+        QVERIFY(m_store->personSince() > 0);
+        reopen();
+        m_store->ensureIdentity();
+        QCOMPARE(m_store->personSeed(), person);
+        // Poste lié : la personne d'un autre poste
+        const QByteArray other = Ed25519::generateSeed();
+        m_store->setPersonSeed(other, 1234);
+        QCOMPARE(m_store->personKey(), Ed25519::publicKey(other));
+        QCOMPARE(m_store->personSince(), qint64(1234));
+    }
+
+    void devicesAndVerification()
+    {
+        m_store->ensureIdentity();
+        const QByteArray deviceA = Ed25519::generateSeed(), deviceB = Ed25519::generateSeed(),
+                         deviceC = Ed25519::generateSeed(), alice = Ed25519::generateSeed();
+        for (const auto &[o, seed] : {std::pair{onion('a'), deviceA}, std::pair{onion('b'), deviceB},
+                                      std::pair{onion('c'), deviceC}})
+            QVERIFY(m_store->pinKey(o, Ed25519::publicKey(seed), 1));
+        QVERIFY(m_store->personOf(onion('a')).isEmpty()); // pas encore de certificat
+        // Alice a deux postes (a et b) ; c est un autre de nos postes
+        m_store->setCertificate(onion('a'), Person::createCertificate(alice, deviceA, onion('a'), 1));
+        m_store->setCertificate(onion('b'), Person::createCertificate(alice, deviceB, onion('b'), 1));
+        m_store->setCertificate(onion('c'), Person::createCertificate(m_store->personSeed(), deviceC, onion('c'), 1));
+        QCOMPARE(m_store->personOf(onion('a')), Ed25519::publicKey(alice));
+        QCOMPARE(m_store->personOf(onion('b')), Ed25519::publicKey(alice));
+        QVERIFY(!m_store->isMyDevice(onion('a')));
+        QVERIFY(m_store->isMyDevice(onion('c')));
+        QVERIFY(!m_store->isMyDevice(onion('d')));
+        // Vérifier un poste d'Alice, c'est vérifier Alice : tous ses postes
+        QVERIFY(!m_store->isVerified(onion('b')));
+        m_store->setVerified(onion('a'), true);
+        QVERIFY(m_store->isVerified(onion('a')));
+        QVERIFY(m_store->isVerified(onion('b')));
+        reopen();
+        QVERIFY(m_store->isVerified(onion('b')));
+        m_store->setVerified(onion('b'), false);
+        QVERIFY(!m_store->isVerified(onion('a')));
     }
 
     void mergeMember()

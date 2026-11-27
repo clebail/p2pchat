@@ -374,6 +374,18 @@
         <source>🚫 Message supprimé par %1</source>
         <translation>🚫 Message deleted by %1</translation>
     </message>
+    <message>
+        <source>Votre autre poste</source>
+        <translation>Your other device</translation>
+    </message>
+    <message>
+        <source>Vous (autre poste)</source>
+        <translation>You (other device)</translation>
+    </message>
+    <message>
+        <source>votre autre poste</source>
+        <translation>your other device</translation>
+    </message>
 </context>
 <context>
     <name>Files</name>
@@ -1409,6 +1421,21 @@ Invitation codes already given will no longer work for people who have not joine
         <source>%1 — dictionnaire introuvable</source>
         <translation>%1 — dictionary not found</translation>
     </message>
+    <message>
+        <source>Vous (autre poste)</source>
+        <translation>You (other device)</translation>
+    </message>
+    <message numerus="yes">
+        <source>%1 (%n postes)</source>
+        <translation>
+            <numerusform>%1 (%n device)</numerusform>
+            <numerusform>%1 (%n devices)</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>&lt;p&gt;Ce code vaut pour tous ses postes et tous les vôtres.&lt;/p&gt;</source>
+        <translation>&lt;p&gt;This code covers all their devices and all of yours.&lt;/p&gt;</translation>
+    </message>
 </context>
 <context>
     <name>Notifier</name>
@@ -1521,6 +1548,10 @@ Invitation codes already given will no longer work for people who have not joine
     <message>
         <source>l&apos;avatar des conversations</source>
         <translation>conversation avatars</translation>
+    </message>
+    <message>
+        <source>les postes liés</source>
+        <translation>linked devices</translation>
     </message>
 </context>
 <context>

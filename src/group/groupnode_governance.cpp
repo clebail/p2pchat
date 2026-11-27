@@ -2,6 +2,7 @@
 #include "groupnode_p.h"
 
 #include "avatar.h"
+#include "person.h"
 #include "crypto.h"
 #include "invitation.h"
 #include "peerconnection.h"
@@ -471,4 +472,60 @@ void GroupNode::onDirectInvitation(PeerConnection *c, const QJsonObject &o)
         return;
     emit directInvitation(from, c->peerNickname(), *inv,
                           o.value("n").toString().trimmed().left(Governance::MaxNameLength));
+}
+
+// ---------------------------------------------------------------- Postes liés
+
+QJsonObject GroupNode::ownCertificate() const
+{
+    if (m_ownOnion.isEmpty() || m_group.personSeed().size() != 32)
+        return {};
+    return Person::createCertificate(m_group.personSeed(), m_group.identitySeed(), m_ownOnion,
+                                     qMax<qint64>(1, m_group.personSince()));
+}
+
+void GroupNode::sendCertificates(PeerConnection *c)
+{
+    if (c->peerVersion() < Person::Version)
+        return;
+    QJsonArray list;
+    if (const QJsonObject own = ownCertificate(); !own.isEmpty())
+        list.append(own);
+    for (const Member &m : m_group.members())
+        if (const QJsonObject cert = m_group.certificate(m.onion); !cert.isEmpty() && m.onion != c->peerOnion())
+            list.append(cert);
+    c->send({{"t", "devices"}, {"c", list}});
+}
+
+void GroupNode::onCertificates(PeerConnection *c, const QJsonObject &o)
+{
+    QJsonArray fresh;
+    for (const QJsonValue &v : o.value("c").toArray()) {
+        const QJsonObject cert = v.toObject();
+        const QString onion = Person::deviceOnion(cert);
+        if (onion == m_ownOnion || !m_group.isMember(onion) || !Person::verifyCertificate(cert, keyOf(onion)))
+            continue; // le nôtre, pas d'un membre, ou falsifié
+        const QJsonObject known = m_group.certificate(onion);
+        if (!known.isEmpty()) {
+            if (Person::personKey(known) != Person::personKey(cert)) {
+                // Un poste ne change pas de personne : refusé, comme une clé de poste différente
+                if (!m_identityWarned.contains(onion)) {
+                    m_identityWarned.insert(onion);
+                    emit identityRejected(onion, m_group.nickOf(onion));
+                }
+                continue;
+            }
+            if (Person::timestamp(cert) <= Person::timestamp(known))
+                continue; // déjà connu
+        }
+        m_group.setCertificate(onion, cert);
+        fresh.append(cert);
+    }
+    if (fresh.isEmpty())
+        return;
+    for (PeerConnection *p : m_active.values()) // relais, pour ceux qui ne sont reliés qu'à nous
+        if (p != c && p->peerVersion() >= Person::Version)
+            p->send({{"t", "devices"}, {"c", fresh}});
+    emit devicesChanged();
+    emit stateChanged();
 }

@@ -3,6 +3,7 @@
 #include "crypto.h"
 #include "filestore.h"
 #include "notifications.h"
+#include "person.h"
 
 #include <QApplication>
 #include <QFile>
@@ -179,6 +180,47 @@ private slots:
         QTRY_VERIFY(!b.conv->conversationAvatar().isNull());
         b.conv->leave(); // quitté : l'avatar part avec le groupe
         QVERIFY(b.conv->conversationAvatar().isNull());
+    }
+
+    // Postes liés : A utilise aussi le poste d (même personne, même pseudo)
+    void linkedDeviceIsMe()
+    {
+        pair();
+        Person &a = person('a'), &b = person('b'), &d = person('d');
+        d.conv->store().setPersonSeed(a.conv->store().personSeed(), a.conv->store().personSince());
+        d.conv->store().setNickname(a.nick);
+        // La liaison des deux postes (étape suivante) donne à a le certificat de d avant qu'il rejoigne
+        d.conv->store().ensureIdentity();
+        QVERIFY(a.conv->store().pinKey(d.onion, d.conv->store().identityKey(), 1));
+        a.conv->store().setCertificate(d.onion, ::Person::createCertificate(d.conv->store().personSeed(),
+                                                                          d.conv->store().identitySeed(), d.onion, 1));
+        QCOMPARE(d.conv->node().join(invitation(a)), GroupNode::JoinResult::Joined);
+        d.conv->node().setOnline(d.onion);
+        QTRY_VERIFY(a.conv->store().isMyDevice(d.onion));
+        QTRY_COMPARE(b.conv->store().personOf(d.onion), a.conv->store().personKey());
+        QTRY_VERIFY(b.conv->node().isConnected(d.onion));
+
+        // Chez a : écrit sur d, donc de nous (à droite), mais pas modifiable d'ici ; rien à notifier
+        QSignalSpy arrivedAtA(a.conv.get(), &Conversation::messagesArrived);
+        QSignalSpy arrivedAtB(b.conv.get(), &Conversation::messagesArrived);
+        d.conv->node().sendMessage("Depuis mon autre poste");
+        QTRY_VERIFY(lastMessage(*a.conv) && lastMessage(*a.conv)->text == "Depuis mon autre poste");
+        QVERIFY(lastMessage(*a.conv)->mine);
+        QVERIFY(!lastMessage(*a.conv)->sentHere);
+        QTRY_COMPARE(arrivedAtB.count(), 1); // pour b, un message de A comme un autre
+        QVERIFY(!lastMessage(*b.conv)->mine);
+        QCOMPARE(arrivedAtA.count(), 0);
+        a.conv->node().sendMessage("Depuis ce poste");
+        QTRY_VERIFY(lastMessage(*a.conv)->text == "Depuis ce poste");
+        QVERIFY(lastMessage(*a.conv)->sentHere);
+
+        // Une personne, deux postes : nommée une fois ; nos autres postes ne sont pas « les autres »
+        QCOMPARE(b.conv->displayName(), a.nick);
+        QTRY_VERIFY(b.conv->subtitle().contains("En ligne"));
+        QVERIFY(!b.conv->subtitle().contains(a.nick + ", " + a.nick));
+        QCOMPARE(a.conv->displayName(), b.nick);
+        QVERIFY(a.conv->subtitleToolTip().contains("Vous (autre poste)"));
+        QVERIFY(hasSystemLine(*a.conv, "Votre autre poste"));
     }
 
     void messagesPreviewAndNotifications()

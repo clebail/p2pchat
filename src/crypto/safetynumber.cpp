@@ -28,3 +28,10 @@ QString SafetyNumber::compute(const QString &onionA, const QByteArray &keyA, con
     }
     return groups.join(QLatin1Char(' '));
 }
+
+QString SafetyNumber::forPersons(const QByteArray &personA, const QByteArray &personB)
+{
+    // Même calcul, l'adresse remplacée par une étiquette (qui n'est pas une adresse : jamais le code d'un poste)
+    static const QString label = QStringLiteral("p2pchat-person");
+    return compute(label, personA, label, personB);
+}

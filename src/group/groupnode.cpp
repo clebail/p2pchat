@@ -283,6 +283,12 @@ bool GroupNode::isMine(const QString &id) const
     return m_store.value(id).value("mine").toBool();
 }
 
+bool GroupNode::isFromMe(const QString &id) const
+{
+    const QJsonObject m = m_store.value(id);
+    return m.value("mine").toBool() || m_group.isMyDevice(m.value("a").toString());
+}
+
 QList<Reactions::Summary> GroupNode::reactionSummary(const QString &id) const
 {
     return id.isEmpty() ? QList<Reactions::Summary>() : m_reactions.summary(id);
@@ -581,6 +587,7 @@ void GroupNode::setActive(PeerConnection *c)
     sendName(c);
     sendConversationAvatar(c);
     sendAvatarInventory(c);
+    sendCertificates(c);
     if (isNew)
         broadcast(membersMessage(), c);
     c->send(inventoryMessage()); // après la liste des membres : les clés des auteurs sont connues
@@ -764,6 +771,8 @@ void GroupNode::onReceived(PeerConnection *c, const QJsonObject &o)
         onLeave(c, o);
     } else if (type == "conv-name") {
         onName(c, o);
+    } else if (type == "devices") {
+        onCertificates(c, o);
     } else if (type == "conv-avatar") {
         onConversationAvatar(c, o);
     } else if (type == "avatar-have") {

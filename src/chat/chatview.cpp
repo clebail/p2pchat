@@ -348,6 +348,7 @@ void ChatView::addMessage(const QString &author, const QString &text, const QDat
     e.text = text;
     e.ts = ts;
     e.mine = mine;
+    e.sentHere = mine;
     e.trust = trust;
     e.mentions = mentions;
     e.mentionsMe = mentionsMe;
@@ -563,7 +564,8 @@ void ChatView::contextMenuEvent(QContextMenuEvent *event)
             a->setCheckable(true);
             a->setChecked(mine); // cochée : la nôtre, la choisir la retire
         }
-        if (e.mine || m_moderator) { // les siens, ou tous pour un administrateur (modération)
+        // Les siens écrits sur ce poste (signés par lui), ou tous pour un administrateur (modération)
+        if (e.sentHere || m_moderator) {
             menu.addSeparator();
             const QString current = e.text;
             menu.addAction(tr("Modifier"), this, [this, id, current] { emit editRequested(id, current); });

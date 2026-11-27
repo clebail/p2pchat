@@ -28,6 +28,7 @@ SOURCES += \
     $$PWD/group/groupstore.cpp \
     $$PWD/group/history.cpp \
     $$PWD/group/invitation.cpp \
+    $$PWD/group/person.cpp \
     $$PWD/app/language.cpp \
     $$PWD/text/links.cpp \
     $$PWD/text/markup.cpp \
@@ -55,6 +56,7 @@ HEADERS += \
     $$PWD/group/groupstore.h \
     $$PWD/group/history.h \
     $$PWD/group/invitation.h \
+    $$PWD/group/person.h \
     $$PWD/app/language.h \
     $$PWD/text/links.h \
     $$PWD/text/markup.h \

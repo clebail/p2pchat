@@ -4,6 +4,7 @@
 #include "edits.h"
 #include "governance.h"
 #include "invitation.h"
+#include "person.h"
 #include "switchboard.h"
 
 #include <QNetworkProxy>
@@ -1141,6 +1142,56 @@ private slots:
         b.node->reconnectNow();
         QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
         QCOMPARE(contentOf(b, id), content);
+    }
+
+    // Postes liés : A utilise deux postes (a et e), qui partagent sa clé de personne
+    void linkedDevicesAreOnePerson()
+    {
+        Peer &a = peer('a'), &b = peer('b'), &e = peer('e');
+        e.store->setPersonSeed(a.store->personSeed(), a.store->personSince());
+        e.store->setNickname(a.nick);
+        a.node->createGroup();
+        a.node->setOnline(a.onion);
+        QCOMPARE(b.node->join(invitation(a)), GroupNode::JoinResult::Joined);
+        b.node->setOnline(b.onion);
+        QTRY_VERIFY(linked(a, b));
+        QCOMPARE(e.node->join(invitation(a)), GroupNode::JoinResult::Joined);
+        e.node->setOnline(e.onion);
+        QTRY_VERIFY(linked(a, e));
+        QTRY_VERIFY(linked(b, e));
+
+        // Chacun relie les postes de A à sa personne
+        QTRY_COMPARE(b.store->personOf(a.onion), a.store->personKey());
+        QTRY_COMPARE(b.store->personOf(e.onion), a.store->personKey());
+        QTRY_VERIFY(a.store->isMyDevice(e.onion));
+        QTRY_VERIFY(e.store->isMyDevice(a.onion));
+        QVERIFY(!a.store->isMyDevice(b.onion));
+        QVERIFY(!b.store->isMyDevice(a.onion));
+        QCOMPARE(b.store->personOf(b.onion), QByteArray()); // pas de certificat pour soi-même
+
+        // Écrit sur e : « de nous » pour a (vérifié avec la clé du poste e), pas pour b
+        const QJsonObject sent = e.node->sendMessage("Depuis mon autre poste");
+        const QString id = Protocol::Message::id(sent);
+        QTRY_COMPARE(countId(a.added, id), 1);
+        QTRY_COMPARE(countId(b.added, id), 1);
+        QVERIFY(a.node->isFromMe(id));
+        QVERIFY(!a.node->isMine(id)); // pas écrit sur ce poste-ci
+        QVERIFY(e.node->isFromMe(id) && e.node->isMine(id));
+        QVERIFY(!b.node->isFromMe(id));
+
+        // B réclame le poste a pour sa propre personne : refusé (il n'a pas la clé de ce poste)
+        const qint64 later = QDateTime::currentMSecsSinceEpoch() + 100000;
+        b.node->sendTo(e.onion, {{"t", "devices"},
+                                 {"c", QJsonArray{Person::createCertificate(b.store->personSeed(), b.store->identitySeed(),
+                                                                            a.onion, later)}}});
+        // Un poste ne change pas de personne, même avec un certificat valable (signé par a lui-même)
+        a.node->sendTo(b.onion, {{"t", "devices"},
+                                 {"c", QJsonArray{Person::createCertificate(Ed25519::generateSeed(),
+                                                                            a.store->identitySeed(), a.onion, later)}}});
+        QTRY_VERIFY(b.system.contains("identité refusée " + a.nick));
+        QTest::qWait(200);
+        QCOMPARE(e.store->personOf(a.onion), a.store->personKey());
+        QCOMPARE(b.store->personOf(a.onion), a.store->personKey());
     }
 
     void directInvitation()

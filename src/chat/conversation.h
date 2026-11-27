@@ -43,7 +43,8 @@ public:
     QString subtitle() const;     // ligne d'état (HTML) : membres en ligne, « X écrit… »
     QString subtitleToolTip() const; // état détaillé de chaque membre (HTML)
     QString typingText() const;   // vide si personne n'écrit
-    QString memberNick(const QString &onion) const; // « Un membre » si inconnu
+    QString memberNick(const QString &onion) const; // « Un membre » si inconnu, « votre autre poste » pour les nôtres
+    QList<Member> otherMembers() const; // les membres, sans nos autres postes (postes liés)
     // Avatar d'un membre (cf. avatar.h), image nulle s'il n'en a pas. Les avatars sont communs à toutes les
     // conversations : forgetAvatar est appelé sur chacune quand l'une en reçoit un nouveau.
     QImage avatarOf(const QString &onion) const;

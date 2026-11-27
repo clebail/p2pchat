@@ -428,10 +428,19 @@ void MainWindow::showMembers()
         list->addItem(me);
         if (!selected.isEmpty() && selected == m_node->ownOnion())
             list->setCurrentItem(me);
+        // Postes liés : nos autres postes, et le nombre de postes de chaque personne qui en a plusieurs
+        QHash<QByteArray, int> devicesOf;
+        for (const Member &m : m_group->members())
+            if (const QByteArray person = m_group->personOf(m.onion); !person.isEmpty())
+                ++devicesOf[person];
         for (const Member &m : m_group->members()) {
             QStringList r = roles(m.onion);
             r.prepend(m_node->isConnected(m.onion) ? tr("en ligne") : tr("hors ligne"));
-            auto *item = new QListWidgetItem(tr("%1 — %2").arg(m.nick, r.join(", ")));
+            const int devices = devicesOf.value(m_group->personOf(m.onion));
+            const QString name = m_group->isMyDevice(m.onion) ? tr("Vous (autre poste)")
+                                 : devices > 1               ? tr("%1 (%n postes)", nullptr, devices).arg(m.nick)
+                                                             : m.nick;
+            auto *item = new QListWidgetItem(tr("%1 — %2").arg(name, r.join(", ")));
             item->setData(Qt::UserRole, m.onion);
             item->setIcon(ChatView::roundAvatar(m_shown->avatarOf(m.onion), m.nick, 28, devicePixelRatioF()));
             list->addItem(item);
@@ -543,10 +552,19 @@ void MainWindow::confirmRenewSecret()
 void MainWindow::verifyMember()
 {
     // Membres dont on connaît la clé (rencontrés au moins une fois, ou présentés par un autre)
+    // Une entrée par personne (un seul code pour tous ses postes), sans nos autres postes
     QList<Member> known;
-    for (const Member &m : m_group->members())
-        if (!m_group->pinnedKey(m.onion).isEmpty())
-            known << m;
+    QSet<QByteArray> persons;
+    for (const Member &m : m_group->members()) {
+        if (m_group->pinnedKey(m.onion).isEmpty() || m_group->isMyDevice(m.onion))
+            continue;
+        if (const QByteArray person = m_group->personOf(m.onion); !person.isEmpty()) {
+            if (persons.contains(person))
+                continue;
+            persons.insert(person);
+        }
+        known << m;
+    }
     if (known.isEmpty()) {
         QMessageBox::information(this, tr("Vérifier l'identité"),
                                  tr("Aucun membre à vérifier pour le moment : il faut s'être connecté au moins une fois."));
@@ -572,12 +590,22 @@ void MainWindow::showSafetyNumber(const QString &onion)
                                  tr("Le code s'affichera une fois connecté au réseau Tor."));
         return;
     }
-    const QString number =
-        SafetyNumber::compute(m_node->ownOnion(), m_group->identityKey(), onion, m_group->pinnedKey(onion));
+    // Membre certifié (postes liés) : le code de la personne, le même sur tous nos postes et tous les siens
+    const QByteArray person = m_group->personOf(onion);
+    const QString number = !person.isEmpty()
+                               ? SafetyNumber::forPersons(m_group->personKey(), person)
+                               : SafetyNumber::compute(m_node->ownOnion(), m_group->identityKey(), onion,
+                                                       m_group->pinnedKey(onion));
     if (number.isEmpty())
         return;
     const QString nick = memberNick(onion);
     const bool verified = m_group->isVerified(onion);
+    // Ses postes : la vérification les couvre tous
+    QStringList devices{onion};
+    if (!person.isEmpty())
+        for (const Member &m : m_group->members())
+            if (m.onion != onion && m_group->personOf(m.onion) == person)
+                devices << m.onion;
 
     QDialog dlg(this);
     dlg.setWindowTitle(tr("Code de sécurité avec %1").arg(nick));
@@ -587,7 +615,9 @@ void MainWindow::showSafetyNumber(const QString &onion)
                                 "en personne, pas par ce chat.</p>"
                                 "<p>S'ils sont identiques, personne ne s'est interposé entre vous lors de "
                                 "l'invitation : vos messages lui parviennent bien, à elle seule.</p>")
-                                 .arg(nick.toHtmlEscaped()),
+                                     .arg(nick.toHtmlEscaped())
+                                 + (person.isEmpty() ? QString()
+                                                     : tr("<p>Ce code vaut pour tous ses postes et tous les vôtres.</p>")),
                              &dlg);
     intro->setWordWrap(true);
     lay->addWidget(intro);
@@ -610,10 +640,11 @@ void MainWindow::showSafetyNumber(const QString &onion)
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
     QPushButton *toggle = buttons->addButton(verified ? tr("Retirer la vérification") : tr("Les codes sont identiques"),
                                              QDialogButtonBox::ActionRole);
-    connect(toggle, &QPushButton::clicked, &dlg, [this, onion, verified, &dlg] {
+    connect(toggle, &QPushButton::clicked, &dlg, [this, onion, devices, verified, &dlg] {
         m_group->setVerified(onion, !verified);
         for (const auto &c : m_convs) // le trousseau est commun à toutes les conversations
-            c->view()->setAuthorVerified(onion, !verified);
+            for (const QString &device : devices)
+                c->view()->setAuthorVerified(device, !verified);
         if (!verified)
             appendSystem(tr("Vous avez vérifié l'identité de %1 ✔").arg(memberNick(onion)));
         updateStatus();

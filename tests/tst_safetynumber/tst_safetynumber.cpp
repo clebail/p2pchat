@@ -44,6 +44,18 @@ private slots:
         QVERIFY(SafetyNumber::compute(OnionA, "court", OnionB, a).isEmpty());
         QVERIFY(SafetyNumber::compute(OnionA, a, OnionB, a).isEmpty()); // soi-même
     }
+
+    // Entre deux personnes (postes liés) : le même des deux côtés, différent de celui de deux postes
+    void betweenPersons()
+    {
+        const QByteArray a = Ed25519::publicKey(Ed25519::generateSeed()), b = Ed25519::publicKey(Ed25519::generateSeed());
+        const QString code = SafetyNumber::forPersons(a, b);
+        QCOMPARE(code.size(), 35);
+        QCOMPARE(SafetyNumber::forPersons(b, a), code);
+        QVERIFY(SafetyNumber::compute(OnionA, a, OnionB, b) != code);
+        QVERIFY(SafetyNumber::forPersons(a, a).isEmpty());
+        QVERIFY(SafetyNumber::forPersons(a, {}).isEmpty());
+    }
 };
 
 QTEST_GUILESS_MAIN(TestSafetyNumber)

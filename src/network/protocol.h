@@ -22,7 +22,8 @@ constexpr int MaxNickLength = 40;
 // 13 : modification et suppression de ses messages (cf. edits.h)
 // 14 : avatars des membres (cf. avatar.h)
 // 15 : avatar des conversations
-constexpr int Version = 15;
+// 16 : postes liés (une personne, plusieurs postes ; cf. person.h)
+constexpr int Version = 16;
 constexpr int FilesVersion = 9;
 constexpr int BinaryVersion = 10;
 // Types de trames binaires (cf. PeerConnection::sendBinary)

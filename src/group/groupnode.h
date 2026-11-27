@@ -89,6 +89,7 @@ public:
     void loadHistory(); // émet messageAdded pour les History::DisplayedRows derniers messages
     void clearHistory();
     bool isMine(const QString &id) const; // message ou réaction de nous
+    bool isFromMe(const QString &id) const; // écrit sur ce poste ou un autre des nôtres (postes liés)
     QList<Reactions::Summary> reactionSummary(const QString &id) const;
     Trust verify(const QJsonObject &msg, bool mine) const;
     QString verifiedReplyTo(const QJsonObject &msg, bool mine) const; // vide : pas de citation authentique
@@ -172,6 +173,7 @@ public:
     bool hasConnections() const { return !m_active.isEmpty(); }
     bool isConnected(const QString &onion) const { return m_active.contains(onion); }
     bool isAttempting(const QString &onion) const { return m_attempts.contains(onion); }
+    bool isMyDevice(const QString &onion) const { return m_group.isMyDevice(onion); } // un autre de nos postes
     int peerVersion(const QString &onion) const; // 0 : pas connecté
     qint64 pendingBytes(const QString &onion) const;
     QString lastError(const QString &onion) const { return m_lastError.value(onion); }
@@ -203,6 +205,7 @@ signals:
     void adminChanged(const QString &onion, const QString &nick, bool admin, const QString &byNick);
     void sharedNameChanged(const QString &name, const QString &byNick);
     void avatarChanged(const QString &onion); // avatar d'un membre reçu (cf. GroupStore::avatarRecord)
+    void devicesChanged(); // certificat de poste reçu : un membre est relié à sa personne (cf. person.h)
     void conversationAvatarChanged(bool removed, const QString &byNick);
     // Un membre nous invite à une autre conversation (son code, vérifié : c'est bien le sien)
     void directInvitation(const QString &fromOnion, const QString &fromNick, const Invitation &invitation,
@@ -258,6 +261,9 @@ private:
     void sendConversationAvatar(PeerConnection *c);
     void onConversationAvatar(PeerConnection *c, const QJsonObject &o);
     QJsonObject avatarRecordOf(const QString &onion) const; // le nôtre (signé à la volée) ou celui reçu
+    QJsonObject ownCertificate() const;
+    void sendCertificates(PeerConnection *c); // le nôtre et ceux des membres
+    void onCertificates(PeerConnection *c, const QJsonObject &o);
     void sendAvatarInventory(PeerConnection *c);
     void onAvatarInventory(PeerConnection *c, const QJsonObject &o);
     void onAvatar(PeerConnection *c, const QJsonObject &o);

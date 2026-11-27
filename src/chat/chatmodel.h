@@ -27,7 +27,8 @@ struct ChatEntry
     bool authorVerified = false; // identité vérifiée par code de sécurité : ✔ à côté du nom
     QString text;
     QDateTime ts;
-    bool mine = false;
+    bool mine = false;     // de nous (écrit sur ce poste ou un autre des nôtres)
+    bool sentHere = false; // écrit sur ce poste : nous pouvons le modifier ou le supprimer
     Trust trust = Verified;
     // Mentions « @pseudo » : (position, longueur) dans text ; mentionsMe : nous sommes mentionnés
     QList<QPair<int, int>> mentions;

@@ -53,10 +53,22 @@ public:
     bool hasDeparted(const QString &onion) const;
     void setDeparted(const QString &onion, bool departed);
 
-    // Identité Ed25519 de ce poste (la graine de 32 octets est la clé privée)
+    // Identité Ed25519 de ce poste (la graine de 32 octets est la clé privée), et celle de la personne, commune à
+    // tous ses postes liés (cf. person.h). ensureIdentity crée celles qui manquent.
     void ensureIdentity();
     QByteArray identitySeed() const;
     QByteArray identityKey() const;
+    QByteArray personSeed() const;
+    QByteArray personKey() const;
+    qint64 personSince() const; // date de notre certificat de poste
+    void setPersonSeed(const QByteArray &seed, qint64 sinceMs); // poste lié : la personne d'un autre poste
+
+    // Certificats de poste reçus et vérifiés (cf. Person), communs à toutes les conversations. Le premier vu pour
+    // une adresse fixe sa personne : un certificat d'une autre personne pour ce poste est refusé.
+    QJsonObject certificate(const QString &onion) const;
+    void setCertificate(const QString &onion, const QJsonObject &certificate);
+    QByteArray personOf(const QString &onion) const; // vide : poste sans certificat (version précédente)
+    bool isMyDevice(const QString &onion) const;    // un autre de nos postes
 
     QList<Member> members() const;
     void setMembers(const QList<Member> &list);
@@ -79,7 +91,8 @@ public:
     QJsonObject avatarRecord(const QString &onion) const;
     void setAvatarRecord(const QString &onion, const QJsonObject &record);
 
-    // Identité vérifiée de vive voix (code de sécurité comparé) : valable pour la clé mémorisée
+    // Identité vérifiée de vive voix (code de sécurité comparé) : valable pour la clé mémorisée. Pour un poste
+    // certifié, c'est la personne qui est vérifiée (tous ses postes à la fois) ; sinon, le poste et sa clé.
     bool isVerified(const QString &onion) const;
     void setVerified(const QString &onion, bool verified);
 

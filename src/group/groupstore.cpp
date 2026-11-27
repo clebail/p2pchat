@@ -1,8 +1,10 @@
 #include "groupstore.h"
 
 #include "crypto.h"
+#include "person.h"
 #include "protocol.h"
 
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -149,6 +151,52 @@ void GroupStore::ensureIdentity()
 {
     if (identitySeed().size() != 32)
         m_settings.setValue("identity/seed", Ed25519::generateSeed());
+    if (personSeed().size() != 32)
+        setPersonSeed(Ed25519::generateSeed(), QDateTime::currentMSecsSinceEpoch());
+}
+
+QByteArray GroupStore::personSeed() const
+{
+    return m_settings.value("identity/person").toByteArray();
+}
+
+QByteArray GroupStore::personKey() const
+{
+    const QByteArray seed = personSeed();
+    return seed.size() == 32 ? Ed25519::publicKey(seed) : QByteArray();
+}
+
+qint64 GroupStore::personSince() const
+{
+    return m_settings.value("identity/personSince").toLongLong();
+}
+
+void GroupStore::setPersonSeed(const QByteArray &seed, qint64 sinceMs)
+{
+    m_settings.setValue("identity/person", seed);
+    m_settings.setValue("identity/personSince", sinceMs);
+}
+
+QJsonObject GroupStore::certificate(const QString &onion) const
+{
+    return isValidOnion(onion) ? readObject(m_settings, "devices/" + onion) : QJsonObject();
+}
+
+void GroupStore::setCertificate(const QString &onion, const QJsonObject &certificate)
+{
+    if (isValidOnion(onion))
+        writeObject(m_settings, "devices/" + onion, certificate);
+}
+
+QByteArray GroupStore::personOf(const QString &onion) const
+{
+    return Person::personKey(certificate(onion));
+}
+
+bool GroupStore::isMyDevice(const QString &onion) const
+{
+    const QByteArray person = personOf(onion);
+    return !person.isEmpty() && person == personKey();
 }
 
 QByteArray GroupStore::identitySeed() const
@@ -276,12 +324,23 @@ void GroupStore::setAvatarRecord(const QString &onion, const QJsonObject &record
 
 bool GroupStore::isVerified(const QString &onion) const
 {
+    if (const QByteArray person = personOf(onion); !person.isEmpty())
+        return readObject(m_settings, "verifiedPersons").contains(Protocol::toB64(person));
     const QByteArray key = pinnedKey(onion);
     return !key.isEmpty() && Protocol::fromB64(readObject(m_settings, "verified").value(onion)) == key;
 }
 
 void GroupStore::setVerified(const QString &onion, bool verified)
 {
+    if (const QByteArray person = personOf(onion); !person.isEmpty()) {
+        QJsonObject p = readObject(m_settings, "verifiedPersons");
+        if (verified)
+            p.insert(Protocol::toB64(person), true);
+        else
+            p.remove(Protocol::toB64(person));
+        writeObject(m_settings, "verifiedPersons", p);
+        return;
+    }
     QJsonObject v = readObject(m_settings, "verified");
     if (verified && !pinnedKey(onion).isEmpty())
         v.insert(onion, Protocol::toB64(pinnedKey(onion))); // la clé vérifiée, pas seulement le membre

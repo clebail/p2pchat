@@ -13,5 +13,7 @@ namespace SafetyNumber {
 
 // Vide si l'une des clés est invalide
 QString compute(const QString &onionA, const QByteArray &keyA, const QString &onionB, const QByteArray &keyB);
+// Entre deux personnes (postes liés, cf. person.h) : tiré de leurs clés de personne, le même sur tous leurs postes
+QString forPersons(const QByteArray &personA, const QByteArray &personB);
 
 } // namespace SafetyNumber

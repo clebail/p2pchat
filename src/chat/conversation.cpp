@@ -84,13 +84,17 @@ void Conversation::connectNode()
     connect(n, &GroupNode::messagesReceived, this, &Conversation::onMessagesReceived);
     connect(n, &GroupNode::reactionsChanged, this,
             [this](const QString &id) { m_view->setReactions(id, reactionSummary(id)); });
-    connect(n, &GroupNode::memberAdded, this, [this](const QString &, const QString &nick, bool direct) {
-        appendSystem(direct ? tr("%1 a rejoint la conversation.").arg(nick)
-                            : tr("%1 fait partie de la conversation.").arg(nick));
+    connect(n, &GroupNode::memberAdded, this, [this](const QString &onion, const QString &nick, bool direct) {
+        const QString who = m_store->isMyDevice(onion) ? tr("Votre autre poste") : nick;
+        appendSystem(direct ? tr("%1 a rejoint la conversation.").arg(who)
+                            : tr("%1 fait partie de la conversation.").arg(who));
     });
     connect(n, &GroupNode::presenceChanged, this,
             [this](const QString &onion, const QString &nick, bool online, const QString &reason) {
-                m_view->addPresence(nick.isEmpty() ? memberNick(onion) : nick, online, reason);
+                const QString who = m_store->isMyDevice(onion) ? tr("Votre autre poste")
+                                    : nick.isEmpty()           ? memberNick(onion)
+                                                               : nick;
+                m_view->addPresence(who, online, reason);
             });
     connect(n, &GroupNode::identityRejected, this, [this](const QString &, const QString &nick) {
         appendSystem(tr("⚠ Connexion refusée : « %1 » ne présente pas la clé d'identité connue pour ce membre.")
@@ -192,8 +196,9 @@ QString Conversation::displayName() const
     if (const QString shared = m_node->sharedName(); !shared.isEmpty())
         return shared; // choisi par un administrateur
     QStringList names;
-    for (const Member &m : m_store->members())
+    for (const Member &m : otherMembers())
         names << (m.nick.isEmpty() ? tr("?") : m.nick);
+    names.removeDuplicates(); // une personne, plusieurs postes
     if (!names.isEmpty())
         return names.join(", ");
     return m_store->inGroup() ? tr("Nouvelle conversation") : isBlank() ? tr("Conversation vierge")
@@ -229,9 +234,18 @@ void Conversation::forgetAvatar(const QString &onion)
         m_view->viewport()->update();
 }
 
+QList<Member> Conversation::otherMembers() const
+{
+    QList<Member> list;
+    for (const Member &m : m_store->members())
+        if (!m_store->isMyDevice(m.onion))
+            list << m;
+    return list;
+}
+
 QString Conversation::subtitle() const
 {
-    const QList<Member> list = m_store->members();
+    const QList<Member> list = otherMembers(); // nos autres postes ne comptent pas
     const QString dot = QStringLiteral("<span style='color:%1'>●</span> ");
     if (!m_store->inGroup())
         return isBlank() ? tr("Nouvelle conversation") : tr("Vous avez quitté cette conversation");
@@ -240,21 +254,30 @@ QString Conversation::subtitle() const
     if (const QString typing = typingText(); !typing.isEmpty())
         return dot.arg("#188038") + QStringLiteral("<i>%1</i>").arg(typing.toHtmlEscaped());
     // Les membres vus en ligne par un autre sont joignables : nos messages passent par lui
+    // Par personne : en ligne dès qu'un de ses postes l'est (directement de préférence)
     const QHash<QString, QString> relayed = m_node->relayedOnline();
-    QStringList online;
-    bool allDirect = true;
+    QStringList persons, online;
+    QHash<QString, QString> shown; // personne -> nom affiché si en ligne
     for (const Member &m : list) {
-        if (m_node->isConnected(m.onion)) {
-            online << m.nick.toHtmlEscaped();
-        } else if (relayed.contains(m.onion)) {
-            online << tr("%1 (via %2)").arg(m.nick, memberNick(relayed.value(m.onion))).toHtmlEscaped();
-            allDirect = false;
-        }
+        const QByteArray personKey = m_store->personOf(m.onion);
+        const QString person = personKey.isEmpty() ? m.onion : QString::fromLatin1(personKey.toHex());
+        if (!persons.contains(person))
+            persons << person;
+        if (m_node->isConnected(m.onion))
+            shown.insert(person, m.nick.toHtmlEscaped());
+        else if (relayed.contains(m.onion) && !shown.contains(person))
+            shown.insert(person, tr("%1 (via %2)").arg(m.nick, memberNick(relayed.value(m.onion))).toHtmlEscaped());
     }
+    bool allDirect = true;
+    for (const QString &person : std::as_const(persons))
+        if (shown.contains(person)) {
+            online << shown.value(person);
+            allDirect = allDirect && !shown.value(person).contains(QStringLiteral(" (via "));
+        }
     if (online.isEmpty())
         return dot.arg("#9aa0a6") + tr("Personne n'est en ligne");
-    if (online.size() == list.size() && allDirect)
-        return dot.arg("#188038") + (list.size() == 1 ? tr("En ligne") : tr("Tout le monde est en ligne"));
+    if (online.size() == persons.size() && allDirect)
+        return dot.arg("#188038") + (persons.size() == 1 ? tr("En ligne") : tr("Tout le monde est en ligne"));
     return dot.arg("#188038") + tr("En ligne : %1").arg(online.join(", "));
 }
 
@@ -278,7 +301,8 @@ QString Conversation::subtitleToolTip() const
         if (!connected && !attempting && m_node->nextTry(m.onion) > QDateTime::currentMSecsSinceEpoch())
             state += tr(" (nouvel essai à %1)")
                          .arg(QDateTime::fromMSecsSinceEpoch(m_node->nextTry(m.onion)).toString("HH:mm:ss"));
-        const QString name = m_store->isVerified(m.onion) ? tr("%1 ✔").arg(m.nick) : m.nick;
+        const QString nick = m_store->isMyDevice(m.onion) ? tr("Vous (autre poste)") : m.nick;
+        const QString name = m_store->isVerified(m.onion) ? tr("%1 ✔").arg(nick) : nick;
         tips << QStringLiteral("%1 : %2").arg(name, state).toHtmlEscaped();
     }
     return tips.isEmpty() ? QString() : "<p>" + tips.join("<br>") + "</p>";
@@ -341,16 +365,19 @@ void Conversation::appendMessage(const QJsonObject &msg, bool mine, GroupNode::T
     const QString id = Protocol::Message::id(msg);
     ChatEntry e;
     e.author = msg.value("n").toString().left(Protocol::MaxNickLength);
-    if (!mine && trust == ChatEntry::Verified) { // le ✔ ne vaut que pour un message bien signé
+    // Écrit sur un autre de nos postes (postes liés, signature vérifiée) : de nous aussi, mais modifiable de là-bas
+    const bool fromMe = mine || (trust == ChatEntry::Verified && m_store->isMyDevice(msg.value("a").toString()));
+    if (!fromMe && trust == ChatEntry::Verified) { // le ✔ ne vaut que pour un message bien signé
         e.authorOnion = msg.value("a").toString();
         e.authorVerified = m_store->isVerified(e.authorOnion);
     }
     e.text = text;
     e.ts = ts;
-    e.mine = mine;
+    e.mine = fromMe;
+    e.sentHere = mine;
     e.trust = trust;
     e.mentions = spans;
-    e.mentionsMe = !mine && (Mentions::mentions(found, m_store->nickname()) || repliesToMe(msg));
+    e.mentionsMe = !fromMe && (Mentions::mentions(found, m_store->nickname()) || repliesToMe(msg));
     if (trust == ChatEntry::Verified) { // identifiants et citations : seulement pour les messages authentiques
         e.id = id;
         e.replyTo = m_node->verifiedReplyTo(msg, mine);
@@ -379,8 +406,15 @@ void Conversation::appendMessage(const QJsonObject &msg, bool mine, GroupNode::T
     emit changed();
 }
 
-void Conversation::onMessagesReceived(const QList<QJsonObject> &messages, bool catchUp)
+void Conversation::onMessagesReceived(const QList<QJsonObject> &received, bool catchUp)
 {
+    // Écrits sur un autre de nos postes : rien à signaler
+    QList<QJsonObject> messages;
+    for (const QJsonObject &m : received)
+        if (!m_store->isMyDevice(m.value("a").toString()))
+            messages << m;
+    if (messages.isEmpty())
+        return;
     int mentioned = 0;
     qint64 firstTs = 0;
     for (const QJsonObject &m : messages) {
@@ -404,6 +438,7 @@ QStringList Conversation::mentionNames() const
     QStringList names{m_store->nickname(), Mentions::Everyone};
     for (const Member &m : m_store->members())
         names << m.nick;
+    names.removeDuplicates(); // plusieurs postes d'une même personne
     return names;
 }
 
@@ -415,7 +450,7 @@ bool Conversation::mentionsMe(const QJsonObject &msg) const
 bool Conversation::repliesToMe(const QJsonObject &msg) const
 {
     const QString quoted = m_node->verifiedReplyTo(msg, false); // appelé pour les messages des autres
-    return !quoted.isEmpty() && m_node->isMine(quoted);
+    return !quoted.isEmpty() && m_node->isFromMe(quoted);
 }
 
 QString Conversation::notificationTitle(const QJsonObject &msg) const
@@ -469,7 +504,9 @@ QString Conversation::typingText() const
 {
     QStringList names;
     for (const QString &onion : m_node->typingMembers())
-        names << memberNick(onion);
+        if (!m_store->isMyDevice(onion)) // nous-même, sur un autre poste
+            names << memberNick(onion);
+    names.removeDuplicates();
     names.sort(Qt::CaseInsensitive);
     if (names.isEmpty())
         return {};
@@ -482,6 +519,8 @@ QString Conversation::typingText() const
 
 QString Conversation::memberNick(const QString &onion) const
 {
+    if (m_store->isMyDevice(onion))
+        return tr("votre autre poste");
     const QString nick = m_store->nickOf(onion);
     return nick.isEmpty() ? tr("Un membre") : nick;
 }

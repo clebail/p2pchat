@@ -319,6 +319,11 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
   quelqu'un qui possède le code ne peut pas se faire passer pour un autre membre.
 - **Messages** : l'auteur signe chaque message (identifiant, adresse, pseudo, texte, heure). Un message
   modifié en route ou attribué à quelqu'un d'autre est rejeté.
+- **Postes liés** : une personne peut utiliser plusieurs postes, rattachés à une clé de personne commune par un
+  certificat signé deux fois, par la personne et par le poste. Sans la clé du poste, personne ne peut réclamer le
+  poste d'un autre. Le premier certificat vu pour un poste fixe sa personne : un poste qui prétend ensuite
+  appartenir à quelqu'un d'autre est refusé (« identité refusée »). Le code de sécurité entre deux personnes est
+  tiré de leurs clés de personne : une seule vérification couvre tous leurs postes.
 - **Avatars** : signés par leur auteur (celui d'une conversation, par un administrateur, et lié au groupe),
   acceptés seulement pour les membres de la conversation. Une image reçue
   n'est décodée que si c'est un JPEG d'au plus 16 Ko et 192 × 192 pixels. Un membre ne reçoit que les avatars
@@ -388,6 +393,7 @@ dans le chemin d'inclusion (`src/core.pri`, `src/ui.pri`).
 | `groupstore.*` | État persistant : pseudo, avatars, identité et trousseau (communs), secret et membres (par conversation) |
 | `governance.*` | Gouvernance du groupe : administrateurs, exclusions, secret en vigueur (enregistrements signés) |
 | `invitation.*` | Encodage / décodage du code d'invitation |
+| `person.*` | Postes liés : certificat de poste, signé par la personne et par le poste |
 | `history.*` | Historique local, inventaire et lots de synchronisation |
 | `conversations.*` | Liste des conversations, leurs dossiers, reprise de l'ancienne disposition (un seul groupe) |
 
