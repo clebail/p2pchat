@@ -294,7 +294,7 @@ void MainWindow::showConversation(Conversation *c)
         c->markRead();
     updateUnread();
     updateStatus();
-    if (width() < 640 && changed && m_sidebar->isVisible())
+    if (changed && m_sidebar->isVisible() && isNarrow())
         setSidebarVisible(false); // étroit : la conversation prend toute la place
 }
 
@@ -468,12 +468,21 @@ void MainWindow::setSidebarVisible(bool visible)
     m_sidebar->setVisible(visible);
 }
 
+// En deçà, la colonne des conversations se replie. 640 px d'ordinaire ; davantage si la colonne et le contenu ne
+// tiennent pas dedans (polices plus larges) : sans quoi la fenêtre, bornée à leur largeur minimale, ne pourrait
+// jamais devenir assez étroite pour la replier.
+bool MainWindow::isNarrow() const
+{
+    const int content = m_pages->parentWidget()->minimumSizeHint().width();
+    return width() < qMax(640, m_sidebar->width() + content + 1);
+}
+
 void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
     // Étroit : la colonne se replie (le bouton ☰ la rouvre par-dessus) ; large : comme l'a voulu l'utilisateur
     if (m_sidebar)
-        setSidebarVisible(width() >= 640 ? m_sidebarWanted : false);
+        setSidebarVisible(isNarrow() ? false : m_sidebarWanted);
 }
 
 void MainWindow::updateStatus()

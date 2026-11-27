@@ -92,6 +92,7 @@ private:
                               void (MainWindow::*onClose)());
     QWidget *buildComposerBar(QWidget *parent);
     void setSidebarVisible(bool visible);
+    bool isNarrow() const;
     void updateStatus(); // en-tête et zone de saisie, pour la conversation affichée
     // Réponse avec citation : bandeau au-dessus de la zone de saisie
     void startReply(const QString &id, const QString &author, const QString &text);
