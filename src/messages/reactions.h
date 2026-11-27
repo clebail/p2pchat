@@ -41,6 +41,9 @@ public:
     // Réactions actives d'un message, dans l'ordre de Allowed
     QList<Summary> summary(const QString &target) const;
     bool mineOn(const QString &target, const QString &emoji) const;
+    // Heure d'un nouvel enregistrement de cet auteur : après le précédent, même dans la même milliseconde (sans
+    // quoi un retrait aussitôt après l'ajout pourrait perdre au départage et être ignoré)
+    qint64 nextTimestamp(const QString &target, const QString &author, const QString &emoji, qint64 nowMs) const;
     void clear() { m_state.clear(); }
 
 private:

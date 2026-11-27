@@ -895,7 +895,8 @@ void GroupNode::react(const QString &id, const QString &emoji)
     if (id.isEmpty() || m_ownOnion.isEmpty() || !m_group.inGroup() || !Reactions::Allowed.contains(emoji))
         return;
     const bool on = !m_reactions.mineOn(id, emoji); // la nôtre est déjà là : on la retire
-    const QJsonObject r = Reactions::create(m_group.identitySeed(), m_ownOnion, id, emoji, on, now());
+    const QJsonObject r = Reactions::create(m_group.identitySeed(), m_ownOnion, id, emoji, on,
+                                              m_reactions.nextTimestamp(id, m_ownOnion, emoji, now()));
     acceptReaction(r, true, true);
     broadcastReaction(r);
 }

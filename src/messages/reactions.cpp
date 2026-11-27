@@ -98,3 +98,11 @@ bool Reactions::State::mineOn(const QString &target, const QString &emoji) const
     return std::any_of(forMessage.cbegin(), forMessage.cend(),
                        [&](const Entry &e) { return e.mine && e.on && e.emoji == emoji; });
 }
+
+qint64 Reactions::State::nextTimestamp(const QString &target, const QString &author, const QString &emoji,
+                                       qint64 nowMs) const
+{
+    const auto forMessage = m_state.value(target);
+    const auto it = forMessage.constFind(author + QLatin1Char('\n') + emoji);
+    return it == forMessage.cend() ? nowMs : qMax(nowMs, it->ts + 1);
+}

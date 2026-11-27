@@ -70,6 +70,21 @@ private slots:
         QCOMPARE(s.summary("msg").size(), 1);
     }
 
+    // Ajout puis retrait dans la même milliseconde : le retrait vient après, quel que soit le départage
+    void nextRecordComesAfter()
+    {
+        State s;
+        const QString thumb = QStringLiteral("👍");
+        QCOMPARE(s.nextTimestamp("msg", Alice, thumb, 100), qint64(100)); // rien avant
+        QVERIFY(s.apply(record(Alice, thumb, true, 100, "zz"), true));
+        const qint64 next = s.nextTimestamp("msg", Alice, thumb, 100);
+        QCOMPARE(next, qint64(101));
+        QVERIFY(s.apply(record(Alice, thumb, false, next, "aa"), true));
+        QVERIFY(s.summary("msg").isEmpty());
+        QCOMPARE(s.nextTimestamp("msg", Alice, thumb, 500), qint64(500)); // l'horloge a avancé
+        QCOMPARE(s.nextTimestamp("msg", Bob, thumb, 100), qint64(100)); // par auteur
+    }
+
     void summary()
     {
         State s;
