@@ -238,7 +238,9 @@ private:
     void onChatMessage(PeerConnection *c, const QJsonObject &obj);
     void onPeerTyping(PeerConnection *c);
     void onWake(qint64 gapMs);
-    void broadcast(const QJsonObject &obj, PeerConnection *except = nullptr);
+    // Membres connectés, sauf except, dont la version comprend ce message (0 : tous)
+    QList<PeerConnection *> activePeers(int minVersion = 0, PeerConnection *except = nullptr) const;
+    void broadcast(const QJsonObject &obj, PeerConnection *except = nullptr, int minVersion = 0);
     void checkQuietDrops();
 
     bool mergeMember(const QString &onion, const QString &nick);
@@ -295,15 +297,12 @@ private:
     void serveQueued();
     void filesTick();
     bool peerHasChunk(const QString &peer, const QString &fileId, int chunk) const;
-    QList<PeerConnection *> fileCapablePeers() const;
 
     // Réactions (cf. reactions.h)
     bool acceptReaction(const QJsonObject &r, bool mine, bool save); // false : déjà connue
     bool verifyReaction(const QJsonObject &r, bool mine) const;
     // Modifications (cf. edits.h)
     bool acceptEdit(const QJsonObject &r, bool mine, bool save); // false : déjà connue
-    void broadcastEdit(const QJsonObject &r, PeerConnection *except = nullptr);
-    void broadcastReaction(const QJsonObject &r, PeerConnection *except = nullptr);
 
     GroupStore &m_group;
     QString m_historyPath;

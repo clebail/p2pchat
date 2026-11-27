@@ -152,7 +152,7 @@ private:
     void showMyDevices();
     bool unlinkDevice(const QString &onion);
     void onUnlinked(); // ce poste a été délié depuis un autre
-    // Synchronisation entre nos postes (cf. devicesync.h) : groupe caché de nos postes, et ce qu'il demande
+    // Synchronisation entre nos postes (mainwindow_sync.cpp, cf. devicesync.h) : groupe caché de nos postes, et ce qu'il demande
     void setupDeviceSync();
     bool hasOtherDevices() const;
     Conversation *conversationByGroup(const QString &groupId) const;
@@ -166,6 +166,7 @@ private:
     void profileChanged(bool nickname, bool avatar, const QStringList &newWords) override;
     void addWords(const QStringList &words); // dictionnaire personnel
     bool joinLinked(const Invitation &invitation, const QString &name); // false : déjà membre, ou refusé
+    void showNotice(const QString &title, const QString &text); // avis, sans bloquer la boucle d'événements
     QTcpSocket *dialTor(const QString &onion); // connexion lancée par le proxy de Tor ; nullptr : Tor arrêté
 
     QString memberNick(const QString &onion) const { return m_shown->memberNick(onion); }

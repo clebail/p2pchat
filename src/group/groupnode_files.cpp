@@ -4,7 +4,6 @@
 #include "peerconnection.h"
 
 #include <QDebug>
-#include <QRegularExpression>
 #include <QtEndian>
 
 #include <algorithm>
@@ -25,15 +24,6 @@ void GroupNode::setFilesDir(const QString &dir)
 std::optional<Files::FileInfo> GroupNode::verifiedFile(const QJsonObject &msg, bool mine) const
 {
     return Protocol::Message::verifiedFile(msg, authorKey(msg, mine));
-}
-
-QList<PeerConnection *> GroupNode::fileCapablePeers() const
-{
-    QList<PeerConnection *> peers;
-    for (PeerConnection *p : m_active)
-        if (p->peerVersion() >= Protocol::FilesVersion)
-            peers << p;
-    return peers;
 }
 
 QJsonObject GroupNode::sendFile(const QString &path, const QString &caption, const QString &replyTo, QString *error)
@@ -154,7 +144,7 @@ void GroupNode::advertiseFiles(const QStringList &ids, PeerConnection *only)
     if (only)
         only->send(msg);
     else
-        for (PeerConnection *p : fileCapablePeers())
+        for (PeerConnection *p : activePeers(Protocol::FilesVersion))
             p->send(msg);
 }
 
@@ -163,12 +153,11 @@ void GroupNode::onFileHave(PeerConnection *c, const QJsonObject &o)
     const QString peer = m_active.key(c);
     if (peer.isEmpty())
         return;
-    static const QRegularExpression idRe(QStringLiteral("^[0-9a-f]{64}$"));
     auto &known = m_peerFiles[peer];
     for (const QJsonValue &v : o.value("files").toArray()) {
         const QJsonObject f = v.toObject();
         const QString id = f.value("f").toString();
-        if (!idRe.match(id).hasMatch() || (known.size() >= 5000 && !known.contains(id)))
+        if (!Protocol::isHexDigest(id) || (known.size() >= 5000 && !known.contains(id)))
             continue; // garde-fou : un membre ne peut pas nous faire tout retenir
         const QString have = f.value("have").toString();
         if (have == QLatin1String("all")) {
@@ -321,7 +310,7 @@ void GroupNode::pumpDownloads()
             ++load[r.source];
     // Les plus rapides d'abord ; une source trois fois plus lente que la meilleure n'a qu'un morceau en vol
     QStringList peers;
-    for (PeerConnection *p : fileCapablePeers())
+    for (PeerConnection *p : activePeers(Protocol::FilesVersion))
         peers << m_active.key(p);
     std::sort(peers.begin(), peers.end(), [this](const QString &a, const QString &b) {
         return m_chunkMs.value(a, 0) < m_chunkMs.value(b, 0); // inconnue : essayée en priorité

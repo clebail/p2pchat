@@ -44,8 +44,7 @@ std::optional<Invitation> Invitation::fromCode(const QString &code)
     inv.onion = o.value("o").toString();
     inv.nickname = o.value("n").toString().left(Protocol::MaxNickLength);
     inv.identityKey = Protocol::fromB64(o.value("i"));
-    static const QRegularExpression groupRe(QStringLiteral("^[0-9a-f]{64}$"));
-    if (groupRe.match(o.value("g").toString()).hasMatch())
+    if (Protocol::isHexDigest(o.value("g").toString()))
         inv.groupId = o.value("g").toString();
     if (inv.secret.size() < 16 || inv.identityKey.size() != 32 || !Protocol::isValidOnion(inv.onion))
         return std::nullopt;

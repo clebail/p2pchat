@@ -169,8 +169,7 @@ FileStore::FileStore(const QString &dir) : m_dir(QDir(dir).absolutePath())
 bool FileStore::validId(const QString &id)
 {
     // Empreinte en hexadécimal : jamais de « / » ni de « .. » dans un chemin construit à partir d'elle
-    static const QRegularExpression re(QStringLiteral("^[0-9a-f]{64}$"));
-    return re.match(id).hasMatch();
+    return Protocol::isHexDigest(id);
 }
 
 bool FileStore::has(const QString &id) const

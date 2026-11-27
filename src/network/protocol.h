@@ -35,6 +35,8 @@ QStringList missingFeatures(int peerVersion);
 
 // Adresse de service onion v3 : 56 caractères base32 + ".onion"
 bool isValidOnion(const QString &s);
+// Empreinte SHA-256 en hexadécimal minuscule (fichiers, identifiants de groupe, chaîne de gouvernance)
+bool isHexDigest(const QString &s);
 
 // Base64 « URL » sans « = » final, utilisée partout dans les échanges
 QString toB64(const QByteArray &b);

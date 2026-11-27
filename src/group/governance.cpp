@@ -5,7 +5,6 @@
 
 #include <QCryptographicHash>
 #include <QJsonArray>
-#include <QRegularExpression>
 
 namespace {
 
@@ -80,7 +79,6 @@ QJsonObject Governance::create(const QByteArray &identitySeed, const QString &au
 
 std::optional<Governance::Record> Governance::parse(const QJsonObject &o)
 {
-    static const QRegularExpression hexRe(QStringLiteral("^[0-9a-f]{64}$"));
     Record r;
     r.seq = o.value("seq").toInt(-1);
     r.prev = o.value("prev").toString();
@@ -91,7 +89,7 @@ std::optional<Governance::Record> Governance::parse(const QJsonObject &o)
     const auto excluded = onions(o.value("exc"), MaxExcluded);
     if (r.seq < 0 || !admins || admins->isEmpty() || !excluded || r.secretHash.size() != 32
         || !Protocol::isValidOnion(r.author) || (r.seq == 0) != r.prev.isEmpty()
-        || (r.seq > 0 && !hexRe.match(r.prev).hasMatch()))
+        || (r.seq > 0 && !Protocol::isHexDigest(r.prev)))
         return std::nullopt;
     for (const QString &a : *admins)
         if (excluded->contains(a))

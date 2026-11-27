@@ -7,19 +7,8 @@
 #include "protocol.h"
 
 #include <QJsonArray>
-#include <QRegularExpression>
 
 namespace DeviceSync {
-
-namespace {
-
-bool isGroupId(const QString &g)
-{
-    static const QRegularExpression re(QStringLiteral("^[0-9a-f]{64}$"));
-    return re.match(g).hasMatch();
-}
-
-} // namespace
 
 Engine::Engine(GroupStore &identity, GroupNode &self, Hooks &hooks, QObject *parent)
     : QObject(parent), m_identity(identity), m_self(self), m_hooks(hooks)
@@ -42,7 +31,7 @@ bool Engine::refresh()
     bool changed = false;
     for (const QString &g : m_hooks.joinedGroups()) {
         const QJsonObject r = records.value(g).toObject();
-        if (isGroupId(g) && !r.value("in").toBool()) { // rejointe ici (ou de nouveau après l'avoir quittée)
+        if (Protocol::isHexDigest(g) && !r.value("in").toBool()) { // rejointe ici (ou de nouveau après l'avoir quittée)
             records.insert(g, QJsonObject{{"in", true}, {"ts", double(GroupNodePrivate::now())}});
             changed = true;
         }
@@ -60,7 +49,7 @@ void Engine::checkJoined()
 
 void Engine::noteLeft(const QString &groupId)
 {
-    if (!isGroupId(groupId))
+    if (!Protocol::isHexDigest(groupId))
         return;
     QJsonObject records = m_identity.syncedConversations();
     records.insert(groupId, QJsonObject{{"in", false}, {"ts", double(GroupNodePrivate::now())}});
@@ -153,7 +142,7 @@ void Engine::apply(const QString &from, const QJsonObject &state)
         const QJsonObject c = convs.at(i).toObject();
         const QString g = c.value("g").toString();
         const qint64 ts = qint64(c.value("ts").toDouble());
-        if (!isGroupId(g) || ts <= qint64(records.value(g).toObject().value("ts").toDouble()))
+        if (!Protocol::isHexDigest(g) || ts <= qint64(records.value(g).toObject().value("ts").toDouble()))
             continue; // pas plus récent que ce qu'on sait
         const bool in = c.value("in").toBool();
         const bool member = m_hooks.joinedGroups().contains(g);

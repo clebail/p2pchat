@@ -137,9 +137,8 @@ bool GroupNode::newRecord(const QStringList &excluded, QStringList admins, bool 
         m_group.setSecret(secret);
     }
     applyRecord(previous, m_chain.last());
-    for (PeerConnection *p : m_active.values())
-        if (p->peerVersion() >= Governance::Version)
-            sendGovernance(p);
+    for (PeerConnection *p : activePeers(Governance::Version))
+        sendGovernance(p);
     if (renew)
         emit secretRenewed(m_group.nickname());
     emit stateChanged();
@@ -242,9 +241,8 @@ void GroupNode::onGovernance(PeerConnection *c, const QJsonObject &o)
     for (const QString &target : m_edits.targets())
         emit messageEdited(target);
     // Transmis aux autres membres connectés (ceux qui ne sont reliés qu'à nous l'apprennent ainsi)
-    for (PeerConnection *p : m_active.values())
-        if (p != c && p->peerVersion() >= Governance::Version)
-            sendGovernance(p);
+    for (PeerConnection *p : activePeers(Governance::Version, c))
+        sendGovernance(p);
     emit stateChanged();
 }
 
@@ -259,9 +257,8 @@ void GroupNode::onSecret(PeerConnection *c, const QJsonObject &o)
     m_group.setSecret(secret);
     emit secretRenewed(h->author == m_ownOnion ? m_group.nickname() : m_group.nickOf(h->author));
     // À notre tour de le transmettre aux membres connectés qui ne l'auraient pas
-    for (PeerConnection *p : m_active.values())
-        if (p != c && p->peerVersion() >= Governance::Version)
-            sendGovernance(p);
+    for (PeerConnection *p : activePeers(Governance::Version, c))
+        sendGovernance(p);
 }
 
 void GroupNode::onLeave(PeerConnection *c, const QJsonObject &o)
@@ -326,9 +323,8 @@ void GroupNode::onName(PeerConnection *c, const QJsonObject &o)
     QJsonObject r = o;
     r.insert("t", "conv-name");
     m_group.setNameRecord(r);
-    for (PeerConnection *p : m_active.values()) // relais, pour ceux qui ne sont reliés qu'à nous
-        if (p != c)
-            sendName(p);
+    for (PeerConnection *p : activePeers(0, c)) // relais, pour ceux qui ne sont reliés qu'à nous
+        sendName(p);
     emit sharedNameChanged(sharedName(), author == m_ownOnion ? m_group.nickname() : m_group.nickOf(author));
     emit stateChanged();
 }
@@ -374,9 +370,8 @@ void GroupNode::onConversationAvatar(PeerConnection *c, const QJsonObject &o)
     QJsonObject r = o;
     r.insert("t", "conv-avatar");
     m_group.setConversationAvatarRecord(r);
-    for (PeerConnection *p : m_active.values()) // relais, pour ceux qui ne sont reliés qu'à nous
-        if (p != c)
-            sendConversationAvatar(p);
+    for (PeerConnection *p : activePeers(0, c)) // relais, pour ceux qui ne sont reliés qu'à nous
+        sendConversationAvatar(p);
     emit conversationAvatarChanged(Avatar::image(r).isEmpty(),
                                    author == m_ownOnion ? m_group.nickname() : m_group.nickOf(author));
 }
@@ -430,9 +425,7 @@ void GroupNode::onAvatar(PeerConnection *c, const QJsonObject &o)
     QJsonObject r = o;
     r.insert("t", "avatar");
     m_group.setAvatarRecord(author, r);
-    for (PeerConnection *p : m_active.values()) // relais, pour ceux qui ne sont reliés qu'à nous
-        if (p != c && p->peerVersion() >= Avatar::Version)
-            p->send(r);
+    broadcast(r, c, Avatar::Version); // relais, pour ceux qui ne sont reliés qu'à nous
     emit avatarChanged(author);
 }
 
@@ -441,9 +434,7 @@ void GroupNode::publishAvatar()
     const QJsonObject r = avatarRecordOf(m_ownOnion);
     if (r.isEmpty())
         return;
-    for (PeerConnection *p : m_active.values())
-        if (p->peerVersion() >= Avatar::Version)
-            p->send(r);
+    broadcast(r, nullptr, Avatar::Version);
     emit avatarChanged(m_ownOnion);
 }
 
@@ -562,9 +553,7 @@ void GroupNode::onCertificates(PeerConnection *c, const QJsonObject &o)
         QJsonObject relay{{"t", "devices"}, {"c", fresh}};
         if (!revoked.isEmpty())
             relay.insert("r", revoked);
-        for (PeerConnection *p : m_active.values()) // relais, pour ceux qui ne sont reliés qu'à nous
-            if (p != c && p->peerVersion() >= Person::Version)
-                p->send(relay);
+        broadcast(relay, c, Person::Version); // relais, pour ceux qui ne sont reliés qu'à nous
     }
     promoteMyDevices();
     if (ownUnlinked)
@@ -576,9 +565,7 @@ void GroupNode::onCertificates(PeerConnection *c, const QJsonObject &o)
 void GroupNode::publishRevocation(const QJsonObject &revocation)
 {
     const QJsonObject msg{{"t", "devices"}, {"c", QJsonArray()}, {"r", QJsonArray{revocation}}};
-    for (PeerConnection *p : std::as_const(m_active))
-        if (p->peerVersion() >= Person::Version)
-            p->send(msg);
+    broadcast(msg, nullptr, Person::Version);
     emit devicesChanged();
     emit stateChanged();
 }

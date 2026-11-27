@@ -218,9 +218,7 @@ void GroupNode::leaveGroup()
         const QByteArray proof = Ed25519::sign(
             m_group.identitySeed(), Crypto::pack({"p2pchat-leave-v1", m_ownOnion.toUtf8(), QByteArray::number(ts)}));
         const QJsonObject leave{{"t", "gov-leave"}, {"a", m_ownOnion}, {"ts", double(ts)}, {"s", Protocol::toB64(proof)}};
-        for (PeerConnection *p : std::as_const(m_active))
-            if (p->peerVersion() >= Governance::Version)
-                p->send(leave);
+        broadcast(leave, nullptr, Governance::Version);
     }
     closeAll();
     m_group.leaveGroup();
@@ -611,11 +609,19 @@ void GroupNode::setActive(PeerConnection *c)
     emit stateChanged();
 }
 
-void GroupNode::broadcast(const QJsonObject &obj, PeerConnection *except)
+QList<PeerConnection *> GroupNode::activePeers(int minVersion, PeerConnection *except) const
 {
-    for (PeerConnection *p : std::as_const(m_active))
-        if (p != except)
-            p->send(obj);
+    QList<PeerConnection *> peers;
+    for (PeerConnection *p : m_active)
+        if (p != except && p->peerVersion() >= minVersion)
+            peers << p;
+    return peers;
+}
+
+void GroupNode::broadcast(const QJsonObject &obj, PeerConnection *except, int minVersion)
+{
+    for (PeerConnection *p : activePeers(minVersion, except))
+        p->send(obj);
 }
 
 void GroupNode::closeAll()
@@ -760,13 +766,13 @@ void GroupNode::onReceived(PeerConnection *c, const QJsonObject &o)
         if (id.isEmpty() || m_store.contains(id) || !verifyReaction(o, false))
             return;
         acceptReaction(o, false, true);
-        broadcastReaction(o, c); // relais, comme les messages
+        broadcast(o, c, Reactions::Version); // relais, comme les messages
     } else if (type == "edit") {
         const QString id = Protocol::Message::id(o);
         if (id.isEmpty() || m_store.contains(id) || !Edits::verify(o, authorKey(o, false)))
             return;
         acceptEdit(o, false, true);
-        broadcastEdit(o, c); // relais, comme les messages
+        broadcast(o, c, Edits::Version); // relais, comme les messages
     } else if (type == "gov") {
         onGovernance(c, o);
     } else if (type == "gov-secret") {
@@ -902,7 +908,7 @@ void GroupNode::react(const QString &id, const QString &emoji)
     const QJsonObject r = Reactions::create(m_group.identitySeed(), m_ownOnion, id, emoji, on,
                                               m_reactions.nextTimestamp(id, m_ownOnion, emoji, now()));
     acceptReaction(r, true, true);
-    broadcastReaction(r);
+    broadcast(r, nullptr, Reactions::Version);
 }
 
 bool GroupNode::verifyReaction(const QJsonObject &r, bool mine) const
@@ -922,13 +928,6 @@ bool GroupNode::acceptReaction(const QJsonObject &r, bool mine, bool save)
     if (save)
         appendToHistoryFile(r, mine);
     return true;
-}
-
-void GroupNode::broadcastReaction(const QJsonObject &r, PeerConnection *except)
-{
-    for (PeerConnection *p : std::as_const(m_active))
-        if (p != except && p->peerVersion() >= Reactions::Version)
-            p->send(r);
 }
 
 // ---------------------------------------------------------------- Modifications et suppressions
@@ -951,7 +950,7 @@ bool GroupNode::editMessage(const QString &id, const QString &text)
         return false;
     const QJsonObject r = Edits::create(m_group.identitySeed(), m_ownOnion, id, trimmed, false, now());
     acceptEdit(r, true, true);
-    broadcastEdit(r);
+    broadcast(r, nullptr, Edits::Version);
     return true;
 }
 
@@ -961,7 +960,7 @@ bool GroupNode::deleteMessage(const QString &id)
         return false;
     const QJsonObject r = Edits::create(m_group.identitySeed(), m_ownOnion, id, {}, true, now());
     acceptEdit(r, true, true);
-    broadcastEdit(r);
+    broadcast(r, nullptr, Edits::Version);
     return true;
 }
 
@@ -995,11 +994,4 @@ bool GroupNode::acceptEdit(const QJsonObject &r, bool mine, bool save)
     if (save)
         appendToHistoryFile(r, mine);
     return true;
-}
-
-void GroupNode::broadcastEdit(const QJsonObject &r, PeerConnection *except)
-{
-    for (PeerConnection *p : std::as_const(m_active))
-        if (p != except && p->peerVersion() >= Edits::Version)
-            p->send(r);
 }

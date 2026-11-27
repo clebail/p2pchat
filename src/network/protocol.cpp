@@ -45,6 +45,12 @@ bool Protocol::isValidOnion(const QString &s)
     return re.match(s).hasMatch();
 }
 
+bool Protocol::isHexDigest(const QString &s)
+{
+    static const QRegularExpression re(QStringLiteral("^[0-9a-f]{64}$"));
+    return re.match(s).hasMatch();
+}
+
 QString Protocol::toB64(const QByteArray &b)
 {
     return QString::fromLatin1(b.toBase64(B64Options));

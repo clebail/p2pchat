@@ -394,7 +394,9 @@ dans le chemin d'inclusion (`src/core.pri`, `src/ui.pri`).
 | `mainwindow.*` | Fenêtre : colonne des conversations, zone de saisie, Tor, notifications |
 | `mainwindow_ui.cpp` | Construction de la fenêtre : colonne, barre du haut et menu ⋮, recherche, accueil, bandeaux, zone de saisie |
 | `mainwindow_dialogs.cpp` | Dialogues de la fenêtre : invitation, membres et gouvernance, code de sécurité, console partagée |
-| `mainwindow_link.cpp` | Postes liés : lier un autre poste, lier ce poste à un compte, synchronisation, délier |
+| `mainwindow_files.cpp` | Images et fichiers joints : choisis, collés ou déposés ; ouverture, enregistrement |
+| `mainwindow_link.cpp` | Postes liés : lier un autre poste, lier ce poste à un compte, délier |
+| `mainwindow_sync.cpp` | Synchronisation entre nos postes : groupe caché, ce que la synchronisation demande à la fenêtre |
 | `appstyle.*` | Feuille de style et icônes dessinées de la fenêtre |
 | `language.*` | Langue de l'interface (réglage, système), traductions (`translations/`) de P2P Chat et de Qt |
 | `singleinstance.*` | Une seule instance par utilisateur ; la suivante affiche la fenêtre existante |
