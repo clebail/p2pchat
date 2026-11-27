@@ -5,6 +5,7 @@
 #include "chatview.h"
 #include "composer.h"
 #include "crypto.h"
+#include "devicelink.h"
 #include "invitation.h"
 #include "language.h"
 #include "mentioncompleter.h"
@@ -180,14 +181,7 @@ Conversation *MainWindow::openConversation(const QString &id)
     Conversation *c = m_convs.back().get();
 
     // Transport : Tor ; écoute commune à toutes les conversations
-    c->node().setDialer([this](const QString &onion) -> QTcpSocket * {
-        if (!m_tor)
-            return nullptr;
-        auto *s = new QTcpSocket;
-        s->setProxy(QNetworkProxy(QNetworkProxy::Socks5Proxy, "127.0.0.1", m_tor->socksPort()));
-        s->connectToHost(onion, TorService::OnionPort); // résolu par Tor, pas localement
-        return s;
-    });
+    c->node().setDialer([this](const QString &onion) { return dialTor(onion); });
     m_board->add(&c->node());
     m_pages->addWidget(c->view());
     auto *item = new QListWidgetItem(m_convList);
@@ -233,6 +227,16 @@ Conversation *MainWindow::openConversation(const QString &id)
         c->node().setOnline(m_onion);
     updateConversationItem(c);
     return c;
+}
+
+QTcpSocket *MainWindow::dialTor(const QString &onion)
+{
+    if (!m_tor)
+        return nullptr;
+    auto *s = new QTcpSocket;
+    s->setProxy(QNetworkProxy(QNetworkProxy::Socks5Proxy, "127.0.0.1", m_tor->socksPort()));
+    s->connectToHost(onion, TorService::OnionPort); // résolu par Tor, pas localement
+    return s;
 }
 
 Conversation *MainWindow::newConversation()
@@ -683,6 +687,12 @@ void MainWindow::join()
     if (!ok || text.trimmed().isEmpty())
         return;
     const auto inv = Invitation::fromCode(text);
+    if (!inv && DeviceLink::Code::looksLikeCode(text)) {
+        QMessageBox::information(this, tr("Rejoindre"),
+                                 tr("C'est un code de liaison de poste : utilisez-le avec ⋮ → Lier ce poste à mon "
+                                    "compte…"));
+        return;
+    }
     if (!inv) {
         QMessageBox::warning(this, tr("Rejoindre"), tr("Ce code n'est pas valide (incomplet ?)."));
         return;

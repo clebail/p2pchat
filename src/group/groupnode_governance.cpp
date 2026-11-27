@@ -489,8 +489,10 @@ void GroupNode::sendCertificates(PeerConnection *c)
     if (c->peerVersion() < Person::Version)
         return;
     QJsonArray list;
-    if (const QJsonObject own = ownCertificate(); !own.isEmpty())
+    if (const QJsonObject own = ownCertificate(); !own.isEmpty()) {
         list.append(own);
+        m_group.setPersonAnnounced(); // ce poste ne pourra plus être lié à une autre personne
+    }
     for (const Member &m : m_group.members())
         if (const QJsonObject cert = m_group.certificate(m.onion); !cert.isEmpty() && m.onion != c->peerOnion())
             list.append(cert);
@@ -528,4 +530,13 @@ void GroupNode::onCertificates(PeerConnection *c, const QJsonObject &o)
             p->send({{"t", "devices"}, {"c", fresh}});
     emit devicesChanged();
     emit stateChanged();
+}
+
+std::optional<Invitation> GroupNode::invitationForMyDevice(const QString &onion, const QByteArray &key)
+{
+    if (!acceptsIncoming() || !m_group.isMyDevice(onion) || !pinKey(onion, key))
+        return std::nullopt;
+    m_group.shareHistoryWith(onion); // les 30 derniers jours, comme à une invitation avec partage
+    m_group.setDeparted(onion, false);
+    return Invitation{m_group.secret(), m_ownOnion, m_group.nickname(), m_group.identityKey(), groupId()};
 }

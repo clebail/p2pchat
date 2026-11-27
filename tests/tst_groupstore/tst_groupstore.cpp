@@ -113,6 +113,11 @@ private slots:
         m_store->setPersonSeed(other, 1234);
         QCOMPARE(m_store->personKey(), Ed25519::publicKey(other));
         QCOMPARE(m_store->personSince(), qint64(1234));
+        // Certificat montré : définitif
+        QVERIFY(!m_store->personAnnounced());
+        m_store->setPersonAnnounced();
+        reopen();
+        QVERIFY(m_store->personAnnounced());
     }
 
     void devicesAndVerification()
@@ -265,6 +270,19 @@ private slots:
         QCOMPARE(m_store->firstSeen(onion('b')), qint64(1000));
         m_store->setShareHistoryUntil(0);
         QVERIFY(!m_settings->contains("group/shareHistoryUntil"));
+    }
+
+    // Un autre de nos postes (liaison) : les 30 derniers jours, même rencontré avant
+    void historySharedWithMyDevice()
+    {
+        QVERIFY(m_store->pinKey(onion('a'), QByteArray(32, '1'), 5000));
+        QCOMPARE(m_store->firstSeen(onion('a')), qint64(5000));
+        m_store->shareHistoryWith(onion('a'));
+        QCOMPARE(m_store->firstSeen(onion('a')), qint64(0));
+        QVERIFY(m_store->pinKey(onion('a'), QByteArray(32, '1'), 6000)); // reconnu ensuite : pas réécrit
+        QCOMPARE(m_store->firstSeen(onion('a')), qint64(0));
+        m_store->shareHistoryWith("pas-une-adresse");
+        QCOMPARE(m_store->firstSeen("pas-une-adresse"), qint64(0));
     }
 
     void migratesTwoPartyConfig()

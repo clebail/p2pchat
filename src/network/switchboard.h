@@ -5,6 +5,9 @@
 #include <QSet>
 
 class GroupNode;
+namespace DeviceLink {
+class Host;
+}
 class PeerConnection;
 class QTcpServer;
 
@@ -25,6 +28,8 @@ public:
 
     void add(GroupNode *node);
     void remove(GroupNode *node);
+    // Liaison d'un poste en cours (cf. devicelink.h) : ses connexions lui sont confiées ; nullptr : aucune
+    void setLinkHost(DeviceLink::Host *host);
 
 private:
     void onNewConnection();
@@ -32,4 +37,5 @@ private:
     QTcpServer *m_server;
     QList<QPointer<GroupNode>> m_nodes;
     QSet<PeerConnection *> m_pending;
+    QPointer<DeviceLink::Host> m_linkHost;
 };

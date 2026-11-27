@@ -62,6 +62,9 @@ public:
     QByteArray personKey() const;
     qint64 personSince() const; // date de notre certificat de poste
     void setPersonSeed(const QByteArray &seed, qint64 sinceMs); // poste lié : la personne d'un autre poste
+    // Notre certificat a été montré à d'autres : ce poste ne peut plus être lié à une autre personne (cf. devicelink.h)
+    bool personAnnounced() const;
+    void setPersonAnnounced();
 
     // Certificats de poste reçus et vérifiés (cf. Person), communs à toutes les conversations. Le premier vu pour
     // une adresse fixe sa personne : un certificat d'une autre personne pour ce poste est refusé.
@@ -82,6 +85,7 @@ public:
     QByteArray pinnedKey(const QString &onion) const;
     bool pinKey(const QString &onion, const QByteArray &pub, qint64 nowMs); // false si une autre clé est connue
     qint64 firstSeen(const QString &onion) const; // 0 : avant cette fonctionnalité, ou historique partagé
+    void shareHistoryWith(const QString &onion); // il recevra les 30 derniers jours (un autre de nos postes)
 
     // Avatars (cf. avatar.h), communs à toutes les conversations. Le nôtre : image JPEG (vide : aucun) et date du
     // choix (0 : jamais choisi) ; ceux des autres : enregistrements reçus et vérifiés (vide : inconnu)

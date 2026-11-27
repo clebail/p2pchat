@@ -45,6 +45,11 @@ class TerminalSharing;
 class TorService;
 
 class Switchboard;
+class QTcpSocket;
+namespace DeviceLink {
+struct Profile;
+struct Conversation;
+} // namespace DeviceLink
 
 // Fenêtre principale : la liste des conversations, celle affichée, Tor, les notifications et la console
 // partagée. Chaque conversation (connexions, synchronisation, historique) est un GroupNode.
@@ -138,6 +143,12 @@ private:
     void startConversationWith(const QStringList &onions, const QString &name);
     void askDirectInvitation(Conversation *from, const QString &nick, const Invitation &invitation,
                              const QString &name);
+    // Postes liés (mainwindow_link.cpp, cf. devicelink.h)
+    void linkAnotherDevice(); // ce poste donne son identité à un nouveau
+    void linkThisDevice();    // ce poste prend celle d'un autre
+    void applyLink(const DeviceLink::Profile &profile, const QList<DeviceLink::Conversation> &conversations);
+    bool joinLinked(const Invitation &invitation, const QString &name); // false : déjà membre, ou refusé
+    QTcpSocket *dialTor(const QString &onion); // connexion lancée par le proxy de Tor ; nullptr : Tor arrêté
 
     QString memberNick(const QString &onion) const { return m_shown->memberNick(onion); }
     // Messages reçus dans c : non-lus si elle est cachée ou la fenêtre en arrière-plan, puis notification

@@ -145,6 +145,9 @@ public:
     // connecté directement ou utilise une version précédente
     bool inviteDirectly(const QString &onion, const Invitation &invitation, const QString &name);
     bool canInviteDirectly(const QString &onion) const;
+    // Liaison d'un autre de nos postes (cf. devicelink.h) : sa clé retenue, l'historique lui sera partagé ; le code
+    // qu'il utilisera pour nous rejoindre (aucun : pas de groupe, pas de réseau, ou ce n'est pas un de nos postes)
+    std::optional<Invitation> invitationForMyDevice(const QString &onion, const QByteArray &key);
 
     // ---- Fichiers (cf. filestore.h) : annonce signée, puis morceaux demandés à qui les a
     void setFilesDir(const QString &dir); // par défaut : « fichiers » à côté de l'historique

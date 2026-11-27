@@ -1,5 +1,6 @@
 #include "avatar.h"
 #include "crypto.h"
+#include "devicelink.h"
 #include "groupnode.h"
 #include "edits.h"
 #include "governance.h"
@@ -9,6 +10,7 @@
 
 #include <QNetworkProxy>
 #include <QFile>
+#include <QImage>
 #include <QDateTime>
 #include <QJsonArray>
 #include <QSettings>
@@ -1192,6 +1194,158 @@ private slots:
         QTest::qWait(200);
         QCOMPARE(e.store->personOf(a.onion), a.store->personKey());
         QCOMPARE(b.store->personOf(a.onion), a.store->personKey());
+    }
+
+private:
+    // Liaison d'un poste (cf. devicelink.h) : code à usage unique, personne, profil, conversations, historique
+    struct Linking
+    {
+        std::unique_ptr<DeviceLink::Host> host;
+        std::unique_ptr<Switchboard> board;
+        std::unique_ptr<DeviceLink::Guest> guest;
+        std::unique_ptr<QSignalSpy> guestLinked, guestFailed, hostLinked, hostRefused;
+    };
+    Linking startLinking(Peer &host, Peer &guest, const QString &name = {}, qint64 validityMs = 60000,
+                         const std::function<void(DeviceLink::Code &)> &alter = {})
+    {
+        Linking l;
+        GroupNode *node = host.node.get();
+        l.host = std::make_unique<DeviceLink::Host>(
+            *host.store, host.onion, QStringList{"Kyxar", "p2pchat"},
+            [node, name](const QString &onion, const QByteArray &key) {
+                QList<DeviceLink::Conversation> list;
+                if (const auto inv = node->invitationForMyDevice(onion, key))
+                    list.append({*inv, name});
+                return list;
+            },
+            validityMs);
+        l.board = std::make_unique<Switchboard>();
+        if (!l.board->listen())
+            qWarning("écoute impossible");
+        l.board->add(host.node.get()); // comme dans l'application : la liaison passe après les conversations
+        l.board->setLinkHost(l.host.get());
+        if (validityMs < 100)
+            QTest::qWait(int(validityMs) + 50); // expiré avant l'arrivée du nouveau poste
+        auto *s = new QTcpSocket;
+        s->setProxy(QNetworkProxy::NoProxy);
+        s->connectToHost(QHostAddress::LocalHost, l.board->port());
+        DeviceLink::Code code = l.host->code();
+        if (alter)
+            alter(code);
+        l.guest = std::make_unique<DeviceLink::Guest>(*guest.store, guest.onion, code, s);
+        l.guestLinked = std::make_unique<QSignalSpy>(l.guest.get(), &DeviceLink::Guest::linked);
+        l.guestFailed = std::make_unique<QSignalSpy>(l.guest.get(), &DeviceLink::Guest::failed);
+        l.hostLinked = std::make_unique<QSignalSpy>(l.host.get(), &DeviceLink::Host::linked);
+        l.hostRefused = std::make_unique<QSignalSpy>(l.host.get(), &DeviceLink::Host::refused);
+        return l;
+    }
+
+private slots:
+    void linkingADevice()
+    {
+        Peer &a = peer('a'), &b = peer('b'), &e = peer('e');
+        a.node->createGroup();
+        a.node->setOnline(a.onion);
+        b.node->join(invitation(a));
+        b.node->setOnline(b.onion);
+        QTRY_VERIFY(linked(a, b));
+        QTRY_VERIFY(a.store->personAnnounced()); // certificat montré à b : a ne pourra plus être lié ailleurs
+        const QString before = Protocol::Message::id(b.node->sendMessage("Avant la liaison"));
+        QTRY_COMPARE(countId(a.added, before), 1);
+        QImage red(20, 20, QImage::Format_RGB32);
+        red.fill(Qt::red);
+        const QByteArray avatar = Avatar::fromImage(red);
+        a.store->setOwnAvatar(avatar, 4242);
+
+        QVERIFY(!e.store->personAnnounced());
+        Linking l = startLinking(a, e, "Chez nous");
+        QTRY_COMPARE(l.guestLinked->count(), 1);
+        QCOMPARE(l.guestFailed->count(), 0);
+        QCOMPARE(l.hostLinked->count(), 1);
+        QCOMPARE(l.hostLinked->at(0).at(0).toString(), e.onion);
+        QVERIFY(!l.host->isActive()); // usage unique
+        {
+            Peer &f = peer('f');
+            auto *s = new QTcpSocket;
+            s->setProxy(QNetworkProxy::NoProxy);
+            s->connectToHost(QHostAddress::LocalHost, l.board->port());
+            DeviceLink::Guest again(*f.store, f.onion, l.host->code(), s);
+            QSignalSpy failed(&again, &DeviceLink::Guest::failed);
+            QTRY_COMPARE(failed.count(), 1);
+            QVERIFY(f.store->personKey() != a.store->personKey());
+        }
+
+        // Même personne, même pseudo, même avatar ; chacun sait l'autre « à nous »
+        QCOMPARE(e.store->personKey(), a.store->personKey());
+        QCOMPARE(e.store->nickname(), a.nick);
+        QCOMPARE(e.store->ownAvatar(), avatar);
+        QCOMPARE(e.store->ownAvatarTime(), qint64(4242));
+        QVERIFY(a.store->isMyDevice(e.onion));
+        const auto profile = l.guestLinked->at(0).at(0).value<DeviceLink::Profile>();
+        QCOMPARE(profile.words, QStringList({"Kyxar", "p2pchat"}));
+        const auto conversations = l.guestLinked->at(0).at(1).value<QList<DeviceLink::Conversation>>();
+        QCOMPARE(conversations.size(), 1);
+        QCOMPARE(conversations.first().name, QString("Chez nous"));
+
+        // Le nouveau poste rejoint la conversation et reçoit l'historique d'avant la liaison
+        QCOMPARE(e.node->join(conversations.first().invitation), GroupNode::JoinResult::Joined);
+        e.node->setOnline(e.onion);
+        QTRY_VERIFY(linked(a, e));
+        QTRY_VERIFY(linked(b, e));
+        QTRY_COMPARE(countId(e.added, before), 1);
+        QTRY_VERIFY(e.store->isMyDevice(a.onion));
+        QTRY_COMPARE(b.store->personOf(e.onion), a.store->personKey()); // b : un des postes de A
+        const QString after = Protocol::Message::id(e.node->sendMessage("Depuis le nouveau poste"));
+        QTRY_COMPARE(countId(a.added, after), 1);
+        QVERIFY(a.node->isFromMe(after));
+    }
+
+    void linkingRefusals()
+    {
+        Peer &a = peer('a'), &b = peer('b'), &e = peer('e'), &f = peer('f');
+        a.node->createGroup();
+        a.node->setOnline(a.onion);
+
+        // Mauvais secret : la connexion échoue, rien n'est transmis
+        Linking wrong = startLinking(a, e, {}, 60000, [](DeviceLink::Code &c) { c.secret = Crypto::randomBytes(32); });
+        QTRY_COMPARE(wrong.guestFailed->count(), 1);
+        QCOMPARE(wrong.hostLinked->count(), 0);
+        QVERIFY(e.store->personKey() != a.store->personKey());
+
+        // Code expiré : la connexion n'est plus acceptée
+        Linking expired = startLinking(a, e, {}, 1);
+        QTRY_COMPARE(expired.guestFailed->count(), 1);
+        QVERIFY(e.store->personKey() != a.store->personKey());
+
+        // Poste déjà présenté sous sa propre identité (b, membre de la conversation) : il refuse lui-même
+        b.node->join(invitation(a));
+        b.node->setOnline(b.onion);
+        QTRY_VERIFY(linked(a, b));
+        QTRY_VERIFY(b.store->personAnnounced());
+        const QByteArray bPerson = b.store->personKey();
+        // L'hôte le connaît comme quelqu'un d'autre : il refuse avant de rien envoyer
+        Linking known = startLinking(a, b);
+        QTRY_COMPARE(known.guestFailed->count(), 1);
+        QCOMPARE(known.hostRefused->count(), 1);
+        QCOMPARE(known.hostRefused->at(0).at(0).toString(), QString("ce poste est déjà connu comme celui de quelqu'un d'autre"));
+        // Un hôte qui ne le connaît pas : c'est b qui refuse
+        Linking announced = startLinking(f, b);
+        QTRY_COMPARE(announced.guestFailed->count(), 1);
+        QTRY_COMPARE(announced.hostRefused->count(), 1);
+        QVERIFY(announced.guestFailed->at(0).at(0).toString().contains("propre identité"));
+        QCOMPARE(announced.hostLinked->count(), 0);
+        QCOMPARE(b.store->personKey(), bPerson);
+        QVERIFY(!a.store->isMyDevice(b.onion));
+
+        // Clé du code différente de celle du poste joint : un autre poste se fait passer pour l'hôte
+        Linking forgedLink = startLinking(f, e, {}, 60000, [&](DeviceLink::Code &c) {
+            c.onion = a.onion;
+            c.identityKey = a.store->identityKey();
+        });
+        QTRY_COMPARE(forgedLink.guestFailed->count(), 1);
+        QCOMPARE(forgedLink.guestFailed->at(0).at(0).toString(), QString("le poste joint n'est pas celui du code"));
+        QCOMPARE(forgedLink.hostLinked->count(), 0);
+        QVERIFY(e.store->personKey() != f.store->personKey());
     }
 
     void directInvitation()

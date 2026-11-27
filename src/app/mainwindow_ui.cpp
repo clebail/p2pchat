@@ -169,6 +169,10 @@ QMenu *MainWindow::buildMainMenu(QWidget *parent)
     menu->addAction(tr("Vérifier l'identité d'un membre…"), this, &MainWindow::verifyMember);
     menu->addAction(tr("Changer de pseudo…"), this, &MainWindow::changeNickname);
     menu->addAction(tr("Changer d'avatar…"), this, &MainWindow::changeAvatar);
+    QMenu *devices = menu->addMenu(tr("Mes postes"));
+    devices->addAction(tr("Lier un autre poste…"), this, &MainWindow::linkAnotherDevice);
+    QAction *linkHereAct = devices->addAction(tr("Lier ce poste à mon compte…"), this, &MainWindow::linkThisDevice);
+    connect(devices, &QMenu::aboutToShow, this, [this, linkHereAct] { linkHereAct->setEnabled(!m_group->personAnnounced()); });
     QAction *renameAct = menu->addAction(tr("Renommer la conversation…"), this, &MainWindow::renameConversation);
     QAction *convAvatarAct =
         menu->addAction(tr("Avatar de la conversation…"), this, &MainWindow::changeConversationAvatar);

@@ -7,6 +7,7 @@ INCLUDEPATH += $$PWD/app $$PWD/network $$PWD/notifications
 RESOURCES += $$PWD/../resources/resources.qrc # icône de l'application (fenêtre, page d'accueil)
 
 SOURCES += $$PWD/app/mainwindow.cpp $$PWD/app/mainwindow_ui.cpp $$PWD/app/mainwindow_dialogs.cpp \
+           $$PWD/app/mainwindow_link.cpp \
            $$PWD/app/appstyle.cpp $$PWD/network/torservice.cpp
 HEADERS += $$PWD/app/mainwindow.h $$PWD/app/appstyle.h $$PWD/notifications/notifier.h $$PWD/network/torservice.h
 

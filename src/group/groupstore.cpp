@@ -177,6 +177,17 @@ void GroupStore::setPersonSeed(const QByteArray &seed, qint64 sinceMs)
     m_settings.setValue("identity/personSince", sinceMs);
 }
 
+bool GroupStore::personAnnounced() const
+{
+    return m_settings.value("identity/personAnnounced").toBool();
+}
+
+void GroupStore::setPersonAnnounced()
+{
+    if (!personAnnounced())
+        m_settings.setValue("identity/personAnnounced", true);
+}
+
 QJsonObject GroupStore::certificate(const QString &onion) const
 {
     return isValidOnion(onion) ? readObject(m_settings, "devices/" + onion) : QJsonObject();
@@ -352,6 +363,15 @@ void GroupStore::setVerified(const QString &onion, bool verified)
 qint64 GroupStore::firstSeen(const QString &onion) const
 {
     return qint64(readObject(m_settings, key("firstSeen")).value(onion).toDouble());
+}
+
+void GroupStore::shareHistoryWith(const QString &onion)
+{
+    if (!isValidOnion(onion))
+        return;
+    QJsonObject seen = readObject(m_settings, key("firstSeen"));
+    seen.insert(onion, 0.0);
+    writeObject(m_settings, key("firstSeen"), seen);
 }
 
 qint64 GroupStore::shareHistoryUntil() const

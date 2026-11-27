@@ -27,6 +27,15 @@ l'a créé : B et C peuvent discuter même si A est hors ligne.
 Les messages sont aussi relayés par les membres (avec anti-doublon), ce qui couvre le cas d'un lien direct
 pas encore établi.
 
+### Plusieurs postes
+
+Une même personne peut utiliser P2P Chat sur plusieurs postes, tous en ligne en même temps. Sur le poste déjà
+utilisé : ⋮ → *Mes postes* → *Lier un autre poste…* affiche un code `P2PLIEN-…`, valable 10 minutes et une
+seule fois. Sur le nouveau : ⋮ → *Mes postes* → *Lier ce poste à mon compte…*, puis le code. Le nouveau poste
+reçoit l'identité de la personne, son pseudo, son avatar et son dictionnaire, et rejoint ses conversations avec
+leurs 30 derniers jours d'historique. Chaque poste garde son adresse onion : pour les autres membres, ce sont
+deux postes d'une même personne. Un poste qui s'est déjà présenté sous sa propre identité ne peut plus être lié.
+
 ### Synchronisation de l'historique
 
 À chaque connexion entre deux membres, chacun envoie la liste des identifiants de ses messages des
@@ -324,6 +333,10 @@ marqué ✔ (à côté de son nom dans la conversation et dans l'état des membr
   poste d'un autre. Le premier certificat vu pour un poste fixe sa personne : un poste qui prétend ensuite
   appartenir à quelqu'un d'autre est refusé (« identité refusée »). Le code de sécurité entre deux personnes est
   tiré de leurs clés de personne : une seule vérification couvre tous leurs postes.
+- **Liaison d'un poste** : le code de liaison donne la clé de personne à qui le saisit ; il ne sert qu'une fois,
+  pendant 10 minutes, et ne doit être transmis qu'à soi-même. La connexion est chiffrée comme celle d'une
+  conversation, le secret du code tenant lieu de mot de passe, et le nouveau poste vérifie que la clé du poste
+  joint est bien celle du code.
 - **Avatars** : signés par leur auteur (celui d'une conversation, par un administrateur, et lié au groupe),
   acceptés seulement pour les membres de la conversation. Une image reçue
   n'est décodée que si c'est un JPEG d'au plus 16 Ko et 192 × 192 pixels. Un membre ne reçoit que les avatars
@@ -366,6 +379,7 @@ dans le chemin d'inclusion (`src/core.pri`, `src/ui.pri`).
 | `mainwindow.*` | Fenêtre : colonne des conversations, zone de saisie, Tor, notifications |
 | `mainwindow_ui.cpp` | Construction de la fenêtre : colonne, barre du haut et menu ⋮, recherche, accueil, bandeaux, zone de saisie |
 | `mainwindow_dialogs.cpp` | Dialogues de la fenêtre : invitation, membres et gouvernance, code de sécurité, console partagée |
+| `mainwindow_link.cpp` | Postes liés : lier un autre poste, lier ce poste à un compte |
 | `appstyle.*` | Feuille de style et icônes dessinées de la fenêtre |
 | `language.*` | Langue de l'interface (réglage, système), traductions (`translations/`) de P2P Chat et de Qt |
 | `singleinstance.*` | Une seule instance par utilisateur ; la suivante affiche la fenêtre existante |
@@ -394,6 +408,7 @@ dans le chemin d'inclusion (`src/core.pri`, `src/ui.pri`).
 | `governance.*` | Gouvernance du groupe : administrateurs, exclusions, secret en vigueur (enregistrements signés) |
 | `invitation.*` | Encodage / décodage du code d'invitation |
 | `person.*` | Postes liés : certificat de poste, signé par la personne et par le poste |
+| `devicelink.*` | Liaison d'un poste : code à usage unique, transmission de la personne, du profil et des conversations |
 | `history.*` | Historique local, inventaire et lots de synchronisation |
 | `conversations.*` | Liste des conversations, leurs dossiers, reprise de l'ancienne disposition (un seul groupe) |
 

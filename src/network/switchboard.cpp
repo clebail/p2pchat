@@ -1,5 +1,6 @@
 #include "switchboard.h"
 
+#include "devicelink.h"
 #include "groupnode.h"
 #include "peerconnection.h"
 
@@ -44,6 +45,11 @@ void Switchboard::remove(GroupNode *node)
     m_nodes.removeAll(node);
 }
 
+void Switchboard::setLinkHost(DeviceLink::Host *host)
+{
+    m_linkHost = host;
+}
+
 void Switchboard::onNewConnection()
 {
     while (QTcpSocket *s = m_server->nextPendingConnection()) {
@@ -55,24 +61,30 @@ void Switchboard::onNewConnection()
                 nodes << n;
                 secrets << n->acceptedSecrets();
             }
-        if (nodes.isEmpty() || m_pending.size() >= MaxPending) {
+        // Liaison d'un poste : un groupe de secrets de plus, après ceux des conversations
+        QPointer<DeviceLink::Host> link = m_linkHost && m_linkHost->isActive() ? m_linkHost : nullptr;
+        if (link)
+            secrets << link->secrets();
+        if ((nodes.isEmpty() && !link) || m_pending.size() >= MaxPending) {
             s->abort();
             s->deleteLater();
             continue;
         }
-        // Pseudo, adresse et identité sont communs à toutes les conversations
-        auto *c = nodes.first()->createIncoming(s, this);
+        // Pseudo, adresse et identité sont communs à toutes les conversations (et à la liaison)
+        auto *c = nodes.isEmpty() ? link->createIncoming(s, this) : nodes.first()->createIncoming(s, this);
         c->setSecretGroups(secrets);
         m_pending.insert(c);
         connect(c, &PeerConnection::closed, this, [this, c] {
             if (m_pending.remove(c))
                 c->deleteLater();
         });
-        connect(c, &PeerConnection::secretChosen, this, [this, c, nodes](int group) {
+        connect(c, &PeerConnection::secretChosen, this, [this, c, nodes, link](int group) {
             m_pending.remove(c);
             c->disconnect(this);
             GroupNode *node = nodes.value(group);
-            if (node) {
+            if (group == nodes.size() && link) {
+                link->adopt(c);
+            } else if (node) {
                 node->adoptIncoming(c); // peut la refuser (fermée, puis supprimée par lui)
             } else {
                 c->close();

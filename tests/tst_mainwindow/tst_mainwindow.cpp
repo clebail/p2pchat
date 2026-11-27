@@ -138,6 +138,16 @@ private slots:
         QMenu *notifications = action(menu, "Notifications")->menu();
         emit notifications->aboutToShow();
         QVERIFY(!notifications->actions().isEmpty());
+
+        // Postes liés : ce poste ne peut plus être lié une fois présenté sous sa propre identité
+        QMenu *devices = action(menu, "Mes postes")->menu();
+        emit devices->aboutToShow();
+        QVERIFY(action(devices, "Lier un autre poste…")->isEnabled());
+        QVERIFY(action(devices, "Lier ce poste à mon compte…")->isEnabled());
+        QSettings().setValue("identity/personAnnounced", true);
+        emit devices->aboutToShow();
+        QVERIFY(!action(devices, "Lier ce poste à mon compte…")->isEnabled());
+        QSettings().remove("identity/personAnnounced");
     }
 
     void searchOpensAndCloses()

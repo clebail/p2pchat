@@ -388,6 +388,52 @@
     </message>
 </context>
 <context>
+    <name>DeviceLink::Guest</name>
+    <message>
+        <source>le poste joint n&apos;est pas celui du code</source>
+        <translation>the device reached is not the one of the code</translation>
+    </message>
+    <message>
+        <source>ce poste s&apos;est déjà présenté sous sa propre identité</source>
+        <translation>this device has already introduced itself under its own identity</translation>
+    </message>
+    <message>
+        <source>ce poste s&apos;est déjà présenté sous sa propre identité à d&apos;autres membres : il ne peut plus être lié</source>
+        <translation>this device has already introduced itself to other members under its own identity: it can no longer be linked</translation>
+    </message>
+    <message>
+        <source>réponse invalide du poste hôte</source>
+        <translation>invalid answer from the host device</translation>
+    </message>
+</context>
+<context>
+    <name>DeviceLink::Host</name>
+    <message>
+        <source>liaison interrompue</source>
+        <translation>linking interrupted</translation>
+    </message>
+    <message>
+        <source>code expiré ou déjà utilisé</source>
+        <translation>code expired or already used</translation>
+    </message>
+    <message>
+        <source>le nouveau poste utilise une version trop ancienne de P2P Chat</source>
+        <translation>the new device uses a version of P2P Chat that is too old</translation>
+    </message>
+    <message>
+        <source>c&apos;est ce poste-ci</source>
+        <translation>this is this very device</translation>
+    </message>
+    <message>
+        <source>ce poste est déjà connu comme celui de quelqu&apos;un d&apos;autre</source>
+        <translation>this device is already known as someone else&apos;s</translation>
+    </message>
+    <message>
+        <source>certificat de poste invalide</source>
+        <translation>invalid device certificate</translation>
+    </message>
+</context>
+<context>
     <name>Files</name>
     <message>
         <source>%1 octets</source>
@@ -1435,6 +1481,89 @@ Invitation codes already given will no longer work for people who have not joine
     <message>
         <source>&lt;p&gt;Ce code vaut pour tous ses postes et tous les vôtres.&lt;/p&gt;</source>
         <translation>&lt;p&gt;This code covers all their devices and all of yours.&lt;/p&gt;</translation>
+    </message>
+    <message>
+        <source>C&apos;est un code de liaison de poste : utilisez-le avec ⋮ → Lier ce poste à mon compte…</source>
+        <translation>This is a device linking code: use it with ⋮ → Link this device to my account…</translation>
+    </message>
+    <message>
+        <source>Lier un autre poste</source>
+        <translation>Link another device</translation>
+    </message>
+    <message>
+        <source>&lt;p&gt;Sur le nouveau poste, ouvrez P2P Chat, puis ⋮ → &lt;b&gt;Lier ce poste à mon compte…&lt;/b&gt; et saisissez ce code. Il recevra votre identité, votre pseudo, votre avatar et votre dictionnaire, et rejoindra vos conversations avec leurs 30 derniers jours d&apos;historique.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Ce code donne accès à votre identité : ne le transmettez qu&apos;à vous-même.&lt;/b&gt; Il ne sert qu&apos;une fois, pendant 10 minutes.&lt;/p&gt;</source>
+        <translation>&lt;p&gt;On the new device, open P2P Chat, then ⋮ → &lt;b&gt;Link this device to my account…&lt;/b&gt; and enter this code. It will receive your identity, nickname, avatar and dictionary, and join your conversations with their last 30 days of history.&lt;/p&gt;&lt;p&gt;&lt;b&gt;This code gives access to your identity: only pass it on to yourself.&lt;/b&gt; It can be used once, for 10 minutes.&lt;/p&gt;</translation>
+    </message>
+    <message numerus="yes">
+        <source>En attente du nouveau poste… (encore %n minute(s))</source>
+        <translation>
+            <numerusform>Waiting for the new device… (%n minute left)</numerusform>
+            <numerusform>Waiting for the new device… (%n minutes left)</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>✓ Poste lié. Il rejoint %n conversation(s).</source>
+        <translation>
+            <numerusform>✓ Device linked. It is joining %n conversation.</numerusform>
+            <numerusform>✓ Device linked. It is joining %n conversations.</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>⚠ Liaison refusée : %1.</source>
+        <translation>⚠ Linking refused: %1.</translation>
+    </message>
+    <message>
+        <source>⚠ Liaison refusée : %1. Fermez et recommencez pour obtenir un nouveau code.</source>
+        <translation>⚠ Linking refused: %1. Close and start again to get a new code.</translation>
+    </message>
+    <message>
+        <source>Code expiré. Fermez et recommencez pour en obtenir un nouveau.</source>
+        <translation>Code expired. Close and start again to get a new one.</translation>
+    </message>
+    <message>
+        <source>Lier ce poste</source>
+        <translation>Link this device</translation>
+    </message>
+    <message>
+        <source>&lt;p&gt;Ce poste s&apos;est déjà présenté sous sa propre identité aux membres de vos conversations : il ne peut plus être rattaché à un autre compte.&lt;/p&gt;&lt;p&gt;Pour utiliser un même compte sur plusieurs postes, liez-les depuis un poste qui n&apos;a encore rejoint aucune conversation.&lt;/p&gt;</source>
+        <translation>&lt;p&gt;This device has already introduced itself to the members of your conversations under its own identity: it can no longer be attached to another account.&lt;/p&gt;&lt;p&gt;To use one account on several devices, link them from a device that has not joined any conversation yet.&lt;/p&gt;</translation>
+    </message>
+    <message>
+        <source>Sur votre autre poste : ⋮ → Lier un autre poste…, puis collez ici le code affiché.
+Ce poste prendra votre identité, votre pseudo, votre avatar et votre dictionnaire.</source>
+        <translation>On your other device: ⋮ → Link another device…, then paste the code it shows here.
+This device will take your identity, nickname, avatar and dictionary.</translation>
+    </message>
+    <message>
+        <source>C&apos;est le code de ce poste-ci : saisissez-le sur l&apos;autre.</source>
+        <translation>This is this device&apos;s own code: enter it on the other one.</translation>
+    </message>
+    <message>
+        <source>Connexion à votre autre poste par Tor… (jusqu&apos;à une minute)</source>
+        <translation>Connecting to your other device through Tor… (up to a minute)</translation>
+    </message>
+    <message>
+        <source>La liaison a échoué : %1.</source>
+        <translation>Linking failed: %1.</translation>
+    </message>
+    <message numerus="yes">
+        <source>Ce poste est lié à votre compte. %n conversation(s) rejointe(s) : l&apos;historique des 30 derniers jours arrive dès que votre autre poste est joignable.</source>
+        <translation>
+            <numerusform>This device is linked to your account. %n conversation joined: the last 30 days of history will arrive as soon as your other device can be reached.</numerusform>
+            <numerusform>This device is linked to your account. %n conversations joined: the last 30 days of history will arrive as soon as your other device can be reached.</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Mes postes</source>
+        <translation>My devices</translation>
+    </message>
+    <message>
+        <source>Lier un autre poste…</source>
+        <translation>Link another device…</translation>
+    </message>
+    <message>
+        <source>Lier ce poste à mon compte…</source>
+        <translation>Link this device to my account…</translation>
     </message>
 </context>
 <context>

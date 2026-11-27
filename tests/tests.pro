@@ -14,6 +14,7 @@ SUBDIRS += \
     tst_mentioncompleter \
     tst_notifications \
     tst_person \
+    tst_devicelink \
     tst_protocol \
     tst_reactions \
     tst_safetynumber \
