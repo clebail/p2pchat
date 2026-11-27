@@ -105,7 +105,10 @@ private slots:
         QCOMPARE(QFileInfo(dataDir + "/torrc-defaults").size(), qint64(0));
         QFile args(m_home.filePath("arguments"));
         QVERIFY(args.open(QIODevice::ReadOnly));
-        QCOMPARE(QString::fromUtf8(args.readAll()).split('\n', Qt::SkipEmptyParts),
+        // macOS passe les arguments en forme décomposée (NFD, QFile::encodeName) : comparés en forme composée
+        QCOMPARE(QString::fromUtf8(args.readAll())
+                     .normalized(QString::NormalizationForm_C)
+                     .split('\n', Qt::SkipEmptyParts),
                  QStringList({"-f", dataDir + "/torrc", "--defaults-torrc", dataDir + "/torrc-defaults"}));
         // Dossier de données réservé à l'utilisateur
         QCOMPARE(QFileInfo(dataDir).permissions() & (QFile::ReadGroup | QFile::ReadOther), QFile::Permissions());

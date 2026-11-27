@@ -6,6 +6,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
+#include <QMessageBox>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -186,10 +187,27 @@ int main(int argc, char *argv[])
     // fermée aussitôt, comme par Échap, sinon elle attendrait une réponse indéfiniment.
     QTimer closer;
     QObject::connect(&closer, &QTimer::timeout, [] {
-        if (QWidget *modal = QApplication::activeModalWidget())
-            modal->close();
+        if (QWidget *modal = QApplication::activeModalWidget()) {
+            if (auto *dialog = qobject_cast<QDialog *>(modal))
+                dialog->reject();
+            else
+                modal->close();
+        }
     });
     closer.start(50);
+#ifdef Q_OS_WIN
+    // Qt 5 sous Windows : QMessageBox::showEvent demande le menu système de la fenêtre à l'interface native de
+    // la plateforme, absente en « offscreen » (pointeur nul, plantage). Ce qu'il fait n'a pas lieu d'être ici.
+    struct SkipMessageBoxShow : QObject
+    {
+        bool eventFilter(QObject *o, QEvent *e) override
+        {
+            return e->type() == QEvent::Show && qobject_cast<QMessageBox *>(o);
+        }
+    } skipShow;
+    if (QGuiApplication::platformName() == QLatin1String("offscreen"))
+        app.installEventFilter(&skipShow);
+#endif
     TestMainWindow test;
     const int result = QTest::qExec(&test, argc, argv);
 #ifdef Q_OS_WIN
