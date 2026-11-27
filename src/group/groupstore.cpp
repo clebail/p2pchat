@@ -50,9 +50,15 @@ QString GroupStore::nickname() const
     return m_settings.value("nickname").toString();
 }
 
-void GroupStore::setNickname(const QString &nick)
+void GroupStore::setNickname(const QString &nick, qint64 timestampMs)
 {
     m_settings.setValue("nickname", nick.left(Protocol::MaxNickLength));
+    m_settings.setValue("nicknameTime", timestampMs > 0 ? timestampMs : QDateTime::currentMSecsSinceEpoch());
+}
+
+qint64 GroupStore::nicknameTime() const
+{
+    return m_settings.value("nicknameTime").toLongLong();
 }
 
 QByteArray GroupStore::secret() const
@@ -372,6 +378,26 @@ void GroupStore::shareHistoryWith(const QString &onion)
     QJsonObject seen = readObject(m_settings, key("firstSeen"));
     seen.insert(onion, 0.0);
     writeObject(m_settings, key("firstSeen"), seen);
+}
+
+QStringList GroupStore::promotedDevices() const
+{
+    return m_settings.value(key("group/promotedDevices")).toStringList();
+}
+
+void GroupStore::setPromotedDevices(const QStringList &onions)
+{
+    m_settings.setValue(key("group/promotedDevices"), onions);
+}
+
+QJsonObject GroupStore::syncedConversations() const
+{
+    return readObject(m_settings, "self/conversations");
+}
+
+void GroupStore::setSyncedConversations(const QJsonObject &records)
+{
+    writeObject(m_settings, "self/conversations", records);
 }
 
 qint64 GroupStore::shareHistoryUntil() const

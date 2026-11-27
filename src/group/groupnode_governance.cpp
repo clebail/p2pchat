@@ -237,6 +237,7 @@ void GroupNode::onGovernance(PeerConnection *c, const QJsonObject &o)
         return;
     if (!m_group.inGroup())
         return; // exclus
+    promoteMyDevices(); // nous venons peut-être d'être nommé
     // Nouveaux administrateurs : leurs modérations reçues avant cet enregistrement comptent désormais
     for (const QString &target : m_edits.targets())
         emit messageEdited(target);
@@ -528,8 +529,30 @@ void GroupNode::onCertificates(PeerConnection *c, const QJsonObject &o)
     for (PeerConnection *p : m_active.values()) // relais, pour ceux qui ne sont reliés qu'à nous
         if (p != c && p->peerVersion() >= Person::Version)
             p->send({{"t", "devices"}, {"c", fresh}});
+    promoteMyDevices();
     emit devicesChanged();
     emit stateChanged();
+}
+
+void GroupNode::promoteMyDevices()
+{
+    if (m_chain.isEmpty() || m_ownOnion.isEmpty() || !isAdmin())
+        return;
+    // Un seul de nos postes administrateurs s'en charge, le premier dans l'ordre des adresses : deux nominations
+    // simultanées feraient diverger la chaîne de gouvernance
+    const QStringList current = admins();
+    for (const QString &a : current)
+        if (a < m_ownOnion && m_group.isMyDevice(a))
+            return;
+    QStringList done = m_group.promotedDevices();
+    for (const Member &m : m_group.members()) {
+        if (!m_group.isMyDevice(m.onion) || current.contains(m.onion) || done.contains(m.onion)
+            || excludedMembers().contains(m.onion))
+            continue;
+        done << m.onion; // une fois : s'il perd ce rôle ensuite, c'est voulu
+        m_group.setPromotedDevices(done);
+        setAdmin(m.onion, true);
+    }
 }
 
 std::optional<Invitation> GroupNode::invitationForMyDevice(const QString &onion, const QByteArray &key)

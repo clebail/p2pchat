@@ -333,12 +333,9 @@ QWidget *MainWindow::buildComposerBar(QWidget *parent)
     m_input->setPlaceholderText(tr("Message"));
     m_input->setToolTip(tr("Entrée : envoyer · Maj+Entrée : aller à la ligne · `code`, ```bloc```"));
     connect(m_input, &Composer::wordAdded, this, [this](const QString &word) {
-        QStringList words = m_settings.value("spelling/words").toStringList();
-        if (!words.contains(word))
-            m_settings.setValue("spelling/words", words << word);
-        if (m_spell)
-            m_spell->addWord(word);
-        m_input->recheckSpelling();
+        addWords({word});
+        if (m_sync)
+            m_sync->publish(); // nos autres postes l'apprennent aussi
     });
     m_mentions = new MentionCompleter(m_input);
     connect(m_input, &Composer::attachmentInserted, this, &MainWindow::attachFromMime); // collage, dépôt

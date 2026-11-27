@@ -27,8 +27,9 @@ class QTcpSocket;
 //   1. hôte → invité : {"t":"link-offer", "p" (clé de personne), "n" (pseudo), "a"/"at" (avatar et sa date),
 //      "w" (dictionnaire personnel)}
 //   2. invité → hôte : {"t":"link-cert", "c"} : son certificat de poste, signé par la personne reçue et par lui
-//   3. hôte → invité : {"t":"link-convs", "c":[{"c" (code d'invitation), "n" (nom donné sur l'hôte)}]} : les
-//      conversations à rejoindre ; l'hôte leur partage les 30 derniers jours de l'historique
+//   3. hôte → invité : {"t":"link-convs", "c":[{"c" (code d'invitation), "n" (nom donné sur l'hôte)}], "s"} : les
+//      conversations à rejoindre (l'hôte leur partage les 30 derniers jours de l'historique), et le groupe caché de
+//      nos postes (code « s », cf. devicesync.h)
 //   Refus : {"t":"link-refused", "r"} (code expiré ou déjà utilisé, poste déjà rattaché à quelqu'un d'autre…)
 //
 // Un poste qui a déjà montré son certificat à d'autres ne peut plus être lié : ils l'ont rattaché à sa propre
@@ -63,13 +64,19 @@ struct Conversation
     QString name; // nom donné sur l'hôte (vide : aucun)
 };
 
+struct Offer
+{
+    QList<Conversation> conversations;
+    std::optional<Invitation> self; // groupe de nos postes (synchronisation)
+};
+
 // Poste déjà utilisé : attend le nouveau poste (connexion entrante, cf. Switchboard::setLinkHost)
 class Host : public QObject
 {
     Q_OBJECT
 public:
-    // Conversations à rejoindre, préparées pour ce poste (historique partagé, clé connue)
-    using Provider = std::function<QList<Conversation>(const QString &onion, const QByteArray &key)>;
+    // Conversations à rejoindre, préparées pour ce poste (historique partagé, clé connue), et groupe de nos postes
+    using Provider = std::function<Offer(const QString &onion, const QByteArray &key)>;
 
     Host(GroupStore &identity, const QString &ownOnion, const QStringList &words, Provider provider,
          qint64 validityMs = ValidityMs, QObject *parent = nullptr);
@@ -117,7 +124,7 @@ public:
 
 signals:
     // Lié : personne, pseudo et avatar enregistrés ; restent les mots et les conversations
-    void linked(const DeviceLink::Profile &profile, const QList<DeviceLink::Conversation> &conversations);
+    void linked(const DeviceLink::Profile &profile, const DeviceLink::Offer &offer);
     void failed(const QString &reason);
 
 private:
@@ -136,3 +143,4 @@ private:
 
 Q_DECLARE_METATYPE(DeviceLink::Profile)
 Q_DECLARE_METATYPE(DeviceLink::Conversation)
+Q_DECLARE_METATYPE(DeviceLink::Offer)

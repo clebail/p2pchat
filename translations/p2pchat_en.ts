@@ -1565,6 +1565,26 @@ This device will take your identity, nickname, avatar and dictionary.</translati
         <source>Lier ce poste à mon compte…</source>
         <translation>Link this device to my account…</translation>
     </message>
+    <message>
+        <source>
+
+Vous la quitterez aussi sur vos autres postes.</source>
+        <translation>
+
+You will also leave it on your other devices.</translation>
+    </message>
+    <message>
+        <source>Vous avez quitté la conversation, sur tous vos postes.</source>
+        <translation>You left the conversation, on all your devices.</translation>
+    </message>
+    <message>
+        <source>Conversation rejointe depuis un autre de vos postes.</source>
+        <translation>Conversation joined from another of your devices.</translation>
+    </message>
+    <message>
+        <source>Vous avez quitté la conversation sur un autre de vos postes.</source>
+        <translation>You left the conversation on another of your devices.</translation>
+    </message>
 </context>
 <context>
     <name>Notifier</name>

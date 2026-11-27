@@ -175,6 +175,7 @@ public:
     // ---- État (pour l'affichage)
     bool hasConnections() const { return !m_active.isEmpty(); }
     bool isConnected(const QString &onion) const { return m_active.contains(onion); }
+    QStringList connectedPeers() const { return m_active.keys(); }
     bool isAttempting(const QString &onion) const { return m_attempts.contains(onion); }
     bool isMyDevice(const QString &onion) const { return m_group.isMyDevice(onion); } // un autre de nos postes
     int peerVersion(const QString &onion) const; // 0 : pas connecté
@@ -218,6 +219,8 @@ signals:
     void peerLost(const QString &onion);
     void allClosed();
     void terminalMessage(const QString &onion, const QJsonObject &obj);
+    // Synchronisation entre nos postes (type « self-… », cf. devicesync.h) : seulement d'un de nos postes
+    void selfMessage(const QString &onion, const QJsonObject &obj);
 
 private:
     PeerConnection *newConnection(QTcpSocket *socket, bool outgoing);
@@ -267,6 +270,7 @@ private:
     QJsonObject ownCertificate() const;
     void sendCertificates(PeerConnection *c); // le nôtre et ceux des membres
     void onCertificates(PeerConnection *c, const QJsonObject &o);
+    void promoteMyDevices(); // administrateur : nos autres postes le deviennent aussi (une fois chacun)
     void sendAvatarInventory(PeerConnection *c);
     void onAvatarInventory(PeerConnection *c, const QJsonObject &o);
     void onAvatar(PeerConnection *c, const QJsonObject &o);

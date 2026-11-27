@@ -169,11 +169,13 @@ void Host::onReceived(PeerConnection *c, const QJsonObject &o)
     m_done = true;
     m_identity.setCertificate(c->peerOnion(), cert);
     QJsonArray list;
-    const QList<Conversation> conversations = m_provider ? m_provider(c->peerOnion(), c->peerIdentityKey())
-                                                         : QList<Conversation>();
-    for (const Conversation &conv : conversations.mid(0, MaxConversations))
+    const Offer offer = m_provider ? m_provider(c->peerOnion(), c->peerIdentityKey()) : Offer();
+    for (const Conversation &conv : offer.conversations.mid(0, MaxConversations))
         list.append(QJsonObject{{"c", conv.invitation.toCode()}, {"n", conv.name}});
-    c->send({{"t", "link-convs"}, {"c", list}});
+    QJsonObject convs{{"t", "link-convs"}, {"c", list}};
+    if (offer.self)
+        convs.insert("s", offer.self->toCode());
+    c->send(convs);
     emit linked(c->peerOnion());
 }
 
@@ -185,7 +187,7 @@ Guest::Guest(GroupStore &identity, const QString &ownOnion, const Code &code, QT
                                       identity.identitySeed(), this))
 {
     qRegisterMetaType<Profile>();
-    qRegisterMetaType<QList<Conversation>>();
+    qRegisterMetaType<Offer>();
     connect(m_connection, &PeerConnection::ready, this, [this] {
         // C'est bien le poste du code (sa clé), et pas un intrus qui en connaîtrait le secret
         if (m_connection->peerOnion() != m_code.onion || m_connection->peerIdentityKey() != m_code.identityKey)
@@ -247,21 +249,23 @@ void Guest::onReceived(const QJsonObject &o)
         return;
     }
     if (type == "link-convs") {
-        QList<Conversation> conversations;
+        Offer offer;
         for (const QJsonValue &v : o.value("c").toArray()) {
             const QJsonObject c = v.toObject();
             const auto inv = Invitation::fromCode(c.value("c").toString());
-            if (!inv || inv->onion != m_code.onion || conversations.size() >= MaxConversations)
+            if (!inv || inv->onion != m_code.onion || offer.conversations.size() >= MaxConversations)
                 continue;
-            conversations.append({*inv, c.value("n").toString().trimmed().left(100)});
+            offer.conversations.append({*inv, c.value("n").toString().trimmed().left(100)});
         }
+        if (const auto self = Invitation::fromCode(o.value("s").toString()); self && self->onion == m_code.onion)
+            offer.self = *self;
         if (!m_profile.nickname.isEmpty())
             m_identity.setNickname(m_profile.nickname);
         if (!m_profile.avatar.isEmpty())
             m_identity.setOwnAvatar(m_profile.avatar, m_profile.avatarTime);
         m_finished = true;
         m_connection->close();
-        emit linked(m_profile, conversations);
+        emit linked(m_profile, offer);
     }
 }
 

@@ -352,6 +352,7 @@ void MainWindow::changeAvatar()
             m_group->setOwnAvatar(jpeg, ts);
             for (const auto &c : m_convs)
                 c->node().publishAvatar();
+            m_sync->publish(); // nos autres postes le prennent aussi
             return true;
         });
 }

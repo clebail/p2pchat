@@ -19,6 +19,7 @@ SOURCES += \
     $$PWD/network/connectionpolicy.cpp \
     $$PWD/group/conversations.cpp \
     $$PWD/group/devicelink.cpp \
+    $$PWD/group/devicesync.cpp \
     $$PWD/crypto/crypto.cpp \
     $$PWD/messages/edits.cpp \
     $$PWD/files/filestore.cpp \
@@ -49,6 +50,7 @@ HEADERS += \
     $$PWD/network/connectionpolicy.h \
     $$PWD/group/conversations.h \
     $$PWD/group/devicelink.h \
+    $$PWD/group/devicesync.h \
     $$PWD/crypto/crypto.h \
     $$PWD/messages/edits.h \
     $$PWD/files/filestore.h \

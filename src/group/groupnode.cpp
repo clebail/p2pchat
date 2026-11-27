@@ -588,6 +588,7 @@ void GroupNode::setActive(PeerConnection *c)
     sendConversationAvatar(c);
     sendAvatarInventory(c);
     sendCertificates(c);
+    promoteMyDevices();
     if (isNew)
         broadcast(membersMessage(), c);
     c->send(inventoryMessage()); // après la liste des membres : les clés des auteurs sont connues
@@ -743,6 +744,9 @@ void GroupNode::onReceived(PeerConnection *c, const QJsonObject &o)
     const QString type = o.value("t").toString();
     if (type.startsWith(QLatin1String("term-"))) {
         emit terminalMessage(c->peerOnion(), o);
+    } else if (type.startsWith(QLatin1String("self-"))) {
+        if (m_group.isMyDevice(c->peerOnion())) // synchronisation entre nos postes (cf. devicesync.h)
+            emit selfMessage(c->peerOnion(), o);
     } else if (type == "members") {
         onMembers(c, o);
     } else if (type == "presence") {

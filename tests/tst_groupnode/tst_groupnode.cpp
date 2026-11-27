@@ -1,6 +1,7 @@
 #include "avatar.h"
 #include "crypto.h"
 #include "devicelink.h"
+#include "devicesync.h"
 #include "groupnode.h"
 #include "edits.h"
 #include "governance.h"
@@ -583,7 +584,8 @@ private slots:
 
     void partialHolderIsASource()
     {
-        // B n'a qu'un morceau sur deux et ne joint pas A ; C joint les deux
+        // B n'a qu'un morceau sur deux et ne joint pas A ; C ne joint d'abord que B (sinon A, plus rapide, pourrait
+        // tout lui envoyer avant que C apprenne ce qu'a B), puis les deux
         mesh();
         Peer &a = peer('a'), &b = peer('b'), &c = peer('c');
         const QByteArray content = Crypto::randomBytes(3 * 1024 * 1024);
@@ -594,13 +596,20 @@ private slots:
         for (int i = 0; i < info->chunkCount(); i += 2)
             b.node->files().writeChunk(id, i, a.node->files().readChunk(id, i));
         m_cut.insert({a.onion, b.onion});
+        m_cut.insert({a.onion, c.onion});
         b.node->setOffline();
-        QTRY_VERIFY(!a.node->isConnected(b.onion));
+        c.node->setOffline();
+        QTRY_VERIFY(!a.node->isConnected(b.onion) && !a.node->isConnected(c.onion));
         start(b, 'b');
+        start(c, 'c');
+        b.node->loadHistory(); // l'annonce du fichier, comme au lancement de l'application
+        c.node->loadHistory();
         b.node->download(id); // reprise : rien de neuf à attendre de C, mais B annonce ce qu'il a
         b.node->setOnline(b.onion);
+        c.node->setOnline(c.onion);
         QTRY_VERIFY(linked(b, c));
         QVERIFY(!b.node->isConnected(a.onion));
+        QVERIFY(!c.node->isConnected(a.onion));
 
         QSet<QString> seen; // sources vues pendant le téléchargement
         QObject guard;
@@ -610,9 +619,12 @@ private slots:
                     seen.insert(source);
         });
         c.node->download(id);
+        QTRY_COMPARE(c.node->fileState(id).received, (info->chunkCount() + 1) / 2); // ceux de B
+        QVERIFY(seen.contains(b.onion));
+        m_cut.remove({a.onion, c.onion}); // puis le reste, de A
+        c.node->reconnectNow();
         QTRY_COMPARE(c.node->fileState(id).kind, GroupNode::FileState::Complete);
         QCOMPARE(contentOf(c, id), content);
-        QVERIFY(seen.contains(b.onion)); // des morceaux pairs sont venus de B
         // Et B termine grâce à C, devenu source à son tour
         QTRY_COMPARE(b.node->fileState(id).kind, GroupNode::FileState::Complete);
         QCOMPARE(contentOf(b, id), content);
@@ -1213,10 +1225,10 @@ private:
         l.host = std::make_unique<DeviceLink::Host>(
             *host.store, host.onion, QStringList{"Kyxar", "p2pchat"},
             [node, name](const QString &onion, const QByteArray &key) {
-                QList<DeviceLink::Conversation> list;
+                DeviceLink::Offer offer;
                 if (const auto inv = node->invitationForMyDevice(onion, key))
-                    list.append({*inv, name});
-                return list;
+                    offer.conversations.append({*inv, name});
+                return offer;
             },
             validityMs);
         l.board = std::make_unique<Switchboard>();
@@ -1283,7 +1295,7 @@ private slots:
         QVERIFY(a.store->isMyDevice(e.onion));
         const auto profile = l.guestLinked->at(0).at(0).value<DeviceLink::Profile>();
         QCOMPARE(profile.words, QStringList({"Kyxar", "p2pchat"}));
-        const auto conversations = l.guestLinked->at(0).at(1).value<QList<DeviceLink::Conversation>>();
+        const auto conversations = l.guestLinked->at(0).at(1).value<DeviceLink::Offer>().conversations;
         QCOMPARE(conversations.size(), 1);
         QCOMPARE(conversations.first().name, QString("Chez nous"));
 
@@ -1346,6 +1358,141 @@ private slots:
         QCOMPARE(forgedLink.guestFailed->at(0).at(0).toString(), QString("le poste joint n'est pas celui du code"));
         QCOMPARE(forgedLink.hostLinked->count(), 0);
         QVERIFY(e.store->personKey() != f.store->personKey());
+    }
+
+    // Administrateur : nos autres postes le deviennent aussi, une fois (un retrait ensuite est respecté)
+    void myDevicesBecomeAdmins()
+    {
+        Peer &a = peer('a'), &b = peer('b'), &e = peer('e');
+        e.store->setPersonSeed(a.store->personSeed(), a.store->personSince());
+        a.node->createGroup();
+        a.node->setOnline(a.onion);
+        b.node->join(invitation(a));
+        b.node->setOnline(b.onion);
+        e.node->join(invitation(a));
+        e.node->setOnline(e.onion);
+        QTRY_VERIFY(linked(a, e) && linked(a, b) && linked(b, e));
+        QTRY_VERIFY(a.node->isAdmin(e.onion));
+        QTRY_VERIFY(b.node->isAdmin(e.onion)); // vu de tous
+        QTRY_VERIFY(e.node->isAdmin());
+        QVERIFY(!a.node->isAdmin(b.onion));
+
+        // Rôle retiré à e : pas rendu à la reconnexion
+        QVERIFY(a.node->setAdmin(e.onion, false));
+        QTRY_VERIFY(!e.node->isAdmin());
+        e.node->setOffline();
+        e.node->setOnline(e.onion);
+        QTRY_VERIFY(linked(a, e));
+        QTest::qWait(300);
+        QVERIFY(!a.node->isAdmin(e.onion));
+        QVERIFY(!e.node->isAdmin());
+    }
+
+private:
+    // Synchronisation entre nos postes (cf. devicesync.h), sur le groupe de nos postes, sans fenêtre
+    struct FakeHooks : DeviceSync::Hooks
+    {
+        QString onion;
+        QStringList groups, wordList, left;
+        QHash<QString, QString> names;
+        QList<QPair<Invitation, QString>> joined;
+        int nickChanges = 0, avatarChanges = 0;
+        QStringList joinedGroups() const override { return groups; }
+        QString localName(const QString &g) const override { return names.value(g); }
+        std::optional<Invitation> invitationFor(const QString &g, const QString &, const QByteArray &) override
+        {
+            if (!groups.contains(g))
+                return std::nullopt;
+            return Invitation{Crypto::randomBytes(16), onion, "moi", QByteArray(32, 'k'), g};
+        }
+        bool joinConversation(const Invitation &inv, const QString &name) override
+        {
+            joined.append({inv, name});
+            groups << inv.groupId;
+            return true;
+        }
+        void leaveConversation(const QString &g) override
+        {
+            groups.removeAll(g);
+            left << g;
+        }
+        QStringList words() const override { return wordList; }
+        void profileChanged(bool nickname, bool avatar, const QStringList &newWords) override
+        {
+            nickChanges += nickname ? 1 : 0;
+            avatarChanges += avatar ? 1 : 0;
+            wordList += newWords;
+        }
+    };
+
+private slots:
+    void myDevicesStayInSync()
+    {
+        Peer &a = peer('a'), &e = peer('e'), &b = peer('b');
+        e.store->setPersonSeed(a.store->personSeed(), a.store->personSince());
+        e.store->setNickname(a.nick, a.store->nicknameTime()); // comme après la liaison
+        const QString g1 = QString(64, '1'), g2 = QString(64, '2');
+        FakeHooks ha, he;
+        ha.onion = a.onion;
+        he.onion = e.onion;
+        ha.groups = QStringList{g1};
+        ha.names.insert(g1, "Famille");
+        ha.wordList = QStringList{"Kyxar"};
+        he.wordList = QStringList{"Tor"};
+        DeviceSync::Engine ea(*a.store, *a.node, ha), ee(*e.store, *e.node, he);
+
+        // Le groupe de nos postes : à la connexion, chacun envoie son état
+        a.node->createGroup();
+        a.node->setOnline(a.onion);
+        e.node->join(invitation(a));
+        e.node->setOnline(e.onion);
+        QTRY_VERIFY(linked(a, e));
+        QTRY_COMPARE(he.joined.size(), 1); // rejointe sur e, avec son nom, par le code de a
+        QCOMPARE(he.joined.first().first.groupId, g1);
+        QCOMPARE(he.joined.first().first.onion, a.onion);
+        QCOMPARE(he.joined.first().second, QString("Famille"));
+        QTRY_VERIFY(he.wordList.contains("Kyxar")); // dictionnaires réunis
+        QTRY_VERIFY(ha.wordList.contains("Tor"));
+        QCOMPARE(ha.joined.size(), 0);
+
+        // Pseudo et avatar : le plus récent l'emporte
+        const qint64 later = QDateTime::currentMSecsSinceEpoch() + 1000;
+        e.store->setNickname("Nouveau pseudo", later);
+        QImage blue(16, 16, QImage::Format_RGB32);
+        blue.fill(Qt::blue);
+        e.store->setOwnAvatar(Avatar::fromImage(blue), later);
+        ee.publish();
+        QTRY_COMPARE(a.store->nickname(), QString("Nouveau pseudo"));
+        QTRY_COMPARE(a.store->ownAvatar(), e.store->ownAvatar());
+        QCOMPARE(ha.nickChanges, 1);
+        QCOMPARE(ha.avatarChanges, 1);
+        a.store->setNickname("Plus ancien", later - 5000); // n'écrase pas le plus récent chez e
+        ea.publish();
+        QTest::qWait(200);
+        QCOMPARE(e.store->nickname(), QString("Nouveau pseudo"));
+
+        // Quittée sur e : quittée sur a ; rejointe de nouveau sur a : rejointe sur e
+        QTest::qWait(5); // la décision suivante est strictement plus récente
+        he.groups.removeAll(g1);
+        ee.noteLeft(g1);
+        QTRY_COMPARE(ha.left, QStringList({g1}));
+        QVERIFY(!ha.groups.contains(g1));
+        QTest::qWait(5);
+        ha.groups << g1;
+        ea.checkJoined();
+        QTRY_COMPARE(he.joined.size(), 2);
+
+        // Quelqu'un d'autre (b, admis dans le groupe de nos postes) ne peut rien nous imposer
+        b.node->join(invitation(a));
+        b.node->setOnline(b.onion);
+        QTRY_VERIFY(linked(a, b));
+        b.node->sendTo(a.onion, {{"t", "self-state"},
+                                 {"n", "Intrus"},
+                                 {"nt", double(later + 100000)},
+                                 {"c", QJsonArray{QJsonObject{{"g", g2}, {"in", false}, {"ts", double(later + 100000)}}}}});
+        QTest::qWait(300);
+        QCOMPARE(a.store->nickname(), QString("Nouveau pseudo"));
+        QVERIFY(!ha.left.contains(g2));
     }
 
     void directInvitation()

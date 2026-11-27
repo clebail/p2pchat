@@ -29,7 +29,8 @@ public:
     void migrateLegacy();
 
     QString nickname() const;
-    void setNickname(const QString &nick);
+    void setNickname(const QString &nick, qint64 timestampMs = 0); // 0 : maintenant
+    qint64 nicknameTime() const; // date du choix (synchronisé entre nos postes : le plus récent l'emporte)
 
     // Secret du groupe (sert de mot de passe) ; vide : pas de groupe
     QByteArray secret() const;
@@ -86,6 +87,13 @@ public:
     bool pinKey(const QString &onion, const QByteArray &pub, qint64 nowMs); // false si une autre clé est connue
     qint64 firstSeen(const QString &onion) const; // 0 : avant cette fonctionnalité, ou historique partagé
     void shareHistoryWith(const QString &onion); // il recevra les 30 derniers jours (un autre de nos postes)
+    // Nos autres postes déjà nommés administrateurs par nous dans cette conversation (une seule fois : un retrait
+    // ultérieur est respecté)
+    QStringList promotedDevices() const;
+    void setPromotedDevices(const QStringList &onions);
+    // Conversations rejointes ou quittées, synchronisées entre nos postes (cf. devicesync.h), communes à toutes
+    QJsonObject syncedConversations() const;
+    void setSyncedConversations(const QJsonObject &records);
 
     // Avatars (cf. avatar.h), communs à toutes les conversations. Le nôtre : image JPEG (vide : aucun) et date du
     // choix (0 : jamais choisi) ; ceux des autres : enregistrements reçus et vérifiés (vide : inconnu)

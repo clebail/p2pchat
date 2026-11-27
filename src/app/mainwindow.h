@@ -3,6 +3,7 @@
 #include "chatview.h"
 #include "conversation.h"
 #include "conversations.h"
+#include "devicesync.h"
 #include "groupnode.h"
 #include "groupstore.h"
 #include "invitation.h"
@@ -48,13 +49,13 @@ class Switchboard;
 class QTcpSocket;
 namespace DeviceLink {
 struct Profile;
-struct Conversation;
+struct Offer;
 } // namespace DeviceLink
 
 // Fenêtre principale : la liste des conversations, celle affichée, Tor, les notifications et la console
 // partagée. Chaque conversation (connexions, synchronisation, historique) est un GroupNode.
 
-class MainWindow : public QMainWindow
+class MainWindow : public QMainWindow, private DeviceSync::Hooks
 {
     Q_OBJECT
 public:
@@ -146,7 +147,20 @@ private:
     // Postes liés (mainwindow_link.cpp, cf. devicelink.h)
     void linkAnotherDevice(); // ce poste donne son identité à un nouveau
     void linkThisDevice();    // ce poste prend celle d'un autre
-    void applyLink(const DeviceLink::Profile &profile, const QList<DeviceLink::Conversation> &conversations);
+    void applyLink(const DeviceLink::Profile &profile, const DeviceLink::Offer &offer);
+    // Synchronisation entre nos postes (cf. devicesync.h) : groupe caché de nos postes, et ce qu'il demande
+    void setupDeviceSync();
+    bool hasOtherDevices() const;
+    Conversation *conversationByGroup(const QString &groupId) const;
+    QStringList joinedGroups() const override;
+    QString localName(const QString &groupId) const override;
+    std::optional<Invitation> invitationFor(const QString &groupId, const QString &onion,
+                                            const QByteArray &key) override;
+    bool joinConversation(const Invitation &invitation, const QString &name) override;
+    void leaveConversation(const QString &groupId) override;
+    QStringList words() const override;
+    void profileChanged(bool nickname, bool avatar, const QStringList &newWords) override;
+    void addWords(const QStringList &words); // dictionnaire personnel
     bool joinLinked(const Invitation &invitation, const QString &name); // false : déjà membre, ou refusé
     QTcpSocket *dialTor(const QString &onion); // connexion lancée par le proxy de Tor ; nullptr : Tor arrêté
 
@@ -196,6 +210,11 @@ private:
     QHash<Conversation *, QListWidgetItem *> m_items;   // ligne de chacune dans la colonne
     QHash<Conversation *, TerminalSharing *> m_sharings; // console partagée de chacune
     // Conversation affichée, et raccourcis vers son état, son groupe, sa vue et sa console
+    // Groupe caché de nos postes liés (cf. devicesync.h) ; son état sert aussi pour l'identité commune
+    std::unique_ptr<GroupStore> m_selfStore;
+    std::unique_ptr<GroupNode> m_selfNode;
+    std::unique_ptr<DeviceSync::Engine> m_sync;
+    QTimer *m_syncCheck = nullptr; // conversations rejointes ici : nos postes prévenus (regroupé)
     Conversation *m_shown = nullptr;
     GroupStore *m_group = nullptr;
     GroupNode *m_node = nullptr;

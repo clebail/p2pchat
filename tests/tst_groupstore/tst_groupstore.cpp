@@ -272,6 +272,29 @@ private slots:
         QVERIFY(!m_settings->contains("group/shareHistoryUntil"));
     }
 
+    // Synchronisation entre nos postes : date du pseudo, postes nommés administrateurs, conversations
+    void deviceSyncState()
+    {
+        m_store->setNickname("Alice", 1234);
+        QCOMPARE(m_store->nicknameTime(), qint64(1234));
+        const qint64 before = QDateTime::currentMSecsSinceEpoch();
+        m_store->setNickname("Alice B");
+        QVERIFY(m_store->nicknameTime() >= before); // maintenant, par défaut
+
+        m_store->setSecret(QByteArray(16, 's'));
+        QVERIFY(m_store->promotedDevices().isEmpty());
+        m_store->setPromotedDevices({onion('e')});
+        reopen();
+        QCOMPARE(m_store->promotedDevices(), QStringList({onion('e')}));
+        m_store->leaveGroup(); // propre à la conversation
+        QVERIFY(m_store->promotedDevices().isEmpty());
+
+        const QJsonObject records{{QString(64, '1'), QJsonObject{{"in", true}, {"ts", 5.0}}}};
+        m_store->setSyncedConversations(records);
+        reopen();
+        QCOMPARE(m_store->syncedConversations(), records);
+    }
+
     // Un autre de nos postes (liaison) : les 30 derniers jours, même rencontré avant
     void historySharedWithMyDevice()
     {

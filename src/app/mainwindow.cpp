@@ -156,6 +156,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     for (const QString &id : m_conversations.ids())
         openConversation(id);
     showConversation(m_convs.empty() ? newConversation() : m_convs.front().get());
+    setupDeviceSync();
     startTor();
 }
 
@@ -164,6 +165,9 @@ MainWindow::~MainWindow()
     // Les conversations (et leurs groupes) avant la fenêtre : plus aucun de leurs signaux vers nous
     for (const auto &c : m_convs)
         c->disconnect(this);
+    m_sync.reset();
+    if (m_selfNode)
+        m_selfNode->disconnect(this);
 #ifdef P2P_TERMINAL
     qDeleteAll(m_sharings);
 #endif
@@ -223,6 +227,11 @@ Conversation *MainWindow::openConversation(const QString &id)
     });
     setupTerminalSharing(c);
     c->loadHistory();
+    // Conversation rejointe ici : nos autres postes la rejoignent aussi (cf. devicesync.h)
+    connect(&c->node(), &GroupNode::stateChanged, this, [this] {
+        if (m_syncCheck)
+            m_syncCheck->start();
+    });
     if (!m_onion.isEmpty())
         c->node().setOnline(m_onion);
     updateConversationItem(c);
@@ -614,6 +623,8 @@ void MainWindow::startTor()
     m_onion.clear();
     for (const auto &c : m_convs)
         c->node().setOffline();
+    if (m_selfNode)
+        m_selfNode->setOffline();
     m_torError.clear();
     m_torStatus.clear();
 
@@ -627,6 +638,8 @@ void MainWindow::startTor()
         m_onion = onion;
         for (const auto &c : m_convs)
             c->node().setOnline(onion);
+        if (m_selfNode)
+            m_selfNode->setOnline(onion);
         if (Conversation *c = conversationById(m_inviteFor)) {
             m_inviteFor.clear();
             showConversation(c);
@@ -644,6 +657,8 @@ void MainWindow::onTorFailed(const QString &error)
     m_onion.clear();
     for (const auto &c : m_convs)
         c->node().setOffline();
+    if (m_selfNode)
+        m_selfNode->setOffline();
     updateStatus();
 
     QMessageBox box(QMessageBox::Warning, tr("P2P Chat"),
@@ -1085,19 +1100,25 @@ void MainWindow::changeNickname()
     m_group->setNickname(n); // commun à toutes les conversations
     for (const auto &c : m_convs)
         c->node().announceNickname();
+    m_sync->publish(); // et nos autres postes
 }
 
 void MainWindow::resetAll()
 {
+    const bool everywhere = hasOtherDevices() && !m_node->groupId().isEmpty();
     if (QMessageBox::question(this, tr("Quitter la conversation"),
                               tr("Quitter « %1 » ?\n"
                                  "Les autres membres en sont avertis. Il faudra une nouvelle invitation pour "
                                  "revenir. L'historique est conservé sur ce poste (⋮ → Supprimer la "
-                                 "conversation pour l'effacer).").arg(m_shown->displayName()))
+                                 "conversation pour l'effacer).").arg(m_shown->displayName())
+                                  + (everywhere ? tr("\n\nVous la quitterez aussi sur vos autres postes.") : QString()))
         != QMessageBox::Yes)
         return;
+    const QString groupId = m_node->groupId();
     m_shown->leave();
-    appendSystem(tr("Vous avez quitté la conversation."));
+    m_sync->noteLeft(groupId); // sur tous nos postes
+    appendSystem(everywhere ? tr("Vous avez quitté la conversation, sur tous vos postes.")
+                            : tr("Vous avez quitté la conversation."));
     updateStatus();
 }
 

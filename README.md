@@ -36,6 +36,12 @@ reçoit l'identité de la personne, son pseudo, son avatar et son dictionnaire, 
 leurs 30 derniers jours d'historique. Chaque poste garde son adresse onion : pour les autres membres, ce sont
 deux postes d'une même personne. Un poste qui s'est déjà présenté sous sa propre identité ne peut plus être lié.
 
+Ensuite, les postes liés restent synchronisés, par un groupe caché qui ne relie que les postes de la personne :
+pseudo, avatar et dictionnaire (le plus récent l'emporte, les dictionnaires sont réunis), conversations rejointes
+(sur un poste, puis sur tous) et quittées (sur un poste, donc sur tous). Un poste administrateur d'une conversation
+y nomme administrateurs les autres postes de la même personne, une fois chacun : un retrait ensuite est respecté.
+Les messages non lus ne sont pas synchronisés.
+
 ### Synchronisation de l'historique
 
 À chaque connexion entre deux membres, chacun envoie la liste des identifiants de ses messages des
@@ -379,7 +385,7 @@ dans le chemin d'inclusion (`src/core.pri`, `src/ui.pri`).
 | `mainwindow.*` | Fenêtre : colonne des conversations, zone de saisie, Tor, notifications |
 | `mainwindow_ui.cpp` | Construction de la fenêtre : colonne, barre du haut et menu ⋮, recherche, accueil, bandeaux, zone de saisie |
 | `mainwindow_dialogs.cpp` | Dialogues de la fenêtre : invitation, membres et gouvernance, code de sécurité, console partagée |
-| `mainwindow_link.cpp` | Postes liés : lier un autre poste, lier ce poste à un compte |
+| `mainwindow_link.cpp` | Postes liés : lier un autre poste, lier ce poste à un compte, synchronisation |
 | `appstyle.*` | Feuille de style et icônes dessinées de la fenêtre |
 | `language.*` | Langue de l'interface (réglage, système), traductions (`translations/`) de P2P Chat et de Qt |
 | `singleinstance.*` | Une seule instance par utilisateur ; la suivante affiche la fenêtre existante |
@@ -409,6 +415,7 @@ dans le chemin d'inclusion (`src/core.pri`, `src/ui.pri`).
 | `invitation.*` | Encodage / décodage du code d'invitation |
 | `person.*` | Postes liés : certificat de poste, signé par la personne et par le poste |
 | `devicelink.*` | Liaison d'un poste : code à usage unique, transmission de la personne, du profil et des conversations |
+| `devicesync.*` | Synchronisation entre postes liés : profil, conversations rejointes et quittées |
 | `history.*` | Historique local, inventaire et lots de synchronisation |
 | `conversations.*` | Liste des conversations, leurs dossiers, reprise de l'ancienne disposition (un seul groupe) |
 
